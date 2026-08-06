@@ -33,6 +33,8 @@ import java.security.cert.Certificate
  * It cannot *set* the codec: no shell command exists for that, and the write
  * path would need a binder call from a shell-UID process.
  */
+private const val TAG = "BTJuicerAdb"
+
 private class ConnectionManager(
     private val identity: AdbKeys.Identity,
 ) : AbsAdbConnectionManager() {
@@ -42,10 +44,25 @@ private class ConnectionManager(
         // exposes a matching getter, Kotlin may see this as a property or as a
         // method, and picking wrong is a compile error in a file that could not
         // be compiled against the real library. Reflection works either way.
-        runCatching {
-            javaClass.superclass
-                ?.getMethod("setApi", Int::class.javaPrimitiveType)
-                ?.invoke(this, Build.VERSION.SDK_INT)
+        //
+        // It matters more than it looks: the API level is what tells the library
+        // to speak TLS instead of the old challenge-response auth. Getting it
+        // wrong fails at connect time, far from here, so the failure is logged
+        // rather than swallowed — and both lookups are tried, since a protected
+        // setter is invisible to getMethod.
+        val superclass = javaClass.superclass
+        val setApi = superclass?.let { type ->
+            runCatching { type.getMethod("setApi", Int::class.javaPrimitiveType) }.getOrNull()
+                ?: runCatching {
+                    type.getDeclaredMethod("setApi", Int::class.javaPrimitiveType)
+                        .apply { isAccessible = true }
+                }.getOrNull()
+        }
+        if (setApi == null) {
+            Log.w(TAG, "setApi not found on ${superclass?.name}; the library will use its default")
+        } else {
+            runCatching { setApi.invoke(this, Build.VERSION.SDK_INT) }
+                .onFailure { Log.w(TAG, "setApi failed", it) }
         }
     }
 
@@ -72,7 +89,6 @@ sealed interface AdbState {
 class AdbLink(private val context: Context) {
 
     private companion object {
-        const val TAG = "BTJuicerAdb"
         const val DISCOVERY_TIMEOUT_MS = 20_000L
         const val PAIRING_DISCOVERY_TIMEOUT_MS = 60_000L
     }
