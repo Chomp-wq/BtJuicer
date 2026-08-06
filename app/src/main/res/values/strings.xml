@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">BT Juicer</string>
+
+    <string name="channel_status">Estado</string>
+    <string name="channel_status_desc">Notificación permanente con el ecualizador y la salida activa.</string>
+    <string name="channel_reminder">Recordatorios</string>
+    <string name="channel_reminder_desc">Aviso al conectar unos audífonos Bluetooth.</string>
+
+    <string name="notif_eq_on">Ecualizador activo</string>
+    <string name="notif_eq_off">Ecualizador apagado</string>
+    <string name="notif_eq_failed">El ecualizador no pudo activarse</string>
+
+    <string name="action_eq_on">Activar</string>
+    <string name="action_eq_off">Apagar</string>
+    <string name="action_open_developer_options">Abrir ajustes</string>
+
+    <string name="notif_reminder_title">Audífonos conectados</string>
+    <string name="notif_reminder_body">%1$s. Buen momento para comprobar que LDAC sigue en 990 kbps: Android lo revierte solo al reconectar.</string>
+    <string name="unknown_device">Salida Bluetooth</string>
+</resources>
