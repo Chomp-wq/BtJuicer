@@ -155,7 +155,8 @@ app/src/main/java/com/btjuicer/
   bt/LinkMonitor.kt         ruta de audio y estado A2DP, sólo API pública
   adb/AdbBridge.kt          único punto de contacto con la librería ADB
   adb/AdbDiscovery.kt       mDNS: encuentra los puertos de emparejar y conectar
-  adb/AdbKeys.kt            identidad RSA + certificado en AndroidKeyStore
+  adb/AdbKeys.kt            identidad RSA en el almacén privado de la app
+  adb/SelfSignedCert.kt     certificado X.509 autofirmado, escrito en DER
   adb/CodecStatus.kt        modelo del códec y parser de dumpsys
   data/Prefs.kt             preferencias
   service/JuicerService.kt  servicio en primer plano; reengancha el efecto

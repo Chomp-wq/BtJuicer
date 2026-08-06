@@ -97,7 +97,7 @@ class AdbLink(private val context: Context) {
      * go and open it.
      */
     suspend fun pair(pairingCode: String): Result<Unit> = mutex.withLock {
-        val identity = AdbKeys.loadOrCreate()
+        val identity = AdbKeys.loadOrCreate(context)
             ?: return fail("No se pudo crear la identidad para ADB en este teléfono")
 
         _state.value = AdbState.Working("Buscando el puerto de emparejamiento…")
@@ -127,7 +127,7 @@ class AdbLink(private val context: Context) {
     }
 
     suspend fun connect(): Result<Unit> = mutex.withLock {
-        val identity = AdbKeys.load()
+        val identity = AdbKeys.load(context)
             ?: return fail("Todavía no hay emparejamiento. Empareja primero.")
 
         _state.value = AdbState.Working("Buscando el puerto de depuración…")
@@ -188,7 +188,7 @@ class AdbLink(private val context: Context) {
     /** Forgets the identity; the daemon will demand pairing again. */
     fun forget() {
         disconnect()
-        AdbKeys.clear()
+        AdbKeys.clear(context)
         _state.value = AdbState.NotPaired
     }
 
