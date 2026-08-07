@@ -113,6 +113,8 @@ class AdbLink(private val context: Context) {
      * go and open it.
      */
     suspend fun pair(pairingCode: String): Result<Unit> = mutex.withLock {
+        HiddenApi.allow()
+
         val identity = AdbKeys.loadOrCreate(context)
             ?: return fail("No se pudo crear la identidad para ADB en este teléfono")
 
@@ -143,6 +145,8 @@ class AdbLink(private val context: Context) {
     }
 
     suspend fun connect(): Result<Unit> = mutex.withLock {
+        HiddenApi.allow()
+
         val identity = AdbKeys.load(context)
             ?: return fail("Todavía no hay emparejamiento. Empareja primero.")
 

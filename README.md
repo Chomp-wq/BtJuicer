@@ -157,6 +157,7 @@ app/src/main/java/com/btjuicer/
   adb/AdbDiscovery.kt       mDNS: encuentra los puertos de emparejar y conectar
   adb/AdbKeys.kt            identidad RSA en el almacén privado de la app
   adb/SelfSignedCert.kt     certificado X.509 autofirmado, escrito en DER
+  adb/HiddenApi.kt          destapa el export de material de clave de TLS
   adb/CodecStatus.kt        modelo del códec y parser de dumpsys
   data/Prefs.kt             preferencias
   service/JuicerService.kt  servicio en primer plano; reengancha el efecto

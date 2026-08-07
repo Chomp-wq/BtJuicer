@@ -77,6 +77,10 @@ dependencies {
     implementation(libs.libadb.android)
     implementation(libs.sun.security.android)
 
+    // The pairing handshake has to export TLS keying material, and the only
+    // method on Android that does it is hidden from reflection. See HiddenApi.kt.
+    implementation(libs.hiddenapibypass)
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
