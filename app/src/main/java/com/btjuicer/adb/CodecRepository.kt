@@ -1,6 +1,7 @@
 package com.btjuicer.adb
 
 import android.content.Context
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -27,6 +28,11 @@ sealed interface WriteSupport {
  * [WriteSupport.Unknown] and only moves once a real attempt has come back.
  */
 class CodecRepository(private val adb: AdbLink, context: Context) {
+
+    private companion object {
+        /** Time for the renegotiated link — and the Wi-Fi it shares air with — to settle. */
+        const val SETTLE_MS = 2_500L
+    }
 
     private val control = CodecControl(adb, context)
 
@@ -94,17 +100,31 @@ class CodecRepository(private val adb: AdbLink, context: Context) {
             }
             _writeSupport.value = WriteSupport.Yes
 
-            val applied = report.status("applied") ?: report.status("current")
-            if (applied != null) _status.value = applied
+            // Only the reading taken *after* the change counts. Falling back to
+            // the one taken before would report the old codec as the outcome,
+            // and when the old codec happens to be the requested one that reads
+            // as a success that never happened.
+            var verified = report.status("applied")
 
+            // Changing the codec rebuilds the Bluetooth link, and Bluetooth and
+            // Wi-Fi share the 2.4 GHz radio — which is what the ADB connection
+            // rides on. Losing the tail of the helper's output to that is
+            // expected, so ask again once the air has settled.
+            if (verified == null && report.fields["submitted"] == "true") {
+                delay(SETTLE_MS)
+                verified = runCatching { refresh() }.getOrNull()
+            }
+
+            if (verified != null) _status.value = verified
             val wanted = CodecType.label(codecType)
             return Result.success(
                 when {
-                    applied == null -> "Aplicado. Vuelve a leer para confirmarlo."
-                    applied.codecType != codecType ->
-                        "El teléfono no aceptó $wanted; sigue en ${applied.headline()}"
-                    else -> "Ahora: ${applied.headline()}${
-                        applied.subline().takeIf(String::isNotEmpty)?.let { " · $it" }.orEmpty()
+                    verified == null ->
+                        "Enviado, pero no se pudo confirmar. Pulsa «Leer ahora» en un momento."
+                    verified.codecType != codecType ->
+                        "El teléfono no aceptó $wanted; sigue en ${verified.headline()}"
+                    else -> "Ahora: ${verified.headline()}${
+                        verified.subline().takeIf(String::isNotEmpty)?.let { " · $it" }.orEmpty()
                     }"
                 },
             )

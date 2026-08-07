@@ -23,6 +23,27 @@ data class PrivReport(val fields: Map<String, String>, val raw: String) {
             .split(',')
             .mapNotNull { it.trim().toIntOrNull() }
 
+    companion object {
+        /**
+         * Harvests the `BTJ:` lines out of whatever the shell sent back.
+         *
+         * Everything else is ignored on purpose: `app_process` and the runtime
+         * print their own warnings, and a vendor shell adds its own noise. The
+         * value may itself contain `=` — exception messages do — so only the
+         * first one separates.
+         */
+        fun of(output: String): PrivReport {
+            val fields = LinkedHashMap<String, String>()
+            for (line in output.lineSequence()) {
+                val body = line.trim().removePrefix("BTJ:").takeIf { it != line.trim() } ?: continue
+                val split = body.indexOf('=')
+                if (split <= 0) continue
+                fields[body.substring(0, split)] = body.substring(split + 1)
+            }
+            return PrivReport(fields, output)
+        }
+    }
+
     fun status(prefix: String): CodecStatus? {
         val codec = fields["${prefix}_codec"]?.toIntOrNull() ?: return null
         return CodecStatus(
@@ -80,42 +101,49 @@ class CodecControl(private val adb: AdbLink, private val context: Context) {
         }
 
         val command = buildString {
+            // The shell starts in a directory the shell user cannot write to,
+            // and app_process wants somewhere to put its dex cache.
+            append("cd /data/local/tmp 2>/dev/null; ")
+            // Bookends. Without them a helper that dies before its first line is
+            // indistinguishable from a command that never ran, and the two need
+            // completely different fixes. The exit code says which.
+            append("echo BTJ:shell=ok; ")
             append("CLASSPATH=").append(quote(context.applicationInfo.sourceDir))
             append(" app_process /system/bin --nice-name=btjuicer_priv ").append(ENTRY)
             for (arg in args) {
                 append(' ').append(quote(arg?.takeIf { it.isNotEmpty() } ?: "-"))
             }
+            append("; echo BTJ:exit=\$?")
         }
 
         val output = adb.shell(command).getOrElse { return Result.failure(it) }
-        val report = parse(output)
+        val report = PrivReport.of(output)
         Log.i(TAG, "priv ${args.firstOrNull()} -> ${report.fields}")
 
-        // An empty harvest means app_process never reached our class — a broken
-        // APK path, a ROM that blocks it, or a crash before the first line. The
-        // raw output is the only clue in that case, so it travels with the error.
-        if (report.fields.isEmpty()) {
+        // "uid" is the helper's first line, so its absence means app_process
+        // never reached our class — a broken APK path, a ROM that blocks it, or
+        // a crash before anything was printed. The raw output carries whatever
+        // the runtime said on its way out, which is the only clue there is.
+        if (!report.fields.containsKey("uid")) {
+            val reached = report.fields.containsKey("shell")
             return Result.failure(
                 IllegalStateException(
-                    "El ayudante no llegó a arrancar. Respuesta del sistema: " +
-                        output.trim().take(300).ifEmpty { "(vacía)" },
+                    buildString {
+                        append(
+                            if (reached) {
+                                "El ayudante no llegó a arrancar"
+                            } else {
+                                "El comando no llegó a ejecutarse"
+                            },
+                        )
+                        report.fields["exit"]?.let { append(" (código $it)") }
+                        append(". Respuesta: ")
+                        append(output.trim().takeLast(400).ifEmpty { "(vacía)" })
+                    },
                 ),
             )
         }
         return Result.success(report)
-    }
-
-    private fun parse(output: String): PrivReport {
-        val fields = LinkedHashMap<String, String>()
-        for (line in output.lineSequence()) {
-            val trimmed = line.trim()
-            if (!trimmed.startsWith("BTJ:")) continue
-            val body = trimmed.removePrefix("BTJ:")
-            val split = body.indexOf('=')
-            if (split <= 0) continue
-            fields[body.substring(0, split)] = body.substring(split + 1)
-        }
-        return PrivReport(fields, output)
     }
 
     /**

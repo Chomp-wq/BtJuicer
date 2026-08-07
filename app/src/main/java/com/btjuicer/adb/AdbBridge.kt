@@ -11,6 +11,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.io.ByteArrayOutputStream
 import java.security.PrivateKey
 import java.security.cert.Certificate
 
@@ -96,6 +97,14 @@ class AdbLink(private val context: Context) {
     private val discovery = AdbDiscovery(context)
     private val mutex = Mutex()
 
+    /**
+     * Separate from [mutex] because pairing holds that one for up to a minute
+     * while it waits for the user to open a dialog. Its job is to keep the
+     * background codec poll from opening a second stream on top of a privileged
+     * command that is halfway through — one command at a time on one socket.
+     */
+    private val shellMutex = Mutex()
+
     private val _state = MutableStateFlow<AdbState>(AdbState.NotPaired)
     val state: StateFlow<AdbState> = _state.asStateFlow()
 
@@ -177,27 +186,65 @@ class AdbLink(private val context: Context) {
         }
     }
 
-    /** Runs a shell command and returns its combined output. */
-    suspend fun shell(command: String): Result<String> = withContext(Dispatchers.IO) {
-        val mgr = manager ?: return@withContext Result.failure(
-            IllegalStateException("Sin conexión ADB"),
-        )
-        runCatching {
-            val stream = mgr.openStream("shell:$command")
-            try {
-                stream.openInputStream().bufferedReader().readText()
-            } finally {
-                runCatching { stream.close() }
+    /**
+     * Runs a shell command and returns its combined output.
+     *
+     * Two things here are the result of watching this go wrong on a real phone.
+     *
+     * The output is accumulated as it arrives instead of being read in one go,
+     * and **a stream that dies after it has already answered counts as a
+     * success**. The daemon tears the channel down the instant the command
+     * exits; whether the last read comes back as an end-of-file or as
+     * `Stream closed.` is a race in the library, not a real failure, and a
+     * command that printed everything it had to say should not be thrown away
+     * because of how its ending was delivered.
+     *
+     * And a failed command no longer costs the connection. The old code closed
+     * the manager on any error on the theory that a dead socket was the usual
+     * cause — but the usual cause turned out to be the command, and dropping
+     * the connection sent the user back to reconnecting for no reason.
+     */
+    suspend fun shell(command: String): Result<String> = shellMutex.withLock {
+        val mgr = manager ?: return Result.failure(IllegalStateException("Sin conexión ADB"))
+
+        withContext(Dispatchers.IO) {
+            val collected = ByteArrayOutputStream()
+            val outcome = runCatching {
+                val stream = mgr.openStream("shell:$command")
+                try {
+                    val input = stream.openInputStream()
+                    val buffer = ByteArray(8_192)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        collected.write(buffer, 0, read)
+                    }
+                } finally {
+                    runCatching { stream.close() }
+                }
             }
-        }.onFailure {
-            Log.w(TAG, "shell failed: $command", it)
-            // A dead connection is the usual cause; drop it so the next attempt
-            // reconnects instead of failing forever against a stale socket.
-            if (_state.value is AdbState.Connected) _state.value = AdbState.Paired
-            runCatching { manager?.close() }
-            manager = null
+            // Decoded once at the end: a chunk boundary can land in the middle
+            // of a multi-byte character, and device names are not all ASCII.
+            val output = collected.toString(Charsets.UTF_8.name())
+
+            if (outcome.isSuccess || output.isNotEmpty()) {
+                return@withContext Result.success(output)
+            }
+
+            val failure = outcome.exceptionOrNull() ?: IllegalStateException("Sin respuesta")
+            Log.w(TAG, "shell failed with no output: $command", failure)
+            if (!isLive()) {
+                _state.value = AdbState.Paired
+                runCatching { manager?.close() }
+                manager = null
+            }
+            Result.failure(failure)
         }
     }
+
+    /** Whether the daemon is still on the other end, as far as the library knows. */
+    private fun isLive(): Boolean =
+        runCatching { manager?.isConnected == true }.getOrDefault(false)
 
     fun disconnect() {
         runCatching { manager?.close() }
