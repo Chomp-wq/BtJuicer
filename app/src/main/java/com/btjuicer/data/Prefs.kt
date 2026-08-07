@@ -17,6 +17,14 @@ data class Settings(
     val checklistDone: Boolean = false,
     /** The ADB daemon has trusted our key at least once. */
     val adbPaired: Boolean = false,
+    /**
+     * The user wants the ADB link up.
+     *
+     * Set by a connection they made, cleared when they disconnect. It is what
+     * separates "the socket died" — worth fixing silently — from "they never
+     * asked for one", which is not.
+     */
+    val adbAutoConnect: Boolean = false,
     /** Keep reading the codec in the background while ADB is connected. */
     val pollCodec: Boolean = true,
     /** Profile currently loaded, so the UI can show which one is live. */
@@ -54,6 +62,7 @@ class Prefs(context: Context) {
         remindOnConnect = prefs.getBoolean(KEY_REMIND, true),
         checklistDone = prefs.getBoolean(KEY_CHECKLIST, false),
         adbPaired = prefs.getBoolean(KEY_ADB_PAIRED, false),
+        adbAutoConnect = prefs.getBoolean(KEY_ADB_AUTO, false),
         pollCodec = prefs.getBoolean(KEY_POLL_CODEC, true),
         activeProfileId = prefs.getString(KEY_ACTIVE_PROFILE, null),
         autoProfile = prefs.getBoolean(KEY_AUTO_PROFILE, true),
@@ -69,6 +78,7 @@ class Prefs(context: Context) {
             putBoolean(KEY_REMIND, next.remindOnConnect)
             putBoolean(KEY_CHECKLIST, next.checklistDone)
             putBoolean(KEY_ADB_PAIRED, next.adbPaired)
+            putBoolean(KEY_ADB_AUTO, next.adbAutoConnect)
             putBoolean(KEY_POLL_CODEC, next.pollCodec)
             putString(KEY_ACTIVE_PROFILE, next.activeProfileId)
             putBoolean(KEY_AUTO_PROFILE, next.autoProfile)
@@ -86,6 +96,8 @@ class Prefs(context: Context) {
     fun setChecklistDone(done: Boolean) = update { copy(checklistDone = done) }
 
     fun setAdbPaired(paired: Boolean) = update { copy(adbPaired = paired) }
+
+    fun setAdbAutoConnect(enabled: Boolean) = update { copy(adbAutoConnect = enabled) }
 
     fun setPollCodec(enabled: Boolean) = update { copy(pollCodec = enabled) }
 
@@ -106,6 +118,7 @@ class Prefs(context: Context) {
         const val KEY_REMIND = "remind_on_connect"
         const val KEY_CHECKLIST = "checklist_done"
         const val KEY_ADB_PAIRED = "adb_paired"
+        const val KEY_ADB_AUTO = "adb_auto_connect"
         const val KEY_POLL_CODEC = "poll_codec"
         const val KEY_ACTIVE_PROFILE = "active_profile"
         const val KEY_AUTO_PROFILE = "auto_profile"

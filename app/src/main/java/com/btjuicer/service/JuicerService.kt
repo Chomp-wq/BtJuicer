@@ -51,6 +51,10 @@ class JuicerService : LifecycleService() {
         /** Long enough for the A2DP link to finish negotiating on its own. */
         private const val CODEC_SETTLE_MS = 4_000L
 
+        /** First wait before re-dialling a link that dropped. */
+        private const val RETRY_BASE_MS = 15_000L
+        private const val RETRY_MAX_MS = 300_000L
+
         fun start(context: Context) {
             ContextCompat.startForegroundService(
                 context,
@@ -145,21 +149,67 @@ class JuicerService : LifecycleService() {
     }
 
     /**
-     * Only polls while ADB is actually connected; it never dials on its own.
-     * Reconnecting behind the user's back would mean silently reopening a
-     * debugging channel, which is theirs to decide.
+     * Keeps the ADB link up and the codec reading fresh.
+     *
+     * ### Why it now reconnects on its own
+     *
+     * It used not to, on the reasoning that reopening a debugging channel is the
+     * user's decision. That reasoning holds for the *first* connection and not
+     * for this one. The socket dies on its own — a Wi-Fi power-save nap, a
+     * roamed access point, a codec change shaking the shared 2.4 GHz radio — and
+     * when it does, nothing about the user's intent has changed. Making them
+     * notice and press a button to restore a connection they already asked for
+     * is not respecting a decision, it is forgetting one.
+     *
+     * So: only ever after a connection the user established, only while they
+     * have not disconnected, and with a backoff that gives up to a five-minute
+     * spacing rather than hammering mDNS.
      */
     private fun startCodecPolling() {
         if (codecJob?.isActive == true) return
         codecJob = lifecycleScope.launch {
+            var failures = 0
+            var nextAttemptAt = 0L
+
             while (isActive) {
-                if (Juicer.prefs.current.pollCodec && Juicer.adb.state.value is AdbState.Connected) {
-                    runCatching { Juicer.codec.refresh() }
+                val state = Juicer.adb.state.value
+                when {
+                    state is AdbState.Connected -> {
+                        failures = 0
+                        nextAttemptAt = 0L
+                        if (Juicer.prefs.current.pollCodec) {
+                            runCatching { Juicer.codec.refresh() }
+                        } else {
+                            // Something has to cross the socket now and then, or
+                            // a link nobody uses is a link nobody notices dying.
+                            runCatching { Juicer.adb.shell("true") }
+                        }
+                    }
+
+                    // Working means a connection attempt is already in flight.
+                    state is AdbState.Working -> Unit
+
+                    Juicer.prefs.current.adbAutoConnect &&
+                        System.currentTimeMillis() >= nextAttemptAt -> {
+                        val ok = runCatching { Juicer.adb.connect().isSuccess }.getOrDefault(false)
+                        if (ok) {
+                            failures = 0
+                            nextAttemptAt = 0L
+                            runCatching { Juicer.codec.refresh() }
+                        } else {
+                            failures++
+                            nextAttemptAt = System.currentTimeMillis() + backoffMs(failures)
+                        }
+                    }
                 }
                 delay(CODEC_POLL_MS)
             }
         }
     }
+
+    /** 15 s, then doubling, capped at five minutes. */
+    private fun backoffMs(failures: Int): Long =
+        (RETRY_BASE_MS shl (failures - 1).coerceIn(0, 5)).coerceAtMost(RETRY_MAX_MS)
 
     /**
      * A correction is only right for the headphone it was measured on, so the

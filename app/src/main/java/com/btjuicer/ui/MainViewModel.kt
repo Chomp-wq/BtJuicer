@@ -317,6 +317,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         launchSafely {
             Juicer.adb.connect(endpoint).fold(
                 onSuccess = {
+                    Juicer.prefs.setAdbAutoConnect(true)
                     refreshCodec()
                     if (Juicer.prefs.current.eq.enabled || Juicer.prefs.current.pollCodec) {
                         JuicerService.start(context)
@@ -332,7 +333,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         launchSafely {
             Juicer.codec.clear()
             Juicer.adb.reconnect(endpoint).fold(
-                onSuccess = { refreshCodec() },
+                onSuccess = {
+                    Juicer.prefs.setAdbAutoConnect(true)
+                    refreshCodec()
+                },
                 onFailure = { _messages.tryEmit(it.message ?: "No se pudo reconectar") },
             )
         }
@@ -357,11 +361,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun disconnectAdb() {
+        // Explicit: stops the service putting it back up.
+        Juicer.prefs.setAdbAutoConnect(false)
         Juicer.adb.disconnect()
         Juicer.codec.clear()
     }
 
     fun forgetAdb() {
+        Juicer.prefs.setAdbAutoConnect(false)
         Juicer.adb.forget()
         Juicer.codec.clear()
         Juicer.prefs.setAdbPaired(false)

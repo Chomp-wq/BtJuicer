@@ -7,6 +7,7 @@ import kotlin.math.log10
 import kotlin.math.pow
 import kotlin.math.sin
 import kotlin.math.sqrt
+import kotlin.math.roundToInt
 
 /**
  * Parametric filters and the maths to turn them into a curve.
@@ -172,6 +173,24 @@ object Curve {
 
     /** Ten octave centres, for the simple slider view. */
     val OCTAVE: List<Int> = listOf(31, 62, 125, 250, 500, 1_000, 2_000, 4_000, 8_000, 16_000)
+
+    /**
+     * Band centres at [perOctave] per octave, 20 Hz to 20 kHz.
+     *
+     * Distinct integers only: at twelfth-octave the spacing down at 20 Hz is
+     * about 1.2 Hz, so rounding to whole hertz would otherwise produce repeats —
+     * and a band bank with two bands on the same frequency is a band bank the
+     * audio HAL is entitled to refuse.
+     */
+    fun bands(perOctave: Int): List<Int> = buildList {
+        var step = 0
+        while (true) {
+            val hz = (20.0 * 2.0.pow(step.toDouble() / perOctave)).roundToInt()
+            if (hz > 20_000) break
+            if (lastOrNull() != hz) add(hz)
+            step++
+        }
+    }
 
     /**
      * Q for the simple view's bands. One octave of bandwidth works out near
