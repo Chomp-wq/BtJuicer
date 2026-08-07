@@ -136,69 +136,102 @@ class AdbLink(private val context: Context) {
      * dialog is open on screen, hence the long discovery window: the user has to
      * go and open it.
      */
-    suspend fun pair(pairingCode: String): Result<Unit> = mutex.withLock {
-        HiddenApi.allow()
+    suspend fun pair(pairingCode: String, manual: Endpoint? = null): Result<Unit> =
+        mutex.withLock {
+            HiddenApi.allow()
 
-        val identity = AdbKeys.loadOrCreate(context)
-            ?: return fail("No se pudo crear la identidad para ADB en este teléfono")
+            val identity = AdbKeys.loadOrCreate(context)
+                ?: return fail("No se pudo crear la identidad para ADB en este teléfono")
 
-        _state.value = AdbState.Working("Buscando el puerto de emparejamiento…")
-        val endpoint = discovery.find(AdbDiscovery.PAIRING_TYPE, PAIRING_DISCOVERY_TIMEOUT_MS)
-            ?: return fail(
-                "No apareció ningún puerto de emparejamiento. Deja abierta la ventana " +
-                    "«Vincular dispositivo con código» mientras se busca.",
-            )
+            val candidates = manual?.let(::listOf) ?: run {
+                _state.value = AdbState.Working("Buscando el puerto de emparejamiento…")
+                discovery.findAll(AdbDiscovery.PAIRING_TYPE, PAIRING_DISCOVERY_TIMEOUT_MS)
+            }
+            if (candidates.isEmpty()) {
+                return fail(
+                    "No apareció ningún puerto de emparejamiento. Deja abierta la ventana " +
+                        "«Vincular dispositivo con código» mientras se busca.",
+                )
+            }
 
-        _state.value = AdbState.Working("Emparejando con $endpoint…")
-        return withContext(Dispatchers.IO) {
-            runCatching {
+            return attempt(candidates, "Emparejando con") { endpoint ->
                 val mgr = ConnectionManager(identity).also { manager = it }
-                val ok = mgr.pair(endpoint.host, endpoint.port, pairingCode)
-                check(ok) { "El código no fue aceptado" }
+                mgr.pair(endpoint.host, endpoint.port, pairingCode)
             }.fold(
                 onSuccess = {
                     _state.value = AdbState.Paired
                     Result.success(Unit)
                 },
-                onFailure = {
-                    Log.w(TAG, "pairing failed", it)
-                    fail(it.message ?: "El emparejamiento falló")
-                },
+                onFailure = { fail(it.message ?: "El emparejamiento falló") },
             )
         }
-    }
 
-    suspend fun connect(): Result<Unit> = mutex.withLock {
+    suspend fun connect(manual: Endpoint? = null): Result<Unit> = mutex.withLock {
         HiddenApi.allow()
 
         val identity = AdbKeys.load(context)
             ?: return fail("Todavía no hay emparejamiento. Empareja primero.")
 
-        _state.value = AdbState.Working("Buscando el puerto de depuración…")
-        val endpoint = discovery.find(AdbDiscovery.CONNECT_TYPE, DISCOVERY_TIMEOUT_MS)
-            ?: return fail(
+        val candidates = manual?.let(::listOf) ?: run {
+            _state.value = AdbState.Working("Buscando el puerto de depuración…")
+            discovery.findAll(AdbDiscovery.CONNECT_TYPE, DISCOVERY_TIMEOUT_MS)
+        }
+        if (candidates.isEmpty()) {
+            return fail(
                 "No se encontró el puerto de depuración inalámbrica. Compruébalo: tiene que " +
                     "estar activada y el teléfono en la misma red Wi-Fi.",
             )
-
-        _state.value = AdbState.Working("Conectando con $endpoint…")
-        return withContext(Dispatchers.IO) {
-            runCatching {
-                val mgr = manager?.takeIf { it.isConnected } ?: ConnectionManager(identity)
-                manager = mgr
-                val ok = mgr.connect(endpoint.host, endpoint.port)
-                check(ok) { "El demonio ADB rechazó la conexión" }
-            }.fold(
-                onSuccess = {
-                    _state.value = AdbState.Connected(endpoint)
-                    Result.success(Unit)
-                },
-                onFailure = {
-                    Log.w(TAG, "connect failed", it)
-                    fail(it.message ?: "La conexión falló")
-                },
-            )
         }
+
+        return attempt(candidates, "Conectando con") { endpoint ->
+            // Always a fresh manager. Reusing one because it claims to be
+            // connected is how a socket from a previous session got kept alive
+            // on paper while answering nothing.
+            runCatching { manager?.close() }
+            val mgr = ConnectionManager(identity).also { manager = it }
+            mgr.connect(endpoint.host, endpoint.port)
+        }.fold(
+            onSuccess = { endpoint ->
+                _state.value = AdbState.Connected(endpoint)
+                Result.success(Unit)
+            },
+            onFailure = { fail(it.message ?: "La conexión falló") },
+        )
+    }
+
+    /**
+     * Tries every candidate and keeps the one that answers.
+     *
+     * mDNS hands back stale entries alongside live ones and gives no way to tell
+     * them apart, so the only honest test of an endpoint is to dial it. A dead
+     * one refuses immediately; the cost of trying it is nothing next to what the
+     * alternative cost — an app that confidently dialled last week's port and
+     * never got anywhere.
+     */
+    private suspend fun attempt(
+        candidates: List<Endpoint>,
+        step: String,
+        action: (Endpoint) -> Boolean,
+    ): Result<Endpoint> = withContext(Dispatchers.IO) {
+        val failures = mutableListOf<String>()
+        for (endpoint in candidates) {
+            _state.value = AdbState.Working("$step $endpoint…")
+            val outcome = runCatching { action(endpoint) }
+            if (outcome.getOrDefault(false)) return@withContext Result.success(endpoint)
+
+            val why = outcome.exceptionOrNull()?.message ?: "rechazado"
+            Log.w(TAG, "$step $endpoint failed: $why")
+            failures += "$endpoint ($why)"
+        }
+        Result.failure(
+            IllegalStateException(
+                if (failures.size == 1) {
+                    "No respondió ${failures.first()}"
+                } else {
+                    "Ninguna de las direcciones respondió: ${failures.joinToString(", ")}"
+                },
+            ),
+        )
     }
 
     /**
@@ -288,9 +321,9 @@ class AdbLink(private val context: Context) {
         runCatching { manager?.isConnected == true }.getOrDefault(false)
 
     /** Drops whatever is there and dials again, for when the socket has gone stale. */
-    suspend fun reconnect(): Result<Unit> {
+    suspend fun reconnect(manual: Endpoint? = null): Result<Unit> {
         disconnect()
-        return connect()
+        return connect(manual)
     }
 
     fun disconnect() {

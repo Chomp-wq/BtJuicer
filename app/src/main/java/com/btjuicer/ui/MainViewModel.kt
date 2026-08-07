@@ -7,9 +7,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.btjuicer.Juicer
 import com.btjuicer.adb.AdbState
+import com.btjuicer.adb.Endpoint
 import com.btjuicer.adb.LdacQuality
 import com.btjuicer.adb.WriteSupport
-import com.btjuicer.audio.AutoEq
 import com.btjuicer.audio.EqConfig
 import com.btjuicer.audio.EqMode
 import com.btjuicer.audio.Filter
@@ -133,24 +133,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (index !in next.indices) return
         next.removeAt(index)
         commit(eq.withFilters(next, eq.sourceLabel))
-    }
-
-    /**
-     * Imports an AutoEq profile. Applies the file's own preamp when it carries
-     * one — AutoEq computes it for exactly this reason — and otherwise derives
-     * the value from the curve.
-     */
-    fun importAutoEq(text: String) {
-        AutoEq.parse(text).fold(
-            onSuccess = { imported ->
-                val eq = Juicer.prefs.current.eq
-                    .withFilters(imported.filters, imported.sourceLabel)
-                val preamp = imported.preampDb ?: eq.suggestedPreamp()
-                commit(eq.copy(preampDb = preamp.coerceIn(-20f, 6f), enabled = true))
-                _messages.tryEmit("Importado: ${imported.sourceLabel}")
-            },
-            onFailure = { _messages.tryEmit(it.message ?: "No se pudo leer el perfil") },
-        )
     }
 
     // ------------------------------------------------------------- audífonos
@@ -311,27 +293,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * Pairing is a one-time ritual: the daemon remembers the key, so later
      * reconnections need nothing but the port. Hence storing the flag.
      */
-    fun pairAdb(code: String) {
+    fun pairAdb(code: String, manual: String) {
         val trimmed = code.trim()
         if (trimmed.length < 6) {
             _messages.tryEmit("El código de emparejamiento tiene 6 dígitos")
             return
         }
-        launchSafely {
-            Juicer.adb.pair(trimmed).fold(
-                onSuccess = {
-                    Juicer.prefs.setAdbPaired(true)
-                    _messages.tryEmit("Emparejado. Conectando…")
-                    connectAdb()
-                },
-                onFailure = { _messages.tryEmit(it.message ?: "El emparejamiento falló") },
-            )
+        withEndpoint(manual) { endpoint ->
+            launchSafely {
+                Juicer.adb.pair(trimmed, endpoint).fold(
+                    onSuccess = {
+                        Juicer.prefs.setAdbPaired(true)
+                        _messages.tryEmit("Emparejado. Conectando…")
+                        connectAdb()
+                    },
+                    onFailure = { _messages.tryEmit(it.message ?: "El emparejamiento falló") },
+                )
+            }
         }
     }
 
-    fun connectAdb() {
+    fun connectAdb(manual: String = "") = withEndpoint(manual) { endpoint ->
         launchSafely {
-            Juicer.adb.connect().fold(
+            Juicer.adb.connect(endpoint).fold(
                 onSuccess = {
                     refreshCodec()
                     if (Juicer.prefs.current.eq.enabled || Juicer.prefs.current.pollCodec) {
@@ -344,14 +328,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     /** For a socket that answers nothing: drop it and dial again. */
-    fun reconnectAdb() {
+    fun reconnectAdb(manual: String = "") = withEndpoint(manual) { endpoint ->
         launchSafely {
             Juicer.codec.clear()
-            Juicer.adb.reconnect().fold(
+            Juicer.adb.reconnect(endpoint).fold(
                 onSuccess = { refreshCodec() },
                 onFailure = { _messages.tryEmit(it.message ?: "No se pudo reconectar") },
             )
         }
+    }
+
+    /**
+     * Runs [block] with the address to dial: null to discover it, or the one the
+     * user typed.
+     *
+     * Text that does not parse aborts instead of quietly falling back to
+     * discovery. Someone who typed an address wants *that* address, and silently
+     * doing something else would leave them debugging the wrong thing.
+     */
+    private inline fun withEndpoint(manual: String, block: (Endpoint?) -> Unit) {
+        if (manual.isBlank()) return block(null)
+        val parsed = Endpoint.parse(manual)
+        if (parsed == null) {
+            _messages.tryEmit("Escribe la dirección como 192.168.1.40:37103")
+            return
+        }
+        block(parsed)
     }
 
     fun disconnectAdb() {

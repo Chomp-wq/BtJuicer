@@ -56,9 +56,9 @@ fun CodecScreen(
     codecError: String?,
     writeSupport: WriteSupport,
     busy: Boolean,
-    onPair: (String) -> Unit,
-    onConnect: () -> Unit,
-    onReconnect: () -> Unit,
+    onPair: (String, String) -> Unit,
+    onConnect: (String) -> Unit,
+    onReconnect: (String) -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
     onRefresh: () -> Unit,
@@ -101,7 +101,7 @@ fun CodecScreen(
                     Column(Modifier.weight(1f)) {
                         Text("Vigilar en segundo plano", style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            "Relee el códec cada pocos segundos mientras la conexión aguante.",
+                            "Relee el códec cada pocos segundos.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -122,9 +122,8 @@ fun CodecScreen(
                             )
                             Spacer(Modifier.height(4.dp))
                             Text(
-                                "Casi siempre es una de dos: LDAC apagado en la app del " +
-                                    "fabricante, o multipunto activo. Y si ambas están bien, " +
-                                    "revisa el códec en opciones de desarrollador.",
+                                "Casi siempre es multipunto activo, o LDAC apagado en la app " +
+                                    "del fabricante.",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -232,16 +231,14 @@ private fun ForceCard(
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text("Forzar el códec", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(4.dp))
+            Spacer(Modifier.height(2.dp))
             Text(
-                "BT Juicer arranca un proceso con los permisos del shell y se lo pide al " +
-                    "sistema. Después vuelve a leer el códec, así que lo que ves abajo es lo " +
-                    "que quedó, no lo que se pidió.",
+                "Se verifica releyendo: lo que ves es lo que quedó.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            Spacer(Modifier.height(12.dp))
+            Spacer(Modifier.height(14.dp))
             ChipRow(
                 options = offered,
                 selected = chosen,
@@ -294,9 +291,7 @@ private fun ForceCard(
                 Column(Modifier.weight(1f)) {
                     Text("Volver a aplicar al conectar", style = MaterialTheme.typography.bodyLarge)
                     Text(
-                        "El enlace se renegocia cada vez que los audífonos vuelven, y ninguna " +
-                            "API hace que la elección persista. Esto es lo que evita que se " +
-                            "deshaga sola.",
+                        "Sin esto se deshace en cuanto los audífonos vuelven a la caja.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -331,18 +326,19 @@ private fun <T> ChipRow(
 private fun ConnectionCard(
     adb: AdbState,
     settings: Settings,
-    onPair: (String) -> Unit,
-    onConnect: () -> Unit,
-    onReconnect: () -> Unit,
+    onPair: (String, String) -> Unit,
+    onConnect: (String) -> Unit,
+    onReconnect: (String) -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
 ) {
     var code by remember { mutableStateOf("") }
+    var manual by remember { mutableStateOf("") }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp)) {
             Text("Conexión ADB", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(6.dp))
+            Spacer(Modifier.height(8.dp))
 
             when (adb) {
                 is AdbState.Working -> Row(verticalAlignment = Alignment.CenterVertically) {
@@ -353,7 +349,7 @@ private fun ConnectionCard(
 
                 is AdbState.Connected -> {
                     Text(
-                        "Conectado a ${adb.endpoint}",
+                        "Conectado · ${adb.endpoint}",
                         style = MaterialTheme.typography.bodyMedium,
                         color = okColor(isSystemInDarkTheme()),
                     )
@@ -362,7 +358,7 @@ private fun ConnectionCard(
                         // Present even while "connected": a Wi-Fi hiccup leaves a
                         // socket that answers nothing and admits to nothing, and
                         // without this the only way out was to unpair.
-                        OutlinedButton(onClick = onReconnect) { Text("Reconectar") }
+                        OutlinedButton(onClick = { onReconnect("") }) { Text("Reconectar") }
                         TextButton(onClick = onDisconnect) { Text("Desconectar") }
                         TextButton(onClick = onForget) { Text("Olvidar") }
                     }
@@ -370,16 +366,16 @@ private fun ConnectionCard(
 
                 AdbState.Paired -> {
                     Text(
-                        "Emparejado. El puerto cambia en cada reinicio, así que hay que volver a " +
-                            "conectar — pero ya sin código.",
+                        "Emparejado. El puerto cambia en cada reinicio.",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(onClick = onConnect) { Text("Conectar") }
+                        Button(onClick = { onConnect(manual) }) { Text("Conectar") }
                         TextButton(onClick = onForget) { Text("Olvidar") }
                     }
+                    ManualAddress(manual) { manual = it }
                 }
 
                 is AdbState.Error -> {
@@ -391,33 +387,67 @@ private fun ConnectionCard(
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                         if (settings.adbPaired) {
-                            Button(onClick = onConnect) { Text("Reintentar") }
+                            Button(onClick = { onConnect(manual) }) { Text("Reintentar") }
                         }
                         TextButton(onClick = onForget) { Text("Empezar de cero") }
                     }
+                    if (settings.adbPaired) ManualAddress(manual) { manual = it }
                 }
 
                 AdbState.NotPaired -> PairingSteps(
                     code = code,
+                    manual = manual,
                     onCodeChange = { code = it.filter(Char::isDigit).take(6) },
-                    onPair = { onPair(code) },
+                    onManualChange = { manual = it },
+                    onPair = { onPair(code, manual) },
                 )
             }
         }
     }
 }
 
+/**
+ * The escape hatch, folded away until asked for.
+ *
+ * mDNS is right almost always, and when it is wrong it is wrong in a way the
+ * user can see and fix in ten seconds — the number is printed on the
+ * wireless-debugging screen. Worth offering; not worth putting in front of
+ * everyone who will never need it.
+ */
 @Composable
-private fun PairingSteps(code: String, onCodeChange: (String) -> Unit, onPair: () -> Unit) {
-    Column {
-        Step(1, "Ajustes → Ajustes adicionales → Opciones de desarrollador. Activa " +
-            "«Depuración inalámbrica».")
-        Step(2, "Dentro de Depuración inalámbrica, toca «Vincular dispositivo con código de " +
-            "vinculación». Aparecerá un código de 6 dígitos.")
-        Step(3, "Sin cerrar esa ventana, vuelve aquí, escribe el código y pulsa Emparejar. " +
-            "Ese puerto sólo existe mientras la ventana está abierta.")
+private fun ManualAddress(value: String, onChange: (String) -> Unit) {
+    var open by remember { mutableStateOf(false) }
 
-        Spacer(Modifier.height(10.dp))
+    if (!open) {
+        TextButton(onClick = { open = true }) { Text("Escribir la dirección a mano") }
+        return
+    }
+    Spacer(Modifier.height(8.dp))
+    OutlinedTextField(
+        value = value,
+        onValueChange = onChange,
+        label = { Text("IP:puerto") },
+        placeholder = { Text("192.168.1.40:37103") },
+        singleLine = true,
+        supportingText = { Text("La que sale en Depuración inalámbrica") },
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun PairingSteps(
+    code: String,
+    manual: String,
+    onCodeChange: (String) -> Unit,
+    onManualChange: (String) -> Unit,
+    onPair: () -> Unit,
+) {
+    Column {
+        Step(1, "Opciones de desarrollador → activa «Depuración inalámbrica».")
+        Step(2, "Toca «Vincular dispositivo con código» y deja esa ventana abierta.")
+        Step(3, "Vuelve aquí y escribe el código.")
+
+        Spacer(Modifier.height(12.dp))
         OutlinedTextField(
             value = code,
             onValueChange = onCodeChange,
@@ -428,6 +458,7 @@ private fun PairingSteps(code: String, onCodeChange: (String) -> Unit, onPair: (
         )
         Spacer(Modifier.height(10.dp))
         Button(onClick = onPair, enabled = code.length == 6) { Text("Emparejar") }
+        ManualAddress(manual, onManualChange)
     }
 }
 
@@ -452,40 +483,12 @@ private fun Step(number: Int, text: String) {
 private fun ExplainerCard() {
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(14.dp)) {
-            Text("Qué es esto y qué no es", style = MaterialTheme.typography.titleSmall)
+            Text("Cómo funciona", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.height(6.dp))
             Text(
-                "El códec sólo lo sabe el sistema, y preguntárselo requiere permisos que ninguna " +
-                    "app instalable tiene. BT Juicer se conecta al servidor de depuración del " +
-                    "propio teléfono para preguntar con los permisos del shell. Es el mismo " +
-                    "mecanismo que usa Shizuku, pero sin instalar una segunda app.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            HorizontalDivider()
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Para fijarlo hace falta más: ningún comando de shell cambia el códec, así que " +
-                    "BT Juicer arranca un proceso propio con los permisos del shell y llama al " +
-                    "sistema desde ahí. Es lo mismo que hace la pantalla de opciones de " +
-                    "desarrollador, sólo que aquí queda guardado y se vuelve a aplicar solo.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "Lo que nadie puede hacer es que persista de verdad: el códec se negocia de cero " +
-                    "en cada reconexión. Por eso «volver a aplicar al conectar» es la parte que " +
-                    "importa, y por eso necesita el servicio en marcha.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(8.dp))
-            Text(
-                "El emparejamiento es de una vez: el teléfono recuerda la clave. Lo que se pierde " +
-                    "al reiniciar es la conexión, porque la depuración inalámbrica elige un " +
-                    "puerto nuevo cada arranque.",
+                "El sistema sólo le cuenta el códec al usuario shell. BT Juicer se conecta al " +
+                    "servidor de depuración del propio teléfono para preguntar — y para fijarlo, " +
+                    "arranca ahí un proceso propio. Lo mismo que hace Shizuku, sin segunda app.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

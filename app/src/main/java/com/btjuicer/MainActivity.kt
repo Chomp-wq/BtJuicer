@@ -51,24 +51,6 @@ class MainActivity : ComponentActivity() {
     private val requestPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { viewModel.refreshLink() }
 
-    /**
-     * Storage Access Framework: the user picks the AutoEq file and the system
-     * hands us that one document. No storage permission, no browsing their
-     * files — the app only ever sees what they chose.
-     */
-    private val pickProfile =
-        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-            if (uri == null) return@registerForActivityResult
-            val text = runCatching {
-                contentResolver.openInputStream(uri)?.bufferedReader()?.use { it.readText() }
-            }.getOrNull()
-            if (text.isNullOrBlank()) {
-                viewModel.notify("No se pudo leer ese archivo")
-            } else {
-                viewModel.importAutoEq(text)
-            }
-        }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Juicer.init(this)
@@ -100,12 +82,6 @@ class MainActivity : ComponentActivity() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             requestPermission.launch(Manifest.permission.BLUETOOTH_CONNECT)
         }
-    }
-
-    fun pickProfileFile() {
-        // AutoEq ships .txt, but plenty of file providers report octet-stream.
-        runCatching { pickProfile.launch(arrayOf("text/plain", "application/octet-stream", "*/*")) }
-            .onFailure { viewModel.notify("No hay ningún selector de archivos disponible") }
     }
 
     fun openDeveloperOptions() = safeStart(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
@@ -181,7 +157,6 @@ private fun Root(viewModel: MainViewModel) {
                     profiles = profiles,
                     connectedDeviceName = link.btDeviceName,
                     viewModel = viewModel,
-                    onPickFile = { activity?.pickProfileFile() },
                 )
 
                 Tab.LINK -> LinkScreen(

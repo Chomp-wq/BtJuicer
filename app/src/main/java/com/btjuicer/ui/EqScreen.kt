@@ -78,7 +78,6 @@ fun EqScreen(
     profiles: List<Profile>,
     connectedDeviceName: String,
     viewModel: MainViewModel,
-    onPickFile: () -> Unit,
 ) {
     val eq = settings.eq
     val filters = remember(eq) { eq.activeFilters() }
@@ -96,8 +95,7 @@ fun EqScreen(
                     ResponseGraph(filters)
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "20 Hz — 20 kHz · líneas cada 6 dB. Esta es la respuesta combinada real, " +
-                            "no la posición de los mandos.",
+                        "20 Hz — 20 kHz · rejilla de 6 dB",
                         style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -148,16 +146,6 @@ fun EqScreen(
                     onChange = { viewModel.setBand(index, it) },
                 )
             }
-
-            item {
-                Text(
-                    "Cada mando es un objetivo, no una ganancia: la app resuelve los filtros para " +
-                        "que +6 dB en 125 Hz sean exactamente +6 dB ahí. Un ecualizador gráfico " +
-                        "normal se pasaría un par de dB por el solape entre bandas.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
         } else {
             item {
                 Row(
@@ -185,7 +173,7 @@ fun EqScreen(
             if (eq.filters.isEmpty()) {
                 item {
                     Text(
-                        "Sin filtros. Añade uno a mano o importa un perfil de AutoEq abajo.",
+                        "Sin filtros. Busca tus audífonos abajo, o añade uno a mano.",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -193,21 +181,11 @@ fun EqScreen(
             }
         }
 
-        item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
-
         item { HeadphoneCard(viewModel) }
-
-        item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
-
-        item { ImportCard(onImport = viewModel::importAutoEq, onPickFile = onPickFile) }
-
-        item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
 
         item { GainCard(eq, viewModel) }
 
         item { MbcCard(eq.mbc, viewModel::setMbc) }
-
-        item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
 
         item {
             ProfilesCard(
@@ -247,9 +225,7 @@ private fun HeadphoneCard(viewModel: MainViewModel) {
             Text("Busca tus audífonos", style = MaterialTheme.typography.titleMedium)
             Spacer(Modifier.height(4.dp))
             Text(
-                "8850 curvas del proyecto AutoEq, incluidas en la app. No hace falta conexión. " +
-                    "Cada una es la diferencia medida entre esos audífonos y una curva objetivo " +
-                    "sacada de estudios de preferencia con miles de oyentes.",
+                "8850 correcciones medidas, incluidas en la app.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -309,10 +285,7 @@ private fun HeadphoneCard(viewModel: MainViewModel) {
                 if (!headphone.measured) {
                     Spacer(Modifier.height(4.dp))
                     Text(
-                        "Punto de partida, no una corrección: en un altavoz manda la sala, y la " +
-                            "misma bocina suena distinta en una estantería que en una esquina. " +
-                            "Lo que sí es seguro es el corte de graves — un altavoz pequeño no " +
-                            "puede darlos, y pedírselos hace que su limitador apague todo lo demás.",
+                        "Punto de partida, no una corrección: en un altavoz manda la sala.",
                         style = MaterialTheme.typography.bodySmall,
                         color = warnColor(isSystemInDarkTheme()),
                     )
@@ -343,19 +316,11 @@ private fun HeadphoneCard(viewModel: MainViewModel) {
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    "«Referencia» es la corrección medida. Los demás matices son gusto, no " +
-                        "corrección — por eso son pequeños.",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
             }
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Text(
-                "Datos del proyecto AutoEq (Jaakko Pasanen), licencia MIT. Cada medición es de " +
-                    "quien aparece junto a ella.",
+                "Datos de AutoEq (MIT)",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -644,44 +609,6 @@ private fun LabelledSlider(
             fontFamily = FontFamily.Monospace,
             textAlign = TextAlign.End,
         )
-    }
-}
-
-@Composable
-private fun ImportCard(onImport: (String) -> Unit, onPickFile: () -> Unit) {
-    var text by remember { mutableStateOf("") }
-
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp)) {
-            Text("Importar de AutoEq", style = MaterialTheme.typography.titleSmall)
-            Spacer(Modifier.height(4.dp))
-            Text(
-                "AutoEq publica correcciones medidas para miles de audífonos concretos. Es la " +
-                    "diferencia entre mover mandos a ojo y aplicar una corrección derivada de una " +
-                    "medición de tu modelo exacto — con diferencia, la mayor mejora posible en un " +
-                    "ecualizador.\n\nBusca tu modelo en el proyecto AutoEq, abre su " +
-                    "«ParametricEQ.txt» o «GraphicEQ.txt» y pega el contenido aquí, o elige el " +
-                    "archivo.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Spacer(Modifier.height(10.dp))
-            OutlinedTextField(
-                value = text,
-                onValueChange = { text = it },
-                label = { Text("Pega aquí el perfil") },
-                modifier = Modifier.fillMaxWidth().height(140.dp),
-                textStyle = MaterialTheme.typography.bodySmall,
-                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-            )
-            Spacer(Modifier.height(8.dp))
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Button(onClick = { onImport(text) }, enabled = text.isNotBlank()) {
-                    Text("Importar")
-                }
-                OutlinedButton(onClick = onPickFile) { Text("Elegir archivo") }
-            }
-        }
     }
 }
 
