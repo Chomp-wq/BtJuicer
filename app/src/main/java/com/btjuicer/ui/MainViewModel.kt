@@ -2,6 +2,7 @@ package com.btjuicer.ui
 
 import android.app.Application
 import android.content.Context
+import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.btjuicer.Juicer
@@ -17,6 +18,7 @@ import com.btjuicer.audio.Preset
 import com.btjuicer.audio.Presets
 import com.btjuicer.data.Profile
 import com.btjuicer.service.JuicerService
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -48,8 +50,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshLink()
     }
 
-    fun refreshLink() {
-        viewModelScope.launch { Juicer.link.refresh() }
+    fun refreshLink() = launchSafely { Juicer.link.refresh() }
+
+    /**
+     * A coroutine that cannot take the app down with it.
+     *
+     * Everything launched from here reaches across the ADB socket, into a vendor
+     * dump, or into a shell process — three places where a surprise is the
+     * normal case rather than the exceptional one. An uncaught throwable in
+     * `viewModelScope` is an app crash, and losing the whole app because a dump
+     * came back in an unexpected shape is never the right trade: the failure
+     * belongs in the snackbar.
+     */
+    private fun launchSafely(block: suspend () -> Unit) {
+        viewModelScope.launch {
+            runCatching { block() }.onFailure { failure ->
+                // Cancellation is how coroutines shut down, not a failure.
+                if (failure is CancellationException) throw failure
+                Log.w("BTJuicer", "background work failed", failure)
+                _messages.tryEmit(failure.message ?: failure.javaClass.simpleName)
+            }
+        }
     }
 
     /**
@@ -214,7 +235,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _messages.tryEmit("El código de emparejamiento tiene 6 dígitos")
             return
         }
-        viewModelScope.launch {
+        launchSafely {
             Juicer.adb.pair(trimmed).fold(
                 onSuccess = {
                     Juicer.prefs.setAdbPaired(true)
@@ -226,18 +247,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun connectAdb() {
-        viewModelScope.launch {
-            Juicer.adb.connect().fold(
-                onSuccess = {
-                    refreshCodec()
-                    if (Juicer.prefs.current.eq.enabled || Juicer.prefs.current.pollCodec) {
-                        JuicerService.start(context)
-                    }
-                },
-                onFailure = { _messages.tryEmit(it.message ?: "No se pudo conectar") },
-            )
-        }
+    fun connectAdb() = launchSafely {
+        Juicer.adb.connect().fold(
+            onSuccess = {
+                refreshCodec()
+                if (Juicer.prefs.current.eq.enabled || Juicer.prefs.current.pollCodec) {
+                    JuicerService.start(context)
+                }
+            },
+            onFailure = { _messages.tryEmit(it.message ?: "No se pudo conectar") },
+        )
     }
 
     fun disconnectAdb() {
@@ -252,14 +271,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _messages.tryEmit("Identidad borrada. Habrá que emparejar de nuevo.")
     }
 
-    fun refreshCodec() {
-        viewModelScope.launch {
-            if (Juicer.adb.state.value !is AdbState.Connected) {
-                _messages.tryEmit("Sin conexión ADB")
-                return@launch
-            }
-            Juicer.codec.refresh()
+    fun refreshCodec() = launchSafely {
+        if (Juicer.adb.state.value !is AdbState.Connected) {
+            _messages.tryEmit("Sin conexión ADB")
+            return@launchSafely
         }
+        Juicer.codec.refresh()
     }
 
     fun setPollCodec(enabled: Boolean) {
@@ -287,33 +304,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * needs them to put the codec back after the next reconnection, and if it
      * refuses, having the choice remembered is what lets the user retry.
      */
-    fun applyCodec(codec: Int, quality: LdacQuality?) {
-        viewModelScope.launch {
-            if (Juicer.adb.state.value !is AdbState.Connected) {
-                _messages.tryEmit("Conecta primero por ADB")
-                return@launch
-            }
-            Juicer.prefs.setForcedCodec(codec, quality?.raw)
-            val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
-            Juicer.codec.apply(codec, quality, address).fold(
-                onSuccess = { _messages.tryEmit(it) },
-                onFailure = { _messages.tryEmit(it.message ?: "No se pudo fijar el códec") },
-            )
+    fun applyCodec(codec: Int, quality: LdacQuality?) = launchSafely {
+        if (Juicer.adb.state.value !is AdbState.Connected) {
+            _messages.tryEmit("Conecta primero por ADB")
+            return@launchSafely
         }
+        Juicer.prefs.setForcedCodec(codec, quality?.raw)
+        val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
+        Juicer.codec.apply(codec, quality, address).fold(
+            onSuccess = { _messages.tryEmit(it) },
+            onFailure = { _messages.tryEmit(it.message ?: "No se pudo fijar el códec") },
+        )
     }
 
-    fun probeCodecWrite() {
-        viewModelScope.launch {
-            if (Juicer.adb.state.value !is AdbState.Connected) {
-                _messages.tryEmit("Conecta primero por ADB")
-                return@launch
-            }
-            val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
-            when (val support = Juicer.codec.probeWrite(address)) {
-                is WriteSupport.Yes -> _messages.tryEmit("Tu teléfono sí deja fijar el códec")
-                is WriteSupport.No -> _messages.tryEmit(support.reason)
-                WriteSupport.Unknown -> Unit
-            }
+    fun probeCodecWrite() = launchSafely {
+        if (Juicer.adb.state.value !is AdbState.Connected) {
+            _messages.tryEmit("Conecta primero por ADB")
+            return@launchSafely
+        }
+        val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
+        when (val support = Juicer.codec.probeWrite(address)) {
+            WriteSupport.Yes -> _messages.tryEmit("Tu teléfono sí deja fijar el códec")
+            is WriteSupport.No -> _messages.tryEmit(support.reason)
+            WriteSupport.Unknown -> Unit
         }
     }
 

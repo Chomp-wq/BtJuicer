@@ -110,16 +110,23 @@ data class CodecStatus(
  */
 object DumpsysCodec {
 
-    private val CONFIG_BLOCK = Regex("""mCodecConfig:\s*\{([^}]*)}""")
-    private val SELECTABLE_BLOCK =
-        Regex("""mCodecsSelectableCapabilities:\s*\[(.*?)]""", RegexOption.DOT_MATCHES_ALL)
     private val CODEC_TYPE_IN_ENTRY = Regex("""mCodecType:\s*(-?\d+)""")
 
-    fun parse(dump: String): CodecStatus? {
-        val block = CONFIG_BLOCK.find(dump)?.groupValues?.get(1) ?: return null
-        val codecType = intField(block, "mCodecType") ?: return null
+    /**
+     * Never throws.
+     *
+     * This parser is fed whatever a vendor ROM decided to print, and it is
+     * reached from a background poll as well as from a button. Letting it throw
+     * once cost an app crash on a phone where the dump was fine and the parser
+     * was not.
+     */
+    fun parse(dump: String): CodecStatus? = runCatching { read(dump) }.getOrNull()
 
-        val selectable = SELECTABLE_BLOCK.find(dump)?.groupValues?.get(1)?.let { list ->
+    private fun read(dump: String): CodecStatus? {
+        val config = block(dump, "mCodecConfig:", '{', '}') ?: return null
+        val codecType = intField(config, "mCodecType") ?: return null
+
+        val selectable = block(dump, "mCodecsSelectableCapabilities:", '[', ']')?.let { list ->
             CODEC_TYPE_IN_ENTRY.findAll(list)
                 .mapNotNull { it.groupValues[1].toIntOrNull() }
                 .filter { it != CodecType.INVALID }
@@ -129,11 +136,39 @@ object DumpsysCodec {
 
         return CodecStatus(
             codecType = codecType,
-            sampleRateFlags = maskField(block, "mSampleRate") ?: 0,
-            bitsPerSampleFlags = maskField(block, "mBitsPerSample") ?: 0,
-            codecSpecific1 = longField(block, "mCodecSpecific1") ?: 0L,
+            sampleRateFlags = maskField(config, "mSampleRate") ?: 0,
+            bitsPerSampleFlags = maskField(config, "mBitsPerSample") ?: 0,
+            codecSpecific1 = longField(config, "mCodecSpecific1") ?: 0L,
             selectableCodecs = selectable,
         )
+    }
+
+    /**
+     * Contents of the bracketed block that follows [key], brackets balanced.
+     *
+     * Done by hand rather than with a regex for two reasons. Android matches
+     * regexes with ICU, which — unlike the JDK the code was written against —
+     * rejects a bare `}` outright, and a pattern that only fails on the phone is
+     * the worst kind. And the selectable-capabilities list contains braced
+     * entries of its own, which a non-greedy match would cut in the middle.
+     */
+    private fun block(dump: String, key: String, open: Char, close: Char): String? {
+        val at = dump.indexOf(key)
+        if (at < 0) return null
+        val start = dump.indexOf(open, at + key.length)
+        if (start < 0) return null
+
+        var depth = 0
+        for (i in start until dump.length) {
+            when (dump[i]) {
+                open -> depth++
+                close -> {
+                    depth--
+                    if (depth == 0) return dump.substring(start + 1, i)
+                }
+            }
+        }
+        return null
     }
 
     private fun intField(block: String, key: String): Int? =
