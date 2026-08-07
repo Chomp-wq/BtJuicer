@@ -51,7 +51,14 @@ data class PrivReport(val fields: Map<String, String>, val raw: String) {
                 val body = line.trim().removePrefix("BTJ:").takeIf { it != line.trim() } ?: continue
                 val split = body.indexOf('=')
                 if (split <= 0) continue
-                fields[body.substring(0, split)] = body.substring(split + 1)
+                val key = body.substring(0, split)
+                val value = body.substring(split + 1)
+                // Repeats join instead of overwriting. The helper tries several
+                // routes to the same thing and reports each failure under one
+                // key; overwriting kept only the last, which is how three
+                // different reasons for "no Bluetooth adapter" arrived as one —
+                // and the two that were thrown away were the informative ones.
+                fields[key] = fields[key]?.let { "$it; $value" } ?: value
             }
             return PrivReport(fields, output)
         }

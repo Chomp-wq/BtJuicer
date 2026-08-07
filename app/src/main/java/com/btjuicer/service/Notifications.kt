@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.Bundle
 import android.provider.Settings
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
@@ -47,7 +48,12 @@ object Notifications {
         )
     }
 
-    fun status(context: Context, engine: EngineState, link: LinkInfo): Notification {
+    fun status(
+        context: Context,
+        engine: EngineState,
+        link: LinkInfo,
+        codecLabel: String? = null,
+    ): Notification {
         val title = when (engine) {
             is EngineState.Active -> context.getString(R.string.notif_eq_on)
             is EngineState.Failed -> context.getString(R.string.notif_eq_failed)
@@ -62,15 +68,27 @@ object Notifications {
             }
         }
 
+        // Short enough to sit beside a camera hole: the codec if we know it,
+        // otherwise where the sound is going.
+        val ticker = codecLabel?.takeIf { it.isNotEmpty() }
+            ?: link.btDeviceName.takeIf { it.isNotEmpty() }
+            ?: link.route.label
+
+        val extras = Bundle().also { FocusNotification.decorate(it, title, detail, ticker) }
+
         return NotificationCompat.Builder(context, CHANNEL_STATUS)
             .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(detail)
+            .setSubText(ticker)
             .setStyle(NotificationCompat.BigTextStyle().bigText(detail))
             .setOngoing(true)
             .setSilent(true)
             .setShowWhen(false)
+            .setColorized(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setContentIntent(openApp(context))
+            .addExtras(extras)
             .addAction(
                 R.drawable.ic_notification,
                 context.getString(

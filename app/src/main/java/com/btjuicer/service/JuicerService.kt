@@ -221,6 +221,9 @@ class JuicerService : LifecycleService() {
             this,
             Juicer.engine.state.value,
             Juicer.link.info.value,
+            // Fed to the dynamic island: the codec is the one fact worth a
+            // glance from outside the app.
+            Juicer.codec.status.value?.headline(),
         )
         ServiceCompat.startForeground(
             this,

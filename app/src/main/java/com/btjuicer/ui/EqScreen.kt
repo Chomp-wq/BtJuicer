@@ -22,6 +22,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -374,15 +375,14 @@ private fun <T> ChipFlow(
 private fun PowerCard(eq: EqConfig, engine: EngineState, onEnabledChange: (Boolean) -> Unit) {
     val dark = isSystemInDarkTheme()
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
+    Card(Modifier.fillMaxWidth(), colors = if (eq.enabled) heroCardColors() else CardDefaults.cardColors()) {
+        Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text("Ecualizador", style = MaterialTheme.typography.titleMedium)
+                    Text("Ecualizador", style = MaterialTheme.typography.titleLarge)
                     Text(
-                        "Actúa sobre toda la salida del teléfono, incluidas las apps de streaming.",
+                        "Sobre toda la salida del teléfono.",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
                 Spacer(Modifier.width(12.dp))

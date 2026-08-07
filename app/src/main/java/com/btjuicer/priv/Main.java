@@ -120,6 +120,7 @@ public final class Main {
         Context context = buildContext();
         out("package", context.getPackageName());
 
+        initBluetoothFramework();
         BluetoothAdapter adapter = adapterOf(context);
         if (adapter == null) {
             fail("no se pudo obtener el adaptador Bluetooth");
@@ -355,6 +356,50 @@ public final class Main {
      * {@code AttributionSource.myAttributionSource()}, which in a bare
      * {@code app_process} has no package to report.
      */
+    /**
+     * Hands the Bluetooth framework the service manager nobody gave it.
+     *
+     * Since Android 13 the Bluetooth stack lives in its own APEX, and
+     * {@code BluetoothAdapter} no longer looks its service up in the global
+     * ServiceManager. It goes through
+     * {@code BluetoothFrameworkInitializer.getBluetoothServiceManager()}, and
+     * that is populated once, early, by the code that binds a normal app
+     * process — the code this class deliberately skips, because running it is
+     * what killed the earlier attempt.
+     *
+     * So all three routes to the adapter returned null, and none of them were
+     * wrong: there was simply nothing behind any of them. One line puts it
+     * there.
+     */
+    private static void initBluetoothFramework() {
+        try {
+            Class<?> initializer = Class.forName("android.bluetooth.BluetoothFrameworkInitializer");
+            Object existing = initializer.getMethod("getBluetoothServiceManager").invoke(null);
+            if (existing != null) {
+                out("bt_framework", "ya estaba");
+                return;
+            }
+            Class<?> managerClass = Class.forName("android.os.BluetoothServiceManager");
+            Constructor<?> ctor = managerClass.getDeclaredConstructor();
+            ctor.setAccessible(true);
+            // Setting it twice throws, which is why the getter is checked first.
+            initializer.getMethod("setBluetoothServiceManager", managerClass)
+                    .invoke(null, ctor.newInstance());
+            out("bt_framework", "inicializado");
+        } catch (Throwable t) {
+            out("framework_warn", describe(t));
+        }
+
+        // Registers BluetoothManager as a context service. Best effort: it
+        // throws when something already did it, which is a fine outcome.
+        try {
+            Class.forName("android.bluetooth.BluetoothFrameworkInitializer")
+                    .getMethod("registerServiceWrappers").invoke(null);
+        } catch (Throwable ignored) {
+            // Already registered, or not needed on this release.
+        }
+    }
+
     private static BluetoothAdapter adapterOf(Context context) {
         try {
             Method create = BluetoothAdapter.class

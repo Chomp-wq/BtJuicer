@@ -150,8 +150,8 @@ private fun CodecCard(codec: CodecStatus?, error: String?, onRefresh: () -> Unit
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
 
-    Card(Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(16.dp)) {
+    Card(Modifier.fillMaxWidth(), colors = heroCardColors()) {
+        Column(Modifier.padding(20.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Spacer(
                     Modifier
@@ -160,17 +160,13 @@ private fun CodecCard(codec: CodecStatus?, error: String?, onRefresh: () -> Unit
                         .background(color),
                 )
                 Spacer(Modifier.width(8.dp))
-                Text(
-                    "Códec negociado",
-                    style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
+                Text("Códec negociado", style = MaterialTheme.typography.labelLarge)
             }
 
-            Spacer(Modifier.height(8.dp))
+            Spacer(Modifier.height(10.dp))
             Text(
                 text = codec?.headline() ?: "Sin lectura todavía",
-                style = MaterialTheme.typography.headlineSmall,
+                style = MaterialTheme.typography.headlineMedium,
                 fontFamily = FontFamily.Monospace,
             )
 
