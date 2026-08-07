@@ -20,8 +20,16 @@ data class Headphone(
     val rig: String,
     val preampDb: Float,
     val filters: List<Filter>,
+    /**
+     * False for the built-in speaker curves, which are engineering defaults
+     * rather than corrections of a measurement. The distinction is shown in the
+     * UI, because it changes how much the number deserves to be trusted.
+     */
+    val measured: Boolean = true,
+    /** Extra words the entry answers to, so "alexa" finds the Echo curve. */
+    val aliases: List<String> = emptyList(),
 ) {
-    val label: String get() = "$source · $rig"
+    val label: String get() = if (measured) "$source · $rig" else source
 }
 
 /** A model, with every measurement of it that the database carries. */
@@ -76,6 +84,15 @@ class HeadphoneDb(private val open: () -> InputStream) {
         val terms = needle.split(' ').filter { it.isNotEmpty() }
 
         val hits = mutableListOf<Pair<Int, Headphone>>()
+
+        // Speakers first, and not as a favour: someone typing "alexa" wants the
+        // one entry that answers to it, not to scroll past headphones that happen
+        // to share a letter.
+        for (speaker in SpeakerCurves.ALL) {
+            val names = (listOf(speaker.name) + speaker.aliases).map(::normalise)
+            names.firstNotNullOfOrNull { score(it, terms) }?.let { hits += it to speaker }
+        }
+
         runCatching {
             open().bufferedReader().useLines { lines ->
                 for (line in lines) {
@@ -85,7 +102,7 @@ class HeadphoneDb(private val open: () -> InputStream) {
                     hits += score to entry
                 }
             }
-        }.onFailure { return@withContext emptyList() }
+        }.onFailure { /* The bundled file is unreadable; speakers still work. */ }
 
         hits.groupBy { it.second.name }
             .map { (name, group) ->

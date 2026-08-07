@@ -343,6 +343,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /** For a socket that answers nothing: drop it and dial again. */
+    fun reconnectAdb() {
+        launchSafely {
+            Juicer.codec.clear()
+            Juicer.adb.reconnect().fold(
+                onSuccess = { refreshCodec() },
+                onFailure = { _messages.tryEmit(it.message ?: "No se pudo reconectar") },
+            )
+        }
+    }
+
     fun disconnectAdb() {
         Juicer.adb.disconnect()
         Juicer.codec.clear()

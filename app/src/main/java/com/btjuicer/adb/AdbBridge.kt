@@ -4,16 +4,20 @@ import android.content.Context
 import android.os.Build
 import android.util.Log
 import io.github.muntashirakon.adb.AbsAdbConnectionManager
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.sync.Mutex
-import kotlinx.coroutines.sync.withLock
-import kotlinx.coroutines.withContext
 import java.io.ByteArrayOutputStream
 import java.security.PrivateKey
 import java.security.cert.Certificate
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * The only file that touches the ADB library.
@@ -91,11 +95,22 @@ class AdbLink(private val context: Context) {
 
     private companion object {
         const val DISCOVERY_TIMEOUT_MS = 20_000L
+
+        /**
+         * Ceiling for a single command. Generous on purpose: the privileged
+         * helper starts a process and waits for the Bluetooth link to
+         * renegotiate, which is several seconds of legitimate silence. Anything
+         * past this is not slow, it is gone.
+         */
+        const val COMMAND_TIMEOUT_MS = 30_000L
         const val PAIRING_DISCOVERY_TIMEOUT_MS = 60_000L
     }
 
     private val discovery = AdbDiscovery(context)
     private val mutex = Mutex()
+
+    /** Outlives any single command, because its whole job is to interrupt one. */
+    private val watchdogScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /**
      * Separate from [mutex] because pairing holds that one for up to a minute
@@ -203,14 +218,27 @@ class AdbLink(private val context: Context) {
      * the manager on any error on the theory that a dead socket was the usual
      * cause — but the usual cause turned out to be the command, and dropping
      * the connection sent the user back to reconnecting for no reason.
+     *
+     * The watchdog is the third thing, and it is not optional. Commands are
+     * serialised on one socket, so a read that never returns does not stall one
+     * command — it stalls every command after it, for good, while the app goes
+     * on claiming to be connected. Cancelling the coroutine would not help: a
+     * blocking socket read ignores cancellation. Closing the stream from
+     * somewhere else is the only thing that unblocks it.
      */
     suspend fun shell(command: String): Result<String> = shellMutex.withLock {
         val mgr = manager ?: return Result.failure(IllegalStateException("Sin conexión ADB"))
 
         withContext(Dispatchers.IO) {
             val collected = ByteArrayOutputStream()
+            var timedOut = false
             val outcome = runCatching {
                 val stream = mgr.openStream("shell:$command")
+                val watchdog = watchdogScope.launch {
+                    delay(COMMAND_TIMEOUT_MS)
+                    timedOut = true
+                    runCatching { stream.close() }
+                }
                 try {
                     val input = stream.openInputStream()
                     val buffer = ByteArray(8_192)
@@ -220,6 +248,7 @@ class AdbLink(private val context: Context) {
                         collected.write(buffer, 0, read)
                     }
                 } finally {
+                    watchdog.cancel()
                     runCatching { stream.close() }
                 }
             }
@@ -227,13 +256,25 @@ class AdbLink(private val context: Context) {
             // of a multi-byte character, and device names are not all ASCII.
             val output = collected.toString(Charsets.UTF_8.name())
 
-            if (outcome.isSuccess || output.isNotEmpty()) {
+            if (!timedOut && (outcome.isSuccess || output.isNotEmpty())) {
                 return@withContext Result.success(output)
             }
 
-            val failure = outcome.exceptionOrNull() ?: IllegalStateException("Sin respuesta")
-            Log.w(TAG, "shell failed with no output: $command", failure)
-            if (!isLive()) {
+            val failure = when {
+                timedOut -> IllegalStateException(
+                    "El comando no respondió en ${COMMAND_TIMEOUT_MS / 1000} s. " +
+                        "Se ha soltado la conexión; vuelve a conectar.",
+                )
+                else -> outcome.exceptionOrNull() ?: IllegalStateException("Sin respuesta")
+            }
+            Log.w(TAG, "shell failed: $command", failure)
+
+            // A command that never answered means the channel is gone, whatever
+            // the library still believes. `isConnected` reports the handshake,
+            // not the socket, so it happily says yes to a connection that died
+            // with the Wi-Fi — which leaves the app claiming to be connected
+            // while nothing works and offering no way out.
+            if (timedOut || !isLive()) {
                 _state.value = AdbState.Paired
                 runCatching { manager?.close() }
                 manager = null
@@ -245,6 +286,12 @@ class AdbLink(private val context: Context) {
     /** Whether the daemon is still on the other end, as far as the library knows. */
     private fun isLive(): Boolean =
         runCatching { manager?.isConnected == true }.getOrDefault(false)
+
+    /** Drops whatever is there and dials again, for when the socket has gone stale. */
+    suspend fun reconnect(): Result<Unit> {
+        disconnect()
+        return connect()
+    }
 
     fun disconnect() {
         runCatching { manager?.close() }

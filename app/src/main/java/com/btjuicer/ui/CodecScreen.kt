@@ -58,6 +58,7 @@ fun CodecScreen(
     busy: Boolean,
     onPair: (String) -> Unit,
     onConnect: () -> Unit,
+    onReconnect: () -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
     onRefresh: () -> Unit,
@@ -85,7 +86,11 @@ fun CodecScreen(
             }
         }
 
-        item { ConnectionCard(adb, settings, onPair, onConnect, onDisconnect, onForget) }
+        item {
+            ConnectionCard(
+                adb, settings, onPair, onConnect, onReconnect, onDisconnect, onForget,
+            )
+        }
 
         if (adb is AdbState.Connected) {
             item {
@@ -328,6 +333,7 @@ private fun ConnectionCard(
     settings: Settings,
     onPair: (String) -> Unit,
     onConnect: () -> Unit,
+    onReconnect: () -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
 ) {
@@ -353,7 +359,11 @@ private fun ConnectionCard(
                     )
                     Spacer(Modifier.height(10.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        OutlinedButton(onClick = onDisconnect) { Text("Desconectar") }
+                        // Present even while "connected": a Wi-Fi hiccup leaves a
+                        // socket that answers nothing and admits to nothing, and
+                        // without this the only way out was to unpair.
+                        OutlinedButton(onClick = onReconnect) { Text("Reconectar") }
+                        TextButton(onClick = onDisconnect) { Text("Desconectar") }
                         TextButton(onClick = onForget) { Text("Olvidar") }
                     }
                 }

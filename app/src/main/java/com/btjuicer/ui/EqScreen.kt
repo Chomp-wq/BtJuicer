@@ -302,10 +302,21 @@ private fun HeadphoneCard(viewModel: MainViewModel) {
                 Spacer(Modifier.height(10.dp))
                 Text(headphone.name, style = MaterialTheme.typography.titleSmall)
                 Text(
-                    "Medido por ${headphone.label}",
+                    if (headphone.measured) "Medido por ${headphone.label}" else headphone.label,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                if (!headphone.measured) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Punto de partida, no una corrección: en un altavoz manda la sala, y la " +
+                            "misma bocina suena distinta en una estantería que en una esquina. " +
+                            "Lo que sí es seguro es el corte de graves — un altavoz pequeño no " +
+                            "puede darlos, y pedírselos hace que su limitador apague todo lo demás.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = warnColor(isSystemInDarkTheme()),
+                    )
+                }
 
                 if (alternatives.size > 1) {
                     Spacer(Modifier.height(8.dp))

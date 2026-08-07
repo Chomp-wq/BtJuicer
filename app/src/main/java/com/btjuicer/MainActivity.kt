@@ -199,6 +199,7 @@ private fun Root(viewModel: MainViewModel) {
                     busy = codecBusy,
                     onPair = viewModel::pairAdb,
                     onConnect = viewModel::connectAdb,
+                    onReconnect = viewModel::reconnectAdb,
                     onDisconnect = viewModel::disconnectAdb,
                     onForget = viewModel::forgetAdb,
                     onRefresh = viewModel::refreshCodec,

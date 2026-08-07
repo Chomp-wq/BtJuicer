@@ -151,6 +151,7 @@ app/src/main/java/com/btjuicer/
   audio/AutoEq.kt           lectura de ParametricEQ.txt y GraphicEQ.txt
   audio/HeadphoneDb.kt      buscador sobre las 8850 curvas incluidas
   audio/Flavour.kt          matices de gusto sobre la corrección medida
+  audio/SpeakerCurves.kt    puntos de partida para altavoces, no medidos
   audio/EqModel.kt          configuración, modos, presets
   audio/AudioEngine.kt      DynamicsProcessing (31 bandas + MBC + limitador)
   data/Profiles.kt          perfiles guardados y atados a un dispositivo
