@@ -331,15 +331,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun connectAdb() {
         launchSafely {
-        Juicer.adb.connect().fold(
-            onSuccess = {
-                refreshCodec()
-                if (Juicer.prefs.current.eq.enabled || Juicer.prefs.current.pollCodec) {
-                    JuicerService.start(context)
-                }
-            },
-            onFailure = { _messages.tryEmit(it.message ?: "No se pudo conectar") },
-        )
+            Juicer.adb.connect().fold(
+                onSuccess = {
+                    refreshCodec()
+                    if (Juicer.prefs.current.eq.enabled || Juicer.prefs.current.pollCodec) {
+                        JuicerService.start(context)
+                    }
+                },
+                onFailure = { _messages.tryEmit(it.message ?: "No se pudo conectar") },
+            )
+        }
     }
 
     fun disconnectAdb() {
@@ -356,11 +357,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun refreshCodec() {
         launchSafely {
-        if (Juicer.adb.state.value !is AdbState.Connected) {
-            _messages.tryEmit("Sin conexión ADB")
-            return@launchSafely
+            if (Juicer.adb.state.value !is AdbState.Connected) {
+                _messages.tryEmit("Sin conexión ADB")
+                return@launchSafely
+            }
+            Juicer.codec.refresh()
         }
-        Juicer.codec.refresh()
     }
 
     fun setPollCodec(enabled: Boolean) {
@@ -390,29 +392,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      */
     fun applyCodec(codec: Int, quality: LdacQuality?) {
         launchSafely {
-        if (Juicer.adb.state.value !is AdbState.Connected) {
-            _messages.tryEmit("Conecta primero por ADB")
-            return@launchSafely
+            if (Juicer.adb.state.value !is AdbState.Connected) {
+                _messages.tryEmit("Conecta primero por ADB")
+                return@launchSafely
+            }
+            Juicer.prefs.setForcedCodec(codec, quality?.raw)
+            val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
+            Juicer.codec.apply(codec, quality, address).fold(
+                onSuccess = { _messages.tryEmit(it) },
+                onFailure = { _messages.tryEmit(it.message ?: "No se pudo fijar el códec") },
+            )
         }
-        Juicer.prefs.setForcedCodec(codec, quality?.raw)
-        val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
-        Juicer.codec.apply(codec, quality, address).fold(
-            onSuccess = { _messages.tryEmit(it) },
-            onFailure = { _messages.tryEmit(it.message ?: "No se pudo fijar el códec") },
-        )
     }
 
     fun probeCodecWrite() {
         launchSafely {
-        if (Juicer.adb.state.value !is AdbState.Connected) {
-            _messages.tryEmit("Conecta primero por ADB")
-            return@launchSafely
-        }
-        val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
-        when (val support = Juicer.codec.probeWrite(address)) {
-            WriteSupport.Yes -> _messages.tryEmit("Tu teléfono sí deja fijar el códec")
-            is WriteSupport.No -> _messages.tryEmit(support.reason)
-            WriteSupport.Unknown -> Unit
+            if (Juicer.adb.state.value !is AdbState.Connected) {
+                _messages.tryEmit("Conecta primero por ADB")
+                return@launchSafely
+            }
+            val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
+            when (val support = Juicer.codec.probeWrite(address)) {
+                WriteSupport.Yes -> _messages.tryEmit("Tu teléfono sí deja fijar el códec")
+                is WriteSupport.No -> _messages.tryEmit(support.reason)
+                WriteSupport.Unknown -> Unit
+            }
         }
     }
 
