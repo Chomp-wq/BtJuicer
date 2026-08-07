@@ -332,29 +332,75 @@ public final class Main {
         }
 
         public AttributionSource getAttributionSource() {
-            if (source == null) {
-                source = new AttributionSource.Builder(Process.myUid())
-                        .setPackageName(SHELL_PACKAGE)
-                        .build();
-            }
+            if (source == null) source = shellAttributionSource();
             return source;
         }
     }
 
+    /**
+     * Three ways in, tried in order of how little can go wrong.
+     *
+     * The direct one is {@code BluetoothAdapter.createAdapter(AttributionSource)}:
+     * public in the framework, absent from the SDK, and it takes the identity as
+     * an argument instead of deriving one. That sidesteps both of the traps the
+     * other two fall into.
+     *
+     * {@code getSystemService} looks like the obvious choice and is not:
+     * {@link ContextWrapper} forwards it straight to the wrapped
+     * {@code ContextImpl}, so the shell identity this class carefully sets up is
+     * bypassed and the manager is built claiming to be "android" — uid 1000 —
+     * from a process running as 2000.
+     *
+     * {@code getDefaultAdapter()} derives the identity through
+     * {@code AttributionSource.myAttributionSource()}, which in a bare
+     * {@code app_process} has no package to report.
+     */
     private static BluetoothAdapter adapterOf(Context context) {
+        try {
+            Method create = BluetoothAdapter.class
+                    .getMethod("createAdapter", AttributionSource.class);
+            create.setAccessible(true);
+            BluetoothAdapter adapter =
+                    (BluetoothAdapter) create.invoke(null, shellAttributionSource());
+            if (adapter != null) {
+                out("adapter", "createAdapter");
+                return adapter;
+            }
+            out("adapter_warn", "createAdapter devolvió null");
+        } catch (Throwable t) {
+            out("adapter_warn", "createAdapter: " + describe(t));
+        }
+
         try {
             BluetoothManager manager =
                     (BluetoothManager) context.getSystemService(Context.BLUETOOTH_SERVICE);
-            if (manager != null && manager.getAdapter() != null) return manager.getAdapter();
+            BluetoothAdapter adapter = manager == null ? null : manager.getAdapter();
+            if (adapter != null) {
+                out("adapter", "systemService");
+                return adapter;
+            }
+            out("adapter_warn", "getSystemService devolvió null");
         } catch (Throwable t) {
-            out("adapter_warn", describe(t));
+            out("adapter_warn", "getSystemService: " + describe(t));
         }
+
         try {
-            return BluetoothAdapter.getDefaultAdapter();
+            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            if (adapter != null) {
+                out("adapter", "getDefaultAdapter");
+                return adapter;
+            }
+            out("adapter_warn", "getDefaultAdapter devolvió null");
         } catch (Throwable t) {
-            out("adapter_warn", describe(t));
-            return null;
+            out("adapter_warn", "getDefaultAdapter: " + describe(t));
         }
+        return null;
+    }
+
+    private static AttributionSource shellAttributionSource() {
+        return new AttributionSource.Builder(Process.myUid())
+                .setPackageName(SHELL_PACKAGE)
+                .build();
     }
 
     /**

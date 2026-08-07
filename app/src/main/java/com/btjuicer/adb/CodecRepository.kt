@@ -93,10 +93,12 @@ class CodecRepository(private val adb: AdbLink, context: Context) {
                 .getOrElse { return Result.failure(it) }
 
             report.error?.let { message ->
+                val detail = report.warnings.joinToString("; ")
+                    .let { if (it.isEmpty()) message else "$message — $it" }
                 if (!report.privileged && report.fields.containsKey("privileged")) {
-                    _writeSupport.value = WriteSupport.No(message)
+                    _writeSupport.value = WriteSupport.No(detail)
                 }
-                return Result.failure(IllegalStateException(message))
+                return Result.failure(IllegalStateException(detail))
             }
             _writeSupport.value = WriteSupport.Yes
 
@@ -144,7 +146,12 @@ class CodecRepository(private val adb: AdbLink, context: Context) {
             }
             val support = when {
                 report.privileged -> WriteSupport.Yes
-                else -> WriteSupport.No(report.error ?: "El usuario shell no tiene el permiso")
+                else -> WriteSupport.No(
+                    listOfNotNull(
+                        report.error ?: "El usuario shell no tiene el permiso",
+                        report.warnings.joinToString("; ").takeIf { it.isNotEmpty() },
+                    ).joinToString(" — "),
+                )
             }
             _writeSupport.value = support
             report.status("current")?.let { _status.value = it }

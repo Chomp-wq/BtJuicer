@@ -18,6 +18,19 @@ data class PrivReport(val fields: Map<String, String>, val raw: String) {
 
     val deviceName: String get() = fields["device_name"].orEmpty()
 
+    /**
+     * Every step that went wrong without being fatal.
+     *
+     * The helper tries several routes to each thing it needs and notes each
+     * failure. Those notes are the whole diagnosis when the final error is as
+     * unhelpful as "could not get the Bluetooth adapter" — collecting them and
+     * then not showing them turned one round of debugging into two.
+     */
+    val warnings: List<String>
+        get() = fields.entries
+            .filter { it.key.endsWith("_warn") }
+            .map { "${it.key.removeSuffix("_warn")}: ${it.value}" }
+
     val selectable: List<Int>
         get() = fields["selectable"].orEmpty()
             .split(',')
