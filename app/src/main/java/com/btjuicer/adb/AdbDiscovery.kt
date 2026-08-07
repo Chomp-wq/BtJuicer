@@ -47,6 +47,9 @@ class AdbDiscovery(private val context: Context) {
 
         private const val TAG = "BTJuicerAdb"
 
+        /** The daemon is on this phone, so this address always reaches it. */
+        private const val LOOPBACK = "127.0.0.1"
+
         /** How long to keep listening after the last new endpoint appeared. */
         private const val SETTLE_MS = 2_500L
         private const val POLL_MS = 200L
@@ -70,18 +73,69 @@ class AdbDiscovery(private val context: Context) {
      * Never throws; an empty list is a normal outcome the UI explains.
      */
     suspend fun findAll(serviceType: String, timeoutMs: Long): List<Endpoint> {
-        val manager = nsd ?: return emptyList()
-        val lock = acquireMulticastLock()
-        return try {
-            collect(manager, serviceType, timeoutMs)
-        } catch (t: Throwable) {
-            if (t is CancellationException) throw t
-            Log.w(TAG, "mDNS discovery failed for $serviceType", t)
+        val manager = nsd
+        val discovered = if (manager == null) {
             emptyList()
-        } finally {
-            runCatching { lock?.release() }
+        } else {
+            val lock = acquireMulticastLock()
+            try {
+                collect(manager, serviceType, timeoutMs)
+            } catch (t: Throwable) {
+                if (t is CancellationException) throw t
+                Log.w(TAG, "mDNS discovery failed for $serviceType", t)
+                emptyList()
+            } finally {
+                runCatching { lock?.release() }
+            }
         }
+        return withLoopback(discovered, serviceType)
     }
+
+    /**
+     * Adds the addresses mDNS cannot give us.
+     *
+     * The daemon we are dialling runs on *this phone*, so the loopback address
+     * always reaches it — adbd binds its listener to every interface, not just
+     * the Wi-Fi one. That makes `127.0.0.1` immune to the two things that break
+     * discovery: a network where multicast is filtered, and a cached record
+     * holding a Wi-Fi address the phone no longer has. Only the port is ever
+     * genuinely unknown.
+     *
+     * And the port is often not unknown either: adbd publishes it in a system
+     * property. Reading it skips mDNS altogether, which is why it is tried
+     * first — it is the only source here that cannot be stale.
+     */
+    private fun withLoopback(discovered: List<Endpoint>, serviceType: String): List<Endpoint> {
+        val ordered = LinkedHashSet<Endpoint>()
+
+        if (serviceType == CONNECT_TYPE) {
+            propertyPort()?.let {
+                Log.i(TAG, "adbd port from system property: $it")
+                ordered += Endpoint(LOOPBACK, it)
+            }
+        }
+        ordered += discovered
+        // Every port we saw, retried against loopback: a stale record often has
+        // the right port behind a wrong address.
+        discovered.forEach { ordered += Endpoint(LOOPBACK, it.port) }
+
+        return ordered.toList()
+    }
+
+    /**
+     * The connect port, straight from adbd.
+     *
+     * `SystemProperties` is not in the public SDK, hence the reflection — and
+     * hence [HiddenApi], which the connection path has already lifted by the
+     * time this runs. Whether an ordinary app is allowed to read this particular
+     * property depends on the ROM's SELinux policy, so it is a bonus and never
+     * the only plan.
+     */
+    private fun propertyPort(): Int? = runCatching {
+        val get = Class.forName("android.os.SystemProperties")
+            .getMethod("get", String::class.java, String::class.java)
+        (get.invoke(null, "service.adb.tls.port", "") as? String)?.trim()?.toIntOrNull()
+    }.getOrNull()?.takeIf { it in 1..65_535 }
 
     private suspend fun collect(
         manager: NsdManager,
