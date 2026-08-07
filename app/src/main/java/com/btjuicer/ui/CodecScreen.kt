@@ -12,12 +12,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
@@ -41,6 +44,8 @@ import com.btjuicer.adb.AdbState
 import com.btjuicer.adb.CodecGrade
 import com.btjuicer.adb.CodecStatus
 import com.btjuicer.adb.CodecType
+import com.btjuicer.adb.LdacQuality
+import com.btjuicer.adb.WriteSupport
 import com.btjuicer.data.Settings
 
 @Composable
@@ -49,12 +54,16 @@ fun CodecScreen(
     adb: AdbState,
     codec: CodecStatus?,
     codecError: String?,
+    writeSupport: WriteSupport,
+    busy: Boolean,
     onPair: (String) -> Unit,
     onConnect: () -> Unit,
     onDisconnect: () -> Unit,
     onForget: () -> Unit,
     onRefresh: () -> Unit,
     onPollChange: (Boolean) -> Unit,
+    onApplyCodec: (Int, LdacQuality?) -> Unit,
+    onAutoForceChange: (Boolean) -> Unit,
     onOpenDeveloperOptions: () -> Unit,
 ) {
     LazyColumn(
@@ -64,6 +73,16 @@ fun CodecScreen(
     ) {
         if (adb is AdbState.Connected) {
             item { CodecCard(codec, codecError, onRefresh) }
+            item {
+                ForceCard(
+                    settings = settings,
+                    codec = codec,
+                    writeSupport = writeSupport,
+                    busy = busy,
+                    onApply = onApplyCodec,
+                    onAutoForceChange = onAutoForceChange,
+                )
+            }
         }
 
         item { ConnectionCard(adb, settings, onPair, onConnect, onDisconnect, onForget) }
@@ -162,6 +181,143 @@ private fun CodecCard(codec: CodecStatus?, error: String?, onRefresh: () -> Unit
 
             Spacer(Modifier.height(12.dp))
             OutlinedButton(onClick = onRefresh) { Text("Leer ahora") }
+        }
+    }
+}
+
+/**
+ * Picking the codec, and keeping it.
+ *
+ * The codec list comes from what the headphones actually advertised whenever the
+ * phone told us — offering LDAC to a sink that cannot do it produces a silent
+ * fallback to SBC and a user who thinks the app is broken. When the sink has not
+ * been read yet, a conservative default list is shown instead.
+ */
+@Composable
+private fun ForceCard(
+    settings: Settings,
+    codec: CodecStatus?,
+    writeSupport: WriteSupport,
+    busy: Boolean,
+    onApply: (Int, LdacQuality?) -> Unit,
+    onAutoForceChange: (Boolean) -> Unit,
+) {
+    val offered = codec?.selectableCodecs
+        ?.filter { it != CodecType.INVALID }
+        ?.takeIf { it.isNotEmpty() }
+        ?: listOf(CodecType.SBC, CodecType.AAC, CodecType.LDAC)
+
+    // Keyed on the offered list and the saved choice only. Keying on the live
+    // codec too would reset the user's selection every time the poll came back.
+    var chosen by remember(offered, settings.forcedCodec) {
+        mutableStateOf(
+            settings.forcedCodec?.takeIf { it in offered }
+                ?: codec?.codecType?.takeIf { it in offered }
+                ?: offered.last(),
+        )
+    }
+    var quality by remember(settings.forcedLdacRaw) {
+        mutableStateOf(
+            LdacQuality.fromRaw(settings.forcedLdacRaw ?: -1L)
+                ?: codec?.ldacQuality
+                ?: LdacQuality.HIGH,
+        )
+    }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Forzar el códec", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "BT Juicer arranca un proceso con los permisos del shell y se lo pide al " +
+                    "sistema. Después vuelve a leer el códec, así que lo que ves abajo es lo " +
+                    "que quedó, no lo que se pidió.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(12.dp))
+            ChipRow(
+                options = offered,
+                selected = chosen,
+                label = { CodecType.label(it) },
+                onSelect = { chosen = it },
+            )
+
+            if (chosen == CodecType.LDAC) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    "Calidad LDAC",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                ChipRow(
+                    options = LdacQuality.entries.toList(),
+                    selected = quality,
+                    label = { it.bitrate },
+                    onSelect = { quality = it },
+                )
+            }
+
+            if (writeSupport is WriteSupport.No) {
+                Spacer(Modifier.height(10.dp))
+                Text(
+                    writeSupport.reason,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = badColor(isSystemInDarkTheme()),
+                )
+            }
+
+            Spacer(Modifier.height(12.dp))
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Button(
+                    onClick = { onApply(chosen, quality.takeIf { chosen == CodecType.LDAC }) },
+                    enabled = !busy,
+                ) { Text("Aplicar") }
+                if (busy) {
+                    Spacer(Modifier.width(12.dp))
+                    CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                }
+            }
+
+            Spacer(Modifier.height(6.dp))
+            HorizontalDivider()
+            Spacer(Modifier.height(6.dp))
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Volver a aplicar al conectar", style = MaterialTheme.typography.bodyLarge)
+                    Text(
+                        "El enlace se renegocia cada vez que los audífonos vuelven, y ninguna " +
+                            "API hace que la elección persista. Esto es lo que evita que se " +
+                            "deshaga sola.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(checked = settings.autoForceCodec, onCheckedChange = onAutoForceChange)
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> ChipRow(
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            FilterChip(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                label = { Text(label(option)) },
+            )
         }
     }
 }
@@ -300,9 +456,18 @@ private fun ExplainerCard() {
             HorizontalDivider()
             Spacer(Modifier.height(8.dp))
             Text(
-                "Sólo lee. No existe ningún comando de shell que fije el códec o el bitrate: eso " +
-                    "hay que hacerlo a mano en opciones de desarrollador. Lo que ganas es saber " +
-                    "si de verdad quedó aplicado.",
+                "Para fijarlo hace falta más: ningún comando de shell cambia el códec, así que " +
+                    "BT Juicer arranca un proceso propio con los permisos del shell y llama al " +
+                    "sistema desde ahí. Es lo mismo que hace la pantalla de opciones de " +
+                    "desarrollador, sólo que aquí queda guardado y se vuelve a aplicar solo.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Lo que nadie puede hacer es que persista de verdad: el códec se negocia de cero " +
+                    "en cada reconexión. Por eso «volver a aplicar al conectar» es la parte que " +
+                    "importa, y por eso necesita el servicio en marcha.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

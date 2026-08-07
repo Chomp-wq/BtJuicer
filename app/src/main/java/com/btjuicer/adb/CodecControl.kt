@@ -1,0 +1,127 @@
+package com.btjuicer.adb
+
+import android.content.Context
+import android.util.Log
+
+/**
+ * Everything the privileged helper reported, as plain key/value pairs.
+ *
+ * Deliberately untyped: the helper is the part most likely to grow a new field,
+ * and a map means adding one needs no change on this side.
+ */
+data class PrivReport(val fields: Map<String, String>, val raw: String) {
+
+    val error: String? get() = fields["error"]
+
+    /** False means the shell user could not read the codec on this ROM. */
+    val privileged: Boolean get() = fields["privileged"] == "true"
+
+    val deviceName: String get() = fields["device_name"].orEmpty()
+
+    val selectable: List<Int>
+        get() = fields["selectable"].orEmpty()
+            .split(',')
+            .mapNotNull { it.trim().toIntOrNull() }
+
+    fun status(prefix: String): CodecStatus? {
+        val codec = fields["${prefix}_codec"]?.toIntOrNull() ?: return null
+        return CodecStatus(
+            codecType = codec,
+            // getSampleRate() and getBitsPerSample() return the same bit masks
+            // the dumpsys text prints, so both paths land on one model.
+            sampleRateFlags = fields["${prefix}_rate"]?.toIntOrNull() ?: 0,
+            bitsPerSampleFlags = fields["${prefix}_bits"]?.toIntOrNull() ?: 0,
+            codecSpecific1 = fields["${prefix}_specific1"]?.toLongOrNull() ?: 0L,
+            selectableCodecs = selectable,
+        )
+    }
+}
+
+/**
+ * Runs BT Juicer's privileged half as the shell user, over the ADB link.
+ *
+ * The command is the whole trick:
+ *
+ *     CLASSPATH=<our apk> app_process /system/bin com.btjuicer.priv.Main set …
+ *
+ * `app_process` is the same binary the system uses to start every app, and
+ * pointing it at our own APK runs our class in a process owned by uid 2000 —
+ * which holds BLUETOOTH_PRIVILEGED, the permission that gates writing the codec.
+ * No second app, no root: the ADB connection the user already granted is what
+ * makes it possible.
+ */
+class CodecControl(private val adb: AdbLink, private val context: Context) {
+
+    private companion object {
+        const val TAG = "BTJuicerAdb"
+        const val ENTRY = "com.btjuicer.priv.Main"
+    }
+
+    suspend fun probe(address: String?): Result<PrivReport> = run("probe", address)
+
+    /**
+     * @param quality only meaningful for LDAC, where the playback tier travels
+     *   in `codecSpecific1`. Null leaves it to the stack.
+     */
+    suspend fun apply(
+        address: String?,
+        codecType: Int,
+        quality: LdacQuality?,
+    ): Result<PrivReport> = run(
+        "set",
+        address,
+        codecType.toString(),
+        (quality?.raw ?: -1L).toString(),
+    )
+
+    private suspend fun run(vararg args: String?): Result<PrivReport> {
+        if (adb.state.value !is AdbState.Connected) {
+            return Result.failure(IllegalStateException("Sin conexión ADB"))
+        }
+
+        val command = buildString {
+            append("CLASSPATH=").append(quote(context.applicationInfo.sourceDir))
+            append(" app_process /system/bin --nice-name=btjuicer_priv ").append(ENTRY)
+            for (arg in args) {
+                append(' ').append(quote(arg?.takeIf { it.isNotEmpty() } ?: "-"))
+            }
+        }
+
+        val output = adb.shell(command).getOrElse { return Result.failure(it) }
+        val report = parse(output)
+        Log.i(TAG, "priv ${args.firstOrNull()} -> ${report.fields}")
+
+        // An empty harvest means app_process never reached our class — a broken
+        // APK path, a ROM that blocks it, or a crash before the first line. The
+        // raw output is the only clue in that case, so it travels with the error.
+        if (report.fields.isEmpty()) {
+            return Result.failure(
+                IllegalStateException(
+                    "El ayudante no llegó a arrancar. Respuesta del sistema: " +
+                        output.trim().take(300).ifEmpty { "(vacía)" },
+                ),
+            )
+        }
+        return Result.success(report)
+    }
+
+    private fun parse(output: String): PrivReport {
+        val fields = LinkedHashMap<String, String>()
+        for (line in output.lineSequence()) {
+            val trimmed = line.trim()
+            if (!trimmed.startsWith("BTJ:")) continue
+            val body = trimmed.removePrefix("BTJ:")
+            val split = body.indexOf('=')
+            if (split <= 0) continue
+            fields[body.substring(0, split)] = body.substring(split + 1)
+        }
+        return PrivReport(fields, output)
+    }
+
+    /**
+     * Single quotes, because APK paths are not tame: they carry `~~` and `==`
+     * from the installer's directory names, and an unquoted one is a shell
+     * expansion waiting to happen.
+     */
+    private fun quote(value: String): String = "'" + value.replace("'", "'\\''") + "'"
+}

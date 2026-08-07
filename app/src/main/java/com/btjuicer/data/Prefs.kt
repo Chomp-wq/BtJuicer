@@ -23,6 +23,18 @@ data class Settings(
     val activeProfileId: String? = null,
     /** Swap curves automatically when a bound headphone connects. */
     val autoProfile: Boolean = true,
+    /** Codec to force, as a BluetoothCodecConfig type. Null means leave it alone. */
+    val forcedCodec: Int? = null,
+    /** LDAC tier to ask for, as its raw codecSpecific1 value. */
+    val forcedLdacRaw: Long? = null,
+    /**
+     * Re-apply the forced codec whenever a headphone connects.
+     *
+     * The Bluetooth link renegotiates the codec on every reconnection and there
+     * is no API that makes a choice stick, so without this the setting undoes
+     * itself the first time the headphones go back in the case.
+     */
+    val autoForceCodec: Boolean = false,
 )
 
 class Prefs(context: Context) {
@@ -45,6 +57,9 @@ class Prefs(context: Context) {
         pollCodec = prefs.getBoolean(KEY_POLL_CODEC, true),
         activeProfileId = prefs.getString(KEY_ACTIVE_PROFILE, null),
         autoProfile = prefs.getBoolean(KEY_AUTO_PROFILE, true),
+        forcedCodec = prefs.getInt(KEY_FORCED_CODEC, NONE).takeIf { it != NONE },
+        forcedLdacRaw = prefs.getLong(KEY_FORCED_LDAC, NONE.toLong()).takeIf { it != NONE.toLong() },
+        autoForceCodec = prefs.getBoolean(KEY_AUTO_FORCE, false),
     )
 
     private fun update(block: Settings.() -> Settings) {
@@ -57,6 +72,9 @@ class Prefs(context: Context) {
             putBoolean(KEY_POLL_CODEC, next.pollCodec)
             putString(KEY_ACTIVE_PROFILE, next.activeProfileId)
             putBoolean(KEY_AUTO_PROFILE, next.autoProfile)
+            putInt(KEY_FORCED_CODEC, next.forcedCodec ?: NONE)
+            putLong(KEY_FORCED_LDAC, next.forcedLdacRaw ?: NONE.toLong())
+            putBoolean(KEY_AUTO_FORCE, next.autoForceCodec)
         }
         _state.value = next
     }
@@ -75,7 +93,15 @@ class Prefs(context: Context) {
 
     fun setAutoProfile(enabled: Boolean) = update { copy(autoProfile = enabled) }
 
+    fun setForcedCodec(codec: Int?, ldacRaw: Long?) =
+        update { copy(forcedCodec = codec, forcedLdacRaw = ldacRaw) }
+
+    fun setAutoForceCodec(enabled: Boolean) = update { copy(autoForceCodec = enabled) }
+
     private companion object {
+        /** SharedPreferences has no "absent int", so one value stands in for null. */
+        const val NONE = -1
+
         const val KEY_EQ = "eq"
         const val KEY_REMIND = "remind_on_connect"
         const val KEY_CHECKLIST = "checklist_done"
@@ -83,5 +109,8 @@ class Prefs(context: Context) {
         const val KEY_POLL_CODEC = "poll_codec"
         const val KEY_ACTIVE_PROFILE = "active_profile"
         const val KEY_AUTO_PROFILE = "auto_profile"
+        const val KEY_FORCED_CODEC = "forced_codec"
+        const val KEY_FORCED_LDAC = "forced_ldac"
+        const val KEY_AUTO_FORCE = "auto_force_codec"
     }
 }

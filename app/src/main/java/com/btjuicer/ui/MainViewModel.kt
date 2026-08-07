@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.btjuicer.Juicer
 import com.btjuicer.adb.AdbState
+import com.btjuicer.adb.LdacQuality
+import com.btjuicer.adb.WriteSupport
 import com.btjuicer.audio.AutoEq
 import com.btjuicer.audio.EqConfig
 import com.btjuicer.audio.EqMode
@@ -30,6 +32,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val adb = Juicer.adb.state
     val codec = Juicer.codec.status
     val codecError = Juicer.codec.error
+    val codecWrite = Juicer.codec.writeSupport
+    val codecBusy = Juicer.codec.busy
     val profiles = Juicer.profiles.profiles
 
     private val _messages = MutableSharedFlow<String>(
@@ -261,6 +265,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun setPollCodec(enabled: Boolean) {
         Juicer.prefs.setPollCodec(enabled)
         if (enabled) JuicerService.start(context)
+    }
+
+    // ------------------------------------------------------- forzar el códec
+
+    fun setForcedCodec(codec: Int?, quality: LdacQuality?) {
+        Juicer.prefs.setForcedCodec(codec, quality?.raw)
+    }
+
+    fun setAutoForceCodec(enabled: Boolean) {
+        Juicer.prefs.setAutoForceCodec(enabled)
+        // Re-applying on reconnection is the service's job, so turning this on
+        // without the service running would be a switch that does nothing.
+        if (enabled) JuicerService.start(context)
+    }
+
+    /**
+     * Sends the chosen codec to the phone and reports what actually stuck.
+     *
+     * The chosen values are stored first: if the phone accepts them, the service
+     * needs them to put the codec back after the next reconnection, and if it
+     * refuses, having the choice remembered is what lets the user retry.
+     */
+    fun applyCodec(codec: Int, quality: LdacQuality?) {
+        viewModelScope.launch {
+            if (Juicer.adb.state.value !is AdbState.Connected) {
+                _messages.tryEmit("Conecta primero por ADB")
+                return@launch
+            }
+            Juicer.prefs.setForcedCodec(codec, quality?.raw)
+            val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
+            Juicer.codec.apply(codec, quality, address).fold(
+                onSuccess = { _messages.tryEmit(it) },
+                onFailure = { _messages.tryEmit(it.message ?: "No se pudo fijar el códec") },
+            )
+        }
+    }
+
+    fun probeCodecWrite() {
+        viewModelScope.launch {
+            if (Juicer.adb.state.value !is AdbState.Connected) {
+                _messages.tryEmit("Conecta primero por ADB")
+                return@launch
+            }
+            val address = Juicer.link.info.value.btAddress.takeIf { it.isNotEmpty() }
+            when (val support = Juicer.codec.probeWrite(address)) {
+                is WriteSupport.Yes -> _messages.tryEmit("Tu teléfono sí deja fijar el códec")
+                is WriteSupport.No -> _messages.tryEmit(support.reason)
+                WriteSupport.Unknown -> Unit
+            }
+        }
     }
 
     fun notify(message: String) {

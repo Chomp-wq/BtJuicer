@@ -17,6 +17,7 @@ import androidx.lifecycle.LifecycleService
 import androidx.lifecycle.lifecycleScope
 import com.btjuicer.Juicer
 import com.btjuicer.adb.AdbState
+import com.btjuicer.adb.LdacQuality
 import com.btjuicer.bt.Route
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -46,6 +47,9 @@ class JuicerService : LifecycleService() {
         /** Codec poll cadence. Each read crosses an ADB socket and runs a full
          *  dumpsys, so anything faster costs battery without showing more. */
         private const val CODEC_POLL_MS = 10_000L
+
+        /** Long enough for the A2DP link to finish negotiating on its own. */
+        private const val CODEC_SETTLE_MS = 4_000L
 
         fun start(context: Context) {
             ContextCompat.startForegroundService(
@@ -77,6 +81,7 @@ class JuicerService : LifecycleService() {
             )
             val name = runCatching { device?.name.orEmpty() }.getOrDefault("")
             applyProfileFor(device?.address)
+            reapplyCodecFor(device?.address)
             onRouteChanged()
             if (Juicer.prefs.current.remindOnConnect) {
                 Notifications.remindChecklist(this@JuicerService, name)
@@ -168,6 +173,32 @@ class JuicerService : LifecycleService() {
         Juicer.prefs.setActiveProfile(profile.id)
         Juicer.prefs.setEq(profile.eq.copy(enabled = true))
         Juicer.engine.apply(Juicer.prefs.current.eq)
+    }
+
+    /**
+     * Puts the forced codec back after a reconnection.
+     *
+     * The link renegotiates from scratch every time the headphones come back,
+     * and nothing makes a codec choice persist — so a setting the user made an
+     * hour ago is simply gone. This is the whole reason the forcing feature is
+     * worth having: not the one-off change, but that it survives the case.
+     *
+     * The delay is not padding. The A2DP broadcast arrives when the profile
+     * connects, which is before the codec has been negotiated; asking too early
+     * sets a preference against a link that is about to be rebuilt.
+     */
+    private fun reapplyCodecFor(address: String?) {
+        val settings = Juicer.prefs.current
+        val codec = settings.forcedCodec ?: return
+        if (!settings.autoForceCodec) return
+        if (Juicer.adb.state.value !is AdbState.Connected) return
+
+        lifecycleScope.launch {
+            delay(CODEC_SETTLE_MS)
+            runCatching {
+                Juicer.codec.apply(codec, LdacQuality.fromRaw(settings.forcedLdacRaw ?: -1L), address)
+            }
+        }
     }
 
     private fun onRouteChanged() {

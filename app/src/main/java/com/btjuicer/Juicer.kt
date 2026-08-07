@@ -28,7 +28,7 @@ object Juicer {
     val engine: AudioEngine by lazy { AudioEngine() }
     val link: LinkMonitor by lazy { LinkMonitor(appContext) }
     val adb: AdbLink by lazy { AdbLink(appContext) }
-    val codec: CodecRepository by lazy { CodecRepository(adb) }
+    val codec: CodecRepository by lazy { CodecRepository(adb, appContext) }
 
     /** Idempotent; safe from every entry point on every launch. */
     fun init(context: Context) {

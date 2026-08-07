@@ -147,6 +147,8 @@ private fun Root(viewModel: MainViewModel) {
     val adb by viewModel.adb.collectAsStateWithLifecycle()
     val codec by viewModel.codec.collectAsStateWithLifecycle()
     val codecError by viewModel.codecError.collectAsStateWithLifecycle()
+    val codecWrite by viewModel.codecWrite.collectAsStateWithLifecycle()
+    val codecBusy by viewModel.codecBusy.collectAsStateWithLifecycle()
     val profiles by viewModel.profiles.collectAsStateWithLifecycle()
 
     LaunchedEffect(Unit) {
@@ -193,12 +195,16 @@ private fun Root(viewModel: MainViewModel) {
                     adb = adb,
                     codec = codec,
                     codecError = codecError,
+                    writeSupport = codecWrite,
+                    busy = codecBusy,
                     onPair = viewModel::pairAdb,
                     onConnect = viewModel::connectAdb,
                     onDisconnect = viewModel::disconnectAdb,
                     onForget = viewModel::forgetAdb,
                     onRefresh = viewModel::refreshCodec,
                     onPollChange = viewModel::setPollCodec,
+                    onApplyCodec = viewModel::applyCodec,
+                    onAutoForceChange = viewModel::setAutoForceCodec,
                     onOpenDeveloperOptions = { activity?.openDeveloperOptions() },
                 )
 

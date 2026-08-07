@@ -159,6 +159,8 @@ app/src/main/java/com/btjuicer/
   adb/SelfSignedCert.kt     certificado X.509 autofirmado, escrito en DER
   adb/HiddenApi.kt          destapa el export de material de clave de TLS
   adb/CodecStatus.kt        modelo del códec y parser de dumpsys
+  adb/CodecControl.kt       lanza el ayudante privilegiado y lee su respuesta
+  priv/Main.java            corre como shell y fija el códec (app_process)
   data/Prefs.kt             preferencias
   service/JuicerService.kt  servicio en primer plano; reengancha el efecto
   service/Notifications.kt  estado y recordatorio
