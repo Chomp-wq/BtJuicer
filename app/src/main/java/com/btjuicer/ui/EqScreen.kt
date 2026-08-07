@@ -1,5 +1,6 @@
 package com.btjuicer.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -12,13 +13,16 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -42,6 +46,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.btjuicer.audio.Backend
 import com.btjuicer.audio.Curve
 import com.btjuicer.audio.EngineState
@@ -49,6 +54,8 @@ import com.btjuicer.audio.EqConfig
 import com.btjuicer.audio.EqMode
 import com.btjuicer.audio.Filter
 import com.btjuicer.audio.FilterType
+import com.btjuicer.audio.Flavour
+import com.btjuicer.audio.HeadphoneMatch
 import com.btjuicer.audio.MAX_GAIN_DB
 import com.btjuicer.audio.MAX_PREAMP_DB
 import com.btjuicer.audio.MIN_GAIN_DB
@@ -188,6 +195,10 @@ fun EqScreen(
 
         item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
 
+        item { HeadphoneCard(viewModel) }
+
+        item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
+
         item { ImportCard(onImport = viewModel::importAutoEq, onPickFile = onPickFile) }
 
         item { HorizontalDivider(Modifier.padding(vertical = 4.dp)) }
@@ -208,6 +219,174 @@ fun EqScreen(
                 onApply = viewModel::applyProfile,
                 onDelete = viewModel::deleteProfile,
                 onAutoChange = viewModel::setAutoProfile,
+            )
+        }
+    }
+}
+
+/**
+ * Search 8850 published corrections and apply one.
+ *
+ * The wording here does a job. A curve from this database is not "a preset
+ * someone liked" — it is the measured difference between that headphone and a
+ * preference target, and saying so is what lets the Referencia flavour honestly
+ * claim to be the best setting for everything. The flavours below it are the
+ * opposite and are labelled as such: taste, not correction.
+ */
+@Composable
+private fun HeadphoneCard(viewModel: MainViewModel) {
+    val query by viewModel.headphoneQuery.collectAsStateWithLifecycle()
+    val results by viewModel.headphoneResults.collectAsStateWithLifecycle()
+    val searching by viewModel.searching.collectAsStateWithLifecycle()
+    val applied by viewModel.appliedHeadphone.collectAsStateWithLifecycle()
+    val alternatives by viewModel.alternatives.collectAsStateWithLifecycle()
+    val flavour by viewModel.flavour.collectAsStateWithLifecycle()
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp)) {
+            Text("Busca tus audífonos", style = MaterialTheme.typography.titleMedium)
+            Spacer(Modifier.height(4.dp))
+            Text(
+                "8850 curvas del proyecto AutoEq, incluidas en la app. No hace falta conexión. " +
+                    "Cada una es la diferencia medida entre esos audífonos y una curva objetivo " +
+                    "sacada de estudios de preferencia con miles de oyentes.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+
+            Spacer(Modifier.height(10.dp))
+            OutlinedTextField(
+                value = query,
+                onValueChange = viewModel::searchHeadphones,
+                label = { Text("Marca y modelo") },
+                placeholder = { Text("technics az100") },
+                singleLine = true,
+                trailingIcon = {
+                    if (searching) {
+                        CircularProgressIndicator(Modifier.size(16.dp), strokeWidth = 2.dp)
+                    } else if (query.isNotEmpty()) {
+                        IconButton(onClick = { viewModel.searchHeadphones("") }) {
+                            Icon(Icons.Filled.Close, contentDescription = "Borrar")
+                        }
+                    }
+                },
+                modifier = Modifier.fillMaxWidth(),
+            )
+
+            if (query.isNotBlank() && results.isEmpty() && !searching) {
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Nada con ese nombre. Prueba sólo con el modelo, o con menos palabras.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            // Capped rather than scrolled: this card lives inside the screen's
+            // own list, and a scrolling area inside a scrolling area is a trap.
+            results.take(8).forEach { match ->
+                HeadphoneRow(match) { viewModel.applyMatch(match) }
+            }
+            if (results.size > 8) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    "y ${results.size - 8} más — afina la búsqueda",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            applied?.let { headphone ->
+                Spacer(Modifier.height(12.dp))
+                HorizontalDivider()
+                Spacer(Modifier.height(10.dp))
+                Text(headphone.name, style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "Medido por ${headphone.label}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                if (alternatives.size > 1) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        "Otras mediciones del mismo modelo",
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    ChipFlow(alternatives, headphone, { it.label }) {
+                        viewModel.applyHeadphone(it)
+                    }
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Text("Matiz", style = MaterialTheme.typography.labelMedium)
+                Spacer(Modifier.height(4.dp))
+                ChipFlow(Flavour.entries.toList(), flavour, { it.label }) {
+                    viewModel.setFlavour(it)
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    flavour.note,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    "«Referencia» es la corrección medida. Los demás matices son gusto, no " +
+                        "corrección — por eso son pequeños.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Spacer(Modifier.height(10.dp))
+            Text(
+                "Datos del proyecto AutoEq (Jaakko Pasanen), licencia MIT. Cada medición es de " +
+                    "quien aparece junto a ella.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun HeadphoneRow(match: HeadphoneMatch, onClick: () -> Unit) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 8.dp),
+    ) {
+        Text(match.name, style = MaterialTheme.typography.bodyLarge)
+        Text(
+            if (match.measurements.size > 1) {
+                "${match.measurements.size} mediciones · ${match.preferred.label}"
+            } else {
+                match.preferred.label
+            },
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun <T> ChipFlow(
+    options: List<T>,
+    selected: T,
+    label: (T) -> String,
+    onSelect: (T) -> Unit,
+) {
+    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+        options.forEach { option ->
+            FilterChip(
+                selected = option == selected,
+                onClick = { onSelect(option) },
+                label = { Text(label(option)) },
             )
         }
     }

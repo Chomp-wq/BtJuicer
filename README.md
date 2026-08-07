@@ -149,6 +149,8 @@ app/src/main/java/com/btjuicer/
   Juicer.kt                 singletons; no hay clase Application
   audio/Filters.kt          biquads, magnitud y ajuste de ganancias
   audio/AutoEq.kt           lectura de ParametricEQ.txt y GraphicEQ.txt
+  audio/HeadphoneDb.kt      buscador sobre las 8850 curvas incluidas
+  audio/Flavour.kt          matices de gusto sobre la corrección medida
   audio/EqModel.kt          configuración, modos, presets
   audio/AudioEngine.kt      DynamicsProcessing (31 bandas + MBC + limitador)
   data/Profiles.kt          perfiles guardados y atados a un dispositivo

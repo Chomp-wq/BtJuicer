@@ -13,15 +13,22 @@ import com.btjuicer.audio.AutoEq
 import com.btjuicer.audio.EqConfig
 import com.btjuicer.audio.EqMode
 import com.btjuicer.audio.Filter
+import com.btjuicer.audio.Flavour
+import com.btjuicer.audio.Headphone
+import com.btjuicer.audio.HeadphoneMatch
 import com.btjuicer.audio.MbcMode
 import com.btjuicer.audio.Preset
 import com.btjuicer.audio.Presets
 import com.btjuicer.data.Profile
 import com.btjuicer.service.JuicerService
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -50,7 +57,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshLink()
     }
 
-    fun refreshLink() = launchSafely { Juicer.link.refresh() }
+    fun refreshLink() {
+        launchSafely { Juicer.link.refresh() }
+    }
 
     /**
      * A coroutine that cannot take the app down with it.
@@ -62,7 +71,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * came back in an unexpected shape is never the right trade: the failure
      * belongs in the snackbar.
      */
-    private fun launchSafely(block: suspend () -> Unit) {
+    private fun launchSafely(block: suspend () -> Unit): Job =
         viewModelScope.launch {
             runCatching { block() }.onFailure { failure ->
                 // Cancellation is how coroutines shut down, not a failure.
@@ -71,7 +80,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 _messages.tryEmit(failure.message ?: failure.javaClass.simpleName)
             }
         }
-    }
 
     /**
      * The foreground service is what keeps the effect attached across route
@@ -143,6 +151,80 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             },
             onFailure = { _messages.tryEmit(it.message ?: "No se pudo leer el perfil") },
         )
+    }
+
+    // ------------------------------------------------------------- audífonos
+
+    private val _headphoneQuery = MutableStateFlow("")
+    val headphoneQuery: StateFlow<String> = _headphoneQuery
+
+    private val _headphoneResults = MutableStateFlow<List<HeadphoneMatch>>(emptyList())
+    val headphoneResults: StateFlow<List<HeadphoneMatch>> = _headphoneResults
+
+    private val _searching = MutableStateFlow(false)
+    val searching: StateFlow<Boolean> = _searching
+
+    /** Kept so switching flavour or source re-applies without searching again. */
+    private val _appliedHeadphone = MutableStateFlow<Headphone?>(null)
+    val appliedHeadphone: StateFlow<Headphone?> = _appliedHeadphone
+
+    /** The other people who measured the same model, offered as alternatives. */
+    private val _alternatives = MutableStateFlow<List<Headphone>>(emptyList())
+    val alternatives: StateFlow<List<Headphone>> = _alternatives
+
+    private val _flavour = MutableStateFlow(Flavour.REFERENCE)
+    val flavour: StateFlow<Flavour> = _flavour
+
+    private var searchJob: Job? = null
+
+    /**
+     * Debounced: a scan of the whole database per keystroke would be wasted work
+     * on results nobody reads, and the list flickering under the user's thumb is
+     * worse than a quarter-second of stillness.
+     */
+    fun searchHeadphones(query: String) {
+        _headphoneQuery.value = query
+        searchJob?.cancel()
+        if (query.isBlank()) {
+            _headphoneResults.value = emptyList()
+            _searching.value = false
+            return
+        }
+        _searching.value = true
+        searchJob = launchSafely {
+            delay(250)
+            _headphoneResults.value = Juicer.headphones.search(query)
+            _searching.value = false
+        }
+    }
+
+    fun applyMatch(match: HeadphoneMatch) {
+        _alternatives.value = match.measurements
+        applyHeadphone(match.preferred)
+    }
+
+    fun applyHeadphone(headphone: Headphone) {
+        _appliedHeadphone.value = headphone
+        commitHeadphone(headphone, _flavour.value)
+        _messages.tryEmit("${headphone.name} — medido por ${headphone.source}")
+    }
+
+    fun setFlavour(flavour: Flavour) {
+        _flavour.value = flavour
+        val headphone = _appliedHeadphone.value ?: return
+        commitHeadphone(headphone, flavour)
+    }
+
+    private fun commitHeadphone(headphone: Headphone, flavour: Flavour) {
+        val next = Juicer.prefs.current.eq.withFilters(
+            headphone.filters + flavour.extra,
+            "${headphone.name} · ${headphone.label}",
+        )
+        // AutoEq ships a preamp computed for its own curve; a flavour adds boost
+        // on top of it. Taking whichever is lower means neither can clip.
+        val preamp = minOf(headphone.preampDb, next.suggestedPreamp())
+        commit(next.copy(preampDb = preamp.coerceIn(-20f, 0f), enabled = true))
+        JuicerService.start(context)
     }
 
     // ------------------------------------------------------------- perfiles
@@ -247,7 +329,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun connectAdb() = launchSafely {
+    fun connectAdb() {
+        launchSafely {
         Juicer.adb.connect().fold(
             onSuccess = {
                 refreshCodec()
@@ -271,7 +354,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _messages.tryEmit("Identidad borrada. Habrá que emparejar de nuevo.")
     }
 
-    fun refreshCodec() = launchSafely {
+    fun refreshCodec() {
+        launchSafely {
         if (Juicer.adb.state.value !is AdbState.Connected) {
             _messages.tryEmit("Sin conexión ADB")
             return@launchSafely
@@ -304,7 +388,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
      * needs them to put the codec back after the next reconnection, and if it
      * refuses, having the choice remembered is what lets the user retry.
      */
-    fun applyCodec(codec: Int, quality: LdacQuality?) = launchSafely {
+    fun applyCodec(codec: Int, quality: LdacQuality?) {
+        launchSafely {
         if (Juicer.adb.state.value !is AdbState.Connected) {
             _messages.tryEmit("Conecta primero por ADB")
             return@launchSafely
@@ -317,7 +402,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    fun probeCodecWrite() = launchSafely {
+    fun probeCodecWrite() {
+        launchSafely {
         if (Juicer.adb.state.value !is AdbState.Connected) {
             _messages.tryEmit("Conecta primero por ADB")
             return@launchSafely

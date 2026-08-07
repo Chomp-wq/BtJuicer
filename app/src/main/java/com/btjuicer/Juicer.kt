@@ -4,6 +4,7 @@ import android.content.Context
 import com.btjuicer.adb.AdbLink
 import com.btjuicer.adb.CodecRepository
 import com.btjuicer.audio.AudioEngine
+import com.btjuicer.audio.HeadphoneDb
 import com.btjuicer.bt.LinkMonitor
 import com.btjuicer.data.Prefs
 import com.btjuicer.data.ProfileStore
@@ -26,6 +27,7 @@ object Juicer {
     val prefs: Prefs by lazy { Prefs(appContext) }
     val profiles: ProfileStore by lazy { ProfileStore(appContext) }
     val engine: AudioEngine by lazy { AudioEngine() }
+    val headphones: HeadphoneDb by lazy { HeadphoneDb(appContext) }
     val link: LinkMonitor by lazy { LinkMonitor(appContext) }
     val adb: AdbLink by lazy { AdbLink(appContext) }
     val codec: CodecRepository by lazy { CodecRepository(adb, appContext) }
