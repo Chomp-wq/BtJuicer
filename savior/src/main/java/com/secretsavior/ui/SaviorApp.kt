@@ -1,6 +1,7 @@
 package com.secretsavior.ui
 
 import android.content.Context
+import android.os.Build
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
@@ -66,6 +67,7 @@ interface Actions {
     fun enableAdmin()
     fun openNetworkSettings()
     fun exemptBattery()
+    fun openAutostart()
     fun commit()
 }
 
@@ -262,6 +264,7 @@ private fun Step(title: String, done: Boolean, text: String, action: @Composable
 @Composable
 private fun LockedScreen(s: Snapshot, a: Actions) {
     val context = LocalContext.current
+    val isXiaomi = Build.MANUFACTURER.lowercase() in setOf("xiaomi", "redmi", "poco")
     var urge by remember { mutableStateOf(false) }
     var reason by remember { mutableStateOf(Store.reason(context)) }
     var domain by remember { mutableStateOf("") }
@@ -297,6 +300,27 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                 StatusRow("Anti-desinstalación", s.admin, a::enableAdmin)
                 if (s.dnsStrict) StatusRow("DNS privado estricto (esquiva el filtro)", false, a::openNetworkSettings)
                 Text("${s.blocked} sitios bloqueados hasta hoy", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        Card {
+            Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Siempre activo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "El filtro sigue aunque cierres la app: va en primer plano con una notificación fija. " +
+                        "Para que el sistema no lo duerma:",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                StatusRow("Sin ahorro de batería", s.battery, a::exemptBattery)
+                if (isXiaomi) {
+                    Text("Xiaomi / Redmi / POCO:", fontWeight = FontWeight.Bold)
+                    OutlinedButton(onClick = a::openAutostart) { Text("Activar «Autoinicio»") }
+                    Text(
+                        "Y en Recientes, mantén pulsada la tarjeta de la app y toca el candado: así " +
+                            "«Limpiar» no la cierra.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
 

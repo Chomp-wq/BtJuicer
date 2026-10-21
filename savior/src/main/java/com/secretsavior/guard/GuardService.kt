@@ -109,6 +109,9 @@ class GuardService : AccessibilityService() {
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
         if (!Status.isAdminActive(this)) return
         if (mentions(root, OURS)) {
+            // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
+            // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
+            if (Store.inGrace(this) && !mentions(root, DANGEROUS)) return
             block(countIt = false)
             return
         }
@@ -193,6 +196,13 @@ class GuardService : AccessibilityService() {
 
         /** Cómo se llama la app en pantalla, y su paquete (algunas capas del sistema lo muestran). */
         val OURS = listOf("secret savior", "com.secretsavior")
+
+        /** Si aparece alguna de éstas junto al nombre de la app, la pantalla no es de batería. */
+        val DANGEROUS = listOf(
+            "desinstalar", "uninstall", "forzar", "force stop", "borrar datos", "clear data",
+            "almacenamiento", "storage", "administrador", "administrator", "accesibilidad",
+            "accessibility", "desconectar", "disconnect", "olvidar", "forget", "vpn",
+        )
 
         /**
          * El campo para escribir el servidor de DNS privado. La fila "DNS privado:

@@ -7,6 +7,6 @@ import com.secretsavior.data.Store
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (Store.isLocked(context)) Watchdog.ensure(context)
+        if (Store.isLocked(context)) Watchdog.ensure(context) // también renueva la alarma
     }
 }

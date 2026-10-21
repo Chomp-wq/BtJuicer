@@ -60,6 +60,17 @@ object Store {
         return true
     }
 
+    /**
+     * Ventana corta en la que el guardián deja pasar las pantallas de batería y
+     * autoinicio, que nombran a la app. Sólo se abre desde dentro de la app y nunca
+     * deja pasar las que ofrecen desinstalar, parar u ocultar (ver GuardService).
+     */
+    fun openGrace(c: Context) {
+        prefs(c).edit().putLong("grace_until", System.currentTimeMillis() + GRACE_MS).apply()
+    }
+
+    fun inGrace(c: Context): Boolean = System.currentTimeMillis() < prefs(c).getLong("grace_until", 0L)
+
     /** Las razones propias, para leerlas justo cuando más falta hacen. */
     fun reason(c: Context): String = prefs(c).getString("reason", "").orEmpty()
 
@@ -67,5 +78,6 @@ object Store {
         prefs(c).edit().putString("reason", text.take(600)).apply()
     }
 
+    private const val GRACE_MS = 120_000L
     private const val DAY_MS = 24L * 60 * 60 * 1000
 }

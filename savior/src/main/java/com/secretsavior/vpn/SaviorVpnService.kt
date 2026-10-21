@@ -2,6 +2,7 @@ package com.secretsavior.vpn
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -10,6 +11,7 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.secretsavior.MainActivity
 import com.secretsavior.data.Store
+import com.secretsavior.guard.Notice
 import com.secretsavior.guard.Watchdog
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -41,8 +43,30 @@ class SaviorVpnService : VpnService() {
     private var destroyed = false
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        goForeground()
         start()
         return START_STICKY
+    }
+
+    /** Sin esto el sistema mata el proceso en cuanto la app se cierra o falta memoria. */
+    private fun goForeground() {
+        try {
+            val n = Notice.build(this)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(Notice.ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            } else {
+                startForeground(Notice.ID, n)
+            }
+        } catch (e: Exception) {
+            // Android puede negarlo desde segundo plano; el filtro funciona igual, con menos blindaje.
+            Log.w(TAG, "sin primer plano", e)
+        }
+    }
+
+    /** Al deslizar la app fuera de Recientes, algunos fabricantes matan el proceso: volver enseguida. */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Watchdog.schedule(applicationContext, 1_000L)
+        super.onTaskRemoved(rootIntent)
     }
 
     private fun start() {
