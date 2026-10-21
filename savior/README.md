@@ -60,6 +60,11 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   ventana, y las apps dejan de construir un evento por cada cosa que se mueve en
   pantalla. Los cambios de contenido y el texto escrito se piden sólo con un
   navegador, un buscador, Telegram, Reddit o Ajustes delante.
+- **Las apps de seguridad del fabricante no se frenan.** Las de optimización
+  (Seguridad de Xiaomi, Device Care de Samsung...) cambian de contenido sin parar
+  mientras analizan o limpian. El guardián sólo las mira al abrirse una pantalla nueva
+  y sólo cierra la ficha de desinstalar, parar o borrar datos de Secret Savior; que la
+  lista del optimizador nombre la app ya no basta.
 - **El guardián no frena otras apps.** Descarta al instante los eventos de las apps
   que no vigila, sin pedirles nada. En navegadores pide la barra de direcciones por su
   id (una consulta) y en Ajustes revisa la pantalla como mucho dos veces por segundo.

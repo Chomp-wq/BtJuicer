@@ -111,6 +111,10 @@ class GuardService : AccessibilityService() {
             return
         }
         if (!isSystemSurface(pkg) && pkg !in BROWSERS) return
+        // Las apps de seguridad/optimización del fabricante (Xiaomi, Samsung...) cambian de
+        // contenido sin parar mientras analizan o limpian. Se miran sólo al abrir una pantalla
+        // nueva, nunca durante el trabajo: si no, se las frena justo cuando más lo necesitan.
+        if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             handler.removeCallbacks(deferred)
@@ -191,6 +195,15 @@ class GuardService : AccessibilityService() {
     // --- 1. Pantallas del sistema ---------------------------------------------------
 
     private fun guardSystemScreen(pkg: String, root: AccessibilityNodeInfo) {
+        if (isVendorSurface(pkg)) {
+            // Que la lista de apps del optimizador nombre a Secret Savior no es motivo para
+            // cerrarlo: sólo la pantalla que ofrece desinstalar, parar o borrar sus datos.
+            if (Status.isAdminActive(this)) {
+                val seen = scan(root)
+                if (seen.ours && seen.uninstall) block(countIt = false)
+            }
+            return
+        }
         if (pkg.contains("vpndialogs")) {
             // Si aún no hay permiso de VPN, el diálogo es el de pedirlo y hay que dejarlo pasar.
             // Con permiso, cualquier diálogo que nombre a la app es el de "Desconectar".
@@ -213,7 +226,10 @@ class GuardService : AccessibilityService() {
     }
 
     private fun isSystemSurface(pkg: String): Boolean =
-        SYSTEM_SURFACES.any { pkg.contains(it) }
+        SYSTEM_SURFACES.any { pkg.contains(it) } || isVendorSurface(pkg)
+
+    private fun isVendorSurface(pkg: String): Boolean =
+        VENDOR_SURFACES.any { pkg.contains(it) } && SYSTEM_SURFACES.none { pkg.contains(it) }
 
     // --- 2. Navegadores -------------------------------------------------------------
 
@@ -259,7 +275,7 @@ class GuardService : AccessibilityService() {
 
     // --- utilidades -----------------------------------------------------------------
 
-    private class Seen(val ours: Boolean, val dangerous: Boolean, val privateDns: Boolean)
+    private class Seen(val ours: Boolean, val dangerous: Boolean, val privateDns: Boolean, val uninstall: Boolean)
 
     /**
      * Un solo recorrido de la ventana, con tope de nodos, que mira las tres listas a la vez.
@@ -271,6 +287,7 @@ class GuardService : AccessibilityService() {
         var ours = false
         var dangerous = false
         var privateDns = false
+        var uninstall = false
         var budget = MAX_NODES
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.add(root)
@@ -283,11 +300,12 @@ class GuardService : AccessibilityService() {
                 if (!ours && OURS.any { s.contains(it) }) ours = true
                 if (!dangerous && DANGEROUS.any { s.contains(it) }) dangerous = true
                 if (!privateDns && PRIVATE_DNS_EDITOR.any { s.contains(it) }) privateDns = true
-                if (ours && dangerous) break
+                if (!uninstall && UNINSTALL.any { s.contains(it) }) uninstall = true
+                if (ours && dangerous && uninstall) break
             }
             for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
         }
-        return Seen(ours, dangerous, privateDns)
+        return Seen(ours, dangerous, privateDns, uninstall)
     }
 
     private fun block(countIt: Boolean) {
@@ -321,6 +339,11 @@ class GuardService : AccessibilityService() {
             "accessibility", "desconectar", "disconnect", "olvidar", "forget", "vpn",
         )
 
+        /** Lo que sólo ofrece la ficha de una app para quitarla o pararla. */
+        val UNINSTALL = listOf(
+            "desinstalar", "uninstall", "forzar detención", "forzar detencion", "force stop", "borrar datos", "clear data",
+        )
+
         /**
          * El campo para escribir el servidor de DNS privado. La fila "DNS privado:
          * Automático" de la pantalla de red no lo contiene, así que Wi-Fi y red
@@ -331,11 +354,13 @@ class GuardService : AccessibilityService() {
             "fournisseur de dns privé", "dns-anbieters",
         )
 
-        /** Ajustes, instalador, permisos, VPN y las capas de cada fabricante. */
+        /** Ajustes, instalador, permisos, VPN y tienda: aquí nombrar a la app ya basta para cerrar. */
         val SYSTEM_SURFACES = listOf(
-            "settings", "packageinstaller", "permissioncontroller", "vpndialogs",
-            "securitycenter", "safecenter", "systemmanager", "devicecare", "lool", "vending",
+            "settings", "packageinstaller", "permissioncontroller", "vpndialogs", "vending",
         )
+
+        /** Seguridad y optimización de cada fabricante: sólo se cierra su ficha de desinstalar. */
+        val VENDOR_SURFACES = listOf("securitycenter", "safecenter", "systemmanager", "devicecare", "lool")
 
         /** Ids exactos (sin el paquete) de la barra de direcciones de los navegadores comunes. */
         val URL_BAR_IDS = listOf(
