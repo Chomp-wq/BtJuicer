@@ -28,6 +28,18 @@ class GuardService : AccessibilityService() {
     private var lastBlock = 0L
     private var lastNag = 0L
 
+    // Comprobación diferida: como mucho una cada SETTLE_MS mientras la pantalla cambia.
+    private var deferredPkg: String? = null
+    private var deferredQueued = false
+    private val deferred = Runnable {
+        deferredQueued = false
+        deferredPkg?.let(::check)
+    }
+
+    /** Qué id tiene la barra de direcciones de cada navegador, una vez averiguado. */
+    private val urlBarIds = HashMap<String, String>()
+    private val urlBarMisses = HashMap<String, Long>()
+
     private val tick = object : Runnable {
         override fun run() {
             patrol()
@@ -42,6 +54,7 @@ class GuardService : AccessibilityService() {
 
     override fun onDestroy() {
         handler.removeCallbacks(tick)
+        handler.removeCallbacks(deferred)
         super.onDestroy()
     }
 
@@ -59,22 +72,39 @@ class GuardService : AccessibilityService() {
         }
     }
 
+    /**
+     * Llega un evento por cada cambio de pantalla de cualquier app. Casi todos se descartan
+     * aquí, sin preguntar nada a la app: cada consulta del árbol de la ventana la contesta
+     * el hilo de interfaz de esa app, y hacerlo en cada evento la ralentiza.
+     */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
-        if (!Store.isLocked(this)) return
+        val type = event.eventType
 
         if (pkg in BLOCKED_APPS) {
             // Aunque la red falle o la app traiga contenido en caché, no se queda abierta.
-            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) block(countIt = true)
+            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && Store.isLocked(this)) block(countIt = true)
             return
         }
+        if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            if (Store.isLocked(this)) onTyped(event, pkg)
+            return
+        }
+        if (!isSystemSurface(pkg) && pkg !in BROWSERS) return
+        if (!Store.isLocked(this)) return
 
-        when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> onTyped(event, pkg)
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> onScreen(pkg)
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            handler.removeCallbacks(deferred)
+            deferredQueued = false
+            check(pkg)
+        } else {
+            deferredPkg = pkg
+            if (!deferredQueued) {
+                deferredQueued = true
+                handler.postDelayed(deferred, SETTLE_MS)
+            }
         }
     }
 
@@ -88,14 +118,17 @@ class GuardService : AccessibilityService() {
         if (ContentRules.isExplicit(text, inBrowser = wide)) block(countIt = true)
     }
 
-    private fun onScreen(pkg: String) {
+    private fun check(pkg: String) {
+        val browser = pkg in BROWSERS
+        if (browser && !isProtected()) {
+            // Sin filtro no hay navegación. Se trae la app para que el usuario lo repare.
+            block(countIt = false)
+            Watchdog.nag(this)
+            return
+        }
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != pkg) return // el evento no es de la ventana activa
-
-        when {
-            isSystemSurface(pkg) -> guardSystemScreen(pkg, root)
-            pkg in BROWSERS -> guardBrowser(root)
-        }
+        if (browser) guardBrowser(pkg, root) else guardSystemScreen(pkg, root)
     }
 
     // --- 1. Pantallas del sistema ---------------------------------------------------
@@ -104,22 +137,22 @@ class GuardService : AccessibilityService() {
         if (pkg.contains("vpndialogs")) {
             // Si aún no hay permiso de VPN, el diálogo es el de pedirlo y hay que dejarlo pasar.
             // Con permiso, cualquier diálogo que nombre a la app es el de "Desconectar".
-            if (!Status.isVpnPermitted(this)) return
-            if (mentions(root, OURS)) block(countIt = false)
+            if (Status.isVpnPermitted(this) && scan(root).ours) block(countIt = false)
             return
         }
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
         if (!Status.isAdminActive(this)) return
-        if (mentions(root, OURS)) {
+        val seen = scan(root)
+        if (seen.ours) {
             // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
             // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
-            if (Store.inGrace(this) && !mentions(root, DANGEROUS)) return
+            if (Store.inGrace(this) && !seen.dangerous) return
             block(countIt = false)
             return
         }
-        // Con DNS privado estricto los navegadores quedan cerrados (ver guardBrowser); hay
-        // que dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
-        if (!Status.isPrivateDnsStrict(this) && mentions(root, PRIVATE_DNS_EDITOR)) block(countIt = false)
+        // Con DNS privado estricto los navegadores quedan cerrados (ver check); hay que
+        // dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
+        if (seen.privateDns && !Status.isPrivateDnsStrict(this)) block(countIt = false)
     }
 
     private fun isSystemSurface(pkg: String): Boolean =
@@ -127,14 +160,8 @@ class GuardService : AccessibilityService() {
 
     // --- 2. Navegadores -------------------------------------------------------------
 
-    private fun guardBrowser(root: AccessibilityNodeInfo) {
-        if (!isProtected()) {
-            // Sin filtro no hay navegación. Se trae la app para que el usuario lo repare.
-            block(countIt = false)
-            Watchdog.nag(this)
-            return
-        }
-        val text = urlBarText(root) ?: return
+    private fun guardBrowser(pkg: String, root: AccessibilityNodeInfo) {
+        val text = urlBarText(pkg, root) ?: return
         if (looksBlocked(text)) block(countIt = true)
     }
 
@@ -150,34 +177,60 @@ class GuardService : AccessibilityService() {
         return DnsFilter.isBlocked(host)
     }
 
-    private fun urlBarText(root: AccessibilityNodeInfo): String? {
-        var budget = MAX_NODES
-        val stack = ArrayDeque<AccessibilityNodeInfo>()
-        stack.add(root)
-        while (stack.isNotEmpty() && budget-- > 0) {
-            val n = stack.removeLast()
-            val id = n.viewIdResourceName.orEmpty().lowercase()
-            if (URL_BAR_IDS.any { id.contains(it) }) {
-                n.text?.let { return it.toString() }
+    /**
+     * La barra de direcciones se pide por su id: una sola consulta que resuelve la propia
+     * app, en vez de recorrer cientos de nodos. El id de cada navegador se averigua una vez.
+     * Para uno desconocido no se recorre nada: el filtro DNS ya lo cubre.
+     */
+    private fun urlBarText(pkg: String, root: AccessibilityNodeInfo): String? {
+        urlBarIds[pkg]?.let { return textOf(root, it) }
+        val now = SystemClock.elapsedRealtime()
+        if (now - (urlBarMisses[pkg] ?: Long.MIN_VALUE / 2) < RETRY_ID_MS) return null
+        for (suffix in URL_BAR_IDS) {
+            val id = "$pkg:id/$suffix"
+            if (root.findAccessibilityNodeInfosByViewId(id).isNotEmpty()) {
+                urlBarIds[pkg] = id
+                return textOf(root, id)
             }
-            for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
         }
+        urlBarMisses[pkg] = now
         return null
     }
 
+    private fun textOf(root: AccessibilityNodeInfo, id: String): String? =
+        root.findAccessibilityNodeInfosByViewId(id).firstNotNullOfOrNull { it.text?.toString() }
+
     // --- utilidades -----------------------------------------------------------------
 
-    private fun mentions(root: AccessibilityNodeInfo, needles: List<String>): Boolean {
+    private class Seen(val ours: Boolean, val dangerous: Boolean, val privateDns: Boolean)
+
+    /**
+     * Un solo recorrido de la ventana, con tope de nodos, que mira las tres listas a la vez.
+     * La búsqueda por texto del sistema sería más barata, pero las pantallas de Ajustes
+     * hechas con Compose (la ficha de la app en Android 14+) no la contestan. Sólo corre en
+     * apps de sistema y, como mucho, una vez cada [SETTLE_MS].
+     */
+    private fun scan(root: AccessibilityNodeInfo): Seen {
+        var ours = false
+        var dangerous = false
+        var privateDns = false
         var budget = MAX_NODES
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.add(root)
         while (stack.isNotEmpty() && budget-- > 0) {
             val n = stack.removeLast()
-            val s = "${n.text ?: ""} ${n.contentDescription ?: ""}".lowercase()
-            if (needles.any { s.contains(it) }) return true
+            val text = n.text
+            val desc = n.contentDescription
+            if (text != null || desc != null) {
+                val s = "${text ?: ""} ${desc ?: ""}".lowercase()
+                if (!ours && OURS.any { s.contains(it) }) ours = true
+                if (!dangerous && DANGEROUS.any { s.contains(it) }) dangerous = true
+                if (!privateDns && PRIVATE_DNS_EDITOR.any { s.contains(it) }) privateDns = true
+                if (ours && dangerous) break
+            }
             for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
         }
-        return false
+        return Seen(ours, dangerous, privateDns)
     }
 
     private fun block(countIt: Boolean) {
@@ -194,7 +247,9 @@ class GuardService : AccessibilityService() {
         const val PATROL_MS = 10_000L
         const val NAG_MS = 60_000L
         const val TOAST_MS = 3_000L
-        const val MAX_NODES = 600
+        const val MAX_NODES = 400
+        const val SETTLE_MS = 500L
+        const val RETRY_ID_MS = 60_000L
 
         /** Cómo se llama la app en pantalla, y su paquete (algunas capas del sistema lo muestran). */
         val OURS = listOf("secret savior", "com.secretsavior")
@@ -222,9 +277,10 @@ class GuardService : AccessibilityService() {
             "securitycenter", "safecenter", "systemmanager", "devicecare", "lool", "vending",
         )
 
+        /** Ids exactos (sin el paquete) de la barra de direcciones de los navegadores comunes. */
         val URL_BAR_IDS = listOf(
             "url_bar", "mozac_browser_toolbar_url_view", "location_bar_edit_text",
-            "omnibartextinput", "url_field", "toolbar_edit_text",
+            "omnibarTextInput", "url_field", "search_box_text",
         )
 
         val BROWSERS = setOf(

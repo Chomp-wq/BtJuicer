@@ -37,12 +37,20 @@ object Watchdog {
     }
 
     const val ACTION = "com.secretsavior.WATCHDOG"
+    private const val PERIOD_MS = 5 * 60_000L
+
+    @Volatile
+    private var lastScheduled = Long.MIN_VALUE / 2
 
     /**
      * Una alarma que sobrevive a que cierren la app: si el proceso muere, el sistema
      * lo vuelve a levantar para pasar lista. [BootReceiver] la atiende y la renueva.
      */
-    fun schedule(c: Context, delayMs: Long = 5 * 60_000L) {
+    fun schedule(c: Context, delayMs: Long = PERIOD_MS) {
+        // ensure() la renueva cada pocos segundos; no hace falta hablar con el sistema cada vez.
+        val now = SystemClock.elapsedRealtime()
+        if (delayMs == PERIOD_MS && now - lastScheduled < PERIOD_MS / 2) return
+        if (delayMs == PERIOD_MS) lastScheduled = now
         try {
             val am = c.getSystemService(Context.ALARM_SERVICE) as AlarmManager
             val pi = PendingIntent.getBroadcast(

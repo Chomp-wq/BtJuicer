@@ -16,10 +16,7 @@ import com.secretsavior.guard.Watchdog
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
-import java.net.DatagramPacket
-import java.net.DatagramSocket
 import java.net.InetSocketAddress
-import java.util.concurrent.Executors
 
 /**
  * Filtro DNS local. No es una VPN de verdad: ningún dato viaja por un servidor
@@ -35,7 +32,7 @@ class SaviorVpnService : VpnService() {
 
     private var tun: ParcelFileDescriptor? = null
     private var reader: Thread? = null
-    private val pool = Executors.newFixedThreadPool(6)
+    private var forwarder: DnsForwarder? = null
     private val writeLock = Any()
 
     /** Lo destruye el sistema: el hilo lector no debe llamar a stopSelf sobre un servicio ya relanzado. */
@@ -96,6 +93,12 @@ class SaviorVpnService : VpnService() {
             return
         }
         failures = 0
+        forwarder = try {
+            DnsForwarder(PRIMARY, FALLBACK, protect = { protect(it) })
+        } catch (e: IOException) {
+            Log.w(TAG, "sin socket de reenvío", e)
+            null
+        }
         tun = pfd
         running = true
         reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
@@ -134,48 +137,30 @@ class SaviorVpnService : VpnService() {
                 if (len <= 0) return
                 val header = buf.copyOf(ihl + 8)
                 val query = buf.copyOfRange(ihl + 8, ihl + 8 + len)
-                pool.execute { answer(header, ihl, query, out) }
+                answer(header, ihl, query, out)
             }
 
             IpPacket.PROTO_TCP -> IpPacket.tcpReset(buf, n, ihl)?.let { write(out, it) }
         }
     }
 
+    /**
+     * Lo bloqueado se contesta aquí mismo, sin salir del teléfono. Lo demás se entrega al
+     * reenviador, que no bloquea este hilo: el lector del túnel sigue leyendo mientras
+     * las respuestas llegan.
+     */
     private fun answer(header: ByteArray, ihl: Int, query: ByteArray, out: FileOutputStream) {
-        try {
-            val q = DnsPacket.parseQuestion(query)
-            val reply = when {
-                q != null && DnsFilter.isBlocked(q.name) -> {
-                    if (q.type == DnsPacket.TYPE_A) Store.countBlock(this)
-                    DnsPacket.blocked(query, q)
-                }
-
-                else -> forward(query) ?: q?.let { DnsPacket.servfail(query, it) }
-            } ?: return
-            write(out, IpPacket.udpReply(header, ihl, reply))
-        } catch (e: Exception) {
-            Log.w(TAG, "consulta DNS", e)
+        val q = DnsPacket.parseQuestion(query)
+        if (q != null && DnsFilter.isBlocked(q.name)) {
+            if (q.type == DnsPacket.TYPE_A) Store.countBlock(this)
+            write(out, IpPacket.udpReply(header, ihl, DnsPacket.blocked(query, q)))
+            return
         }
-    }
-
-    private fun forward(query: ByteArray): ByteArray? {
-        for (host in UPSTREAMS) {
-            try {
-                DatagramSocket().use { s ->
-                    protect(s) // el reenvío no debe volver a entrar en el túnel
-                    s.soTimeout = 2500
-                    s.connect(InetSocketAddress(host, 53))
-                    s.send(DatagramPacket(query, query.size))
-                    val buf = ByteArray(4096)
-                    val p = DatagramPacket(buf, buf.size)
-                    s.receive(p)
-                    return buf.copyOf(p.length)
-                }
-            } catch (e: IOException) {
-                // probar el siguiente resolutor
-            }
+        val fwd = forwarder ?: return
+        fwd.query(query) { response ->
+            val reply = response ?: q?.let { DnsPacket.servfail(query, it) }
+            if (reply != null) write(out, IpPacket.udpReply(header, ihl, reply))
         }
-        return null
     }
 
     private fun write(out: FileOutputStream, packet: ByteArray) {
@@ -197,7 +182,8 @@ class SaviorVpnService : VpnService() {
         destroyed = true
         running = false
         reader?.interrupt()
-        pool.shutdownNow()
+        forwarder?.close()
+        forwarder = null
         try {
             tun?.close()
         } catch (e: IOException) {
@@ -223,12 +209,16 @@ class SaviorVpnService : VpnService() {
         private val DNS_BYTES = byteArrayOf(10, -1, -1, 1)
 
         /**
-         * Resolutores con filtro familiar, en orden. CleanBrowsing "Adult Filter"
-         * bloquea pornografía, proxies/VPN de evasión y sitios mixtos, y fuerza
-         * búsqueda segura en Google, Bing y YouTube. Cloudflare for Families
-         * (1.1.1.3) queda de reserva.
+         * CleanBrowsing "Adult Filter": bloquea pornografía, proxies/VPN de evasión y
+         * sitios mixtos, y fuerza búsqueda segura en Google, Bing y YouTube. Se pregunta
+         * a los dos a la vez y gana el primero.
          */
-        val UPSTREAMS = listOf("185.228.168.10", "185.228.169.11", "1.1.1.3", "1.0.0.3")
+        val PRIMARY = listOf(dns("185.228.168.10"), dns("185.228.169.11"))
+
+        /** Cloudflare for Families, sólo si CleanBrowsing no contesta. */
+        val FALLBACK = listOf(dns("1.1.1.3"), dns("1.0.0.3"))
+
+        private fun dns(ip: String) = InetSocketAddress(ip, 53)
 
         @Volatile
         var running = false

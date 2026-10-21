@@ -33,6 +33,28 @@ ahora mismo»** (respiración 4-7-8 y tu propia razón, escrita por ti), y añad
 sitios a la lista (sólo se puede añadir, nunca quitar). No hay ninguna acción de
 apagar en el código.
 
+## Rendimiento
+
+El filtro no debe notarse. Lo que hace para conseguirlo:
+
+- **Sólo pasa el DNS por el túnel.** El resto del tráfico (webs, vídeo, descargas)
+  sale por Wi-Fi o datos como siempre, sin tocarlo.
+- **Las consultas no hacen cola.** Un único socket y un hilo que recibe; cada
+  consulta sale al momento aunque haya cientos en vuelo. Se pregunta a los dos
+  servidores de CleanBrowsing a la vez y gana el primero, así que un paquete perdido
+  en datos móviles no cuesta segundos. Sin respuesta en 0,8 s se reintenta en todos;
+  si CleanBrowsing falla seguido, durante 30 s se pregunta también a Cloudflare desde
+  el principio.
+- **Lo bloqueado se contesta en el teléfono**, sin salir a la red; la búsqueda es por
+  sufijos en un conjunto, no recorriendo listas.
+- **El guardián no frena otras apps.** Descarta al instante los eventos de las apps
+  que no vigila, sin pedirles nada. En navegadores pide la barra de direcciones por su
+  id (una consulta) y en Ajustes revisa la pantalla como mucho dos veces por segundo.
+
+Lo que no depende de la app: la primera visita a cada dominio espera la respuesta de
+CleanBrowsing, que según dónde estés puede estar más lejos que el DNS de tu
+operador. Android guarda las respuestas en caché, así que sólo se nota la primera vez.
+
 ## Instalar
 
 CI publica `Secret-Savior.apk` en la release `latest`. En Android 13+, si lo

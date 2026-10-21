@@ -5,7 +5,7 @@ package com.secretsavior.vpn
  * pura y se puede probar suelta.
  *
  * Es la primera de dos capas. La segunda es el resolutor aguas arriba (ver
- * [SaviorVpnService.UPSTREAMS]), que ya filtra millones de dominios; esta lista
+ * [SaviorVpnService.PRIMARY]), que ya filtra millones de dominios; esta lista
  * local existe para lo que se le escape y para que el bloqueo siga siendo
  * inmediato aunque el resolutor no conteste.
  */
@@ -17,7 +17,7 @@ object DnsFilter {
 
     private val blockedTlds = setOf("xxx", "porn", "sex", "adult")
 
-    private val blockedDomains = listOf(
+    private val blockedDomains = hashSetOf(
         "xvideos.com", "xvideos2.com", "xvideos-cdn.com", "xnxx.com", "xnxx-cdn.com",
         "xhamster.com", "xhamster2.com", "xhamster3.com", "xhcdn.com", "xhpingcdn.com",
         "redtube.com", "rdtcdn.com", "ypncdn.com", "phncdn.com", "brazzers.com",
@@ -38,7 +38,7 @@ object DnsFilter {
      * forma de usarla sin verlo. Se bloquea entera, con sus dominios de medios y
      * acortador, para que tampoco funcione desde el navegador.
      */
-    private val socialBlocked = listOf(
+    private val socialBlocked = hashSetOf(
         "twitter.com", "x.com", "t.co", "twimg.com", "twttr.com", "twitter.map.fastly.net",
         "pscp.tv", "periscope.tv", "vine.co",
     )
@@ -56,7 +56,7 @@ object DnsFilter {
     )
 
     /** Recursos contra la adicción y similares que contienen esas palabras. */
-    private val allowed = listOf(
+    private val allowed = hashSetOf(
         "pornharms.com", "fightthenewdrug.org", "yourbrainonporn.com", "covenanteyes.com",
         "nofap.com", "rebootnation.org", "fortify.net", "ceasing.org",
     )
@@ -65,7 +65,7 @@ object DnsFilter {
      * DNS cifrado (DoH): un navegador que lo use se salta el filtro. Si estos
      * nombres no resuelven, Chrome y Firefox vuelven al DNS del sistema.
      */
-    private val encryptedDns = listOf(
+    private val encryptedDns = hashSetOf(
         "dns.google", "dns.google.com", "cloudflare-dns.com", "one.one.one.one",
         "dns.quad9.net", "dns11.quad9.net", "doh.opendns.com", "dns.nextdns.io",
         "doh.dns.sb", "dns.adguard.com", "dns.adguard-dns.com", "doh.cleanbrowsing.org",
@@ -87,8 +87,21 @@ object DnsFilter {
         return blockedFragments.any { name.contains(it) }
     }
 
-    private fun matches(name: String, domains: Collection<String>): Boolean =
-        domains.any { name == it || name.endsWith(".$it") }
+    /**
+     * ¿Es [name] uno de [domains] o un subdominio suyo? Se prueba cada sufijo
+     * ("a.b.c.com", "b.c.com", "c.com", "com") contra el conjunto: tantas búsquedas como
+     * etiquetas tiene el nombre, no tantas como dominios hay en la lista.
+     */
+    private fun matches(name: String, domains: Set<String>): Boolean {
+        if (domains.isEmpty()) return false
+        var from = 0
+        while (true) {
+            if ((if (from == 0) name else name.substring(from)) in domains) return true
+            val dot = name.indexOf('.', from)
+            if (dot < 0) return false
+            from = dot + 1
+        }
+    }
 
     /** Un dominio que el usuario añade debe ser eso y no otra cosa. */
     fun normalize(input: String): String? {
