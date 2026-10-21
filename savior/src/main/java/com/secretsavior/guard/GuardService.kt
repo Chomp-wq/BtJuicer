@@ -1,6 +1,7 @@
 package com.secretsavior.guard
 
 import android.accessibilityservice.AccessibilityService
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
@@ -131,11 +132,22 @@ class GuardService : AccessibilityService() {
      */
     private fun noteForeground(pkg: String) {
         if (pkg == foreground || isNeutral(pkg)) return
-        val active = rootInActiveWindow?.packageName?.toString() ?: pkg
+        val active = activeRoot(prefetch = false)?.packageName?.toString() ?: pkg
         if (active == packageName || isNeutral(active)) return
         foreground = active
         setWatching(isWatched(active))
     }
+
+    /**
+     * Por defecto Android trae con la raíz hasta 50 nodos más, por si se piden luego. Desde
+     * Android 13 se puede pedir sólo la raíz, y la app de delante trabaja menos.
+     */
+    private fun activeRoot(prefetch: Boolean): AccessibilityNodeInfo? =
+        if (!prefetch && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getRootInActiveWindow(0)
+        } else {
+            rootInActiveWindow
+        }
 
     private fun isWatched(pkg: String) =
         pkg in BROWSERS || pkg in SEARCH_APPS || pkg in FEED_APPS || isSystemSurface(pkg)
@@ -169,7 +181,9 @@ class GuardService : AccessibilityService() {
             Watchdog.nag(this)
             return
         }
-        val root = rootInActiveWindow ?: return
+        // Para el navegador basta la raíz: luego se pide la barra por su id. En Ajustes se
+        // recorre la pantalla, y ahí traer nodos por adelantado ahorra viajes.
+        val root = activeRoot(prefetch = !browser) ?: return
         if (root.packageName?.toString() != pkg) return // el evento no es de la ventana activa
         if (browser) guardBrowser(pkg, root) else guardSystemScreen(pkg, root)
     }

@@ -55,6 +55,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.secretsavior.data.Store
 import com.secretsavior.guard.Status
+import com.secretsavior.vpn.SaviorVpnService
 import kotlinx.coroutines.delay
 import java.text.DateFormat
 import java.util.Date
@@ -81,6 +82,7 @@ private data class Snapshot(
     val days: Long,
     val since: Long,
     val blocked: Int,
+    val dnsMs: Long?,
 ) {
     val ready get() = vpn && guard && admin && !dnsStrict
 }
@@ -95,6 +97,7 @@ private fun read(c: Context) = Snapshot(
     days = Store.daysLocked(c),
     since = Store.lockedAt(c),
     blocked = Store.blockedCount(c),
+    dnsMs = SaviorVpnService.dnsAverageMs,
 )
 
 @Composable
@@ -300,6 +303,14 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                 StatusRow("Anti-desinstalación", s.admin, a::enableAdmin)
                 if (s.dnsStrict) StatusRow("DNS privado estricto (esquiva el filtro)", false, a::openNetworkSettings)
                 Text("${s.blocked} sitios bloqueados hasta hoy", style = MaterialTheme.typography.bodySmall)
+                s.dnsMs?.let { ms ->
+                    // Menos de ~80 ms no se nota; por encima de ~250 ms el resolutor está lejos o la red va mal.
+                    Text(
+                        "DNS: $ms ms de media" + if (ms > 250) " (lento: puede ser la red)" else "",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (ms > 250) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         }
 

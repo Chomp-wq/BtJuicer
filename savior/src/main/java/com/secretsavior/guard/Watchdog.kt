@@ -55,7 +55,15 @@ object Watchdog {
                 c, 0, Intent(c, BootReceiver::class.java).setAction(ACTION),
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
-            am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, SystemClock.elapsedRealtime() + delayMs, pi)
+            val at = SystemClock.elapsedRealtime() + delayMs
+            if (delayMs == PERIOD_MS) {
+                // La ronda periódica no despierta al teléfono: si duerme, nadie navega. Se
+                // entrega en cuanto despierte, y no gasta batería con la pantalla apagada.
+                am.set(AlarmManager.ELAPSED_REALTIME, at, pi)
+            } else {
+                // Volver tras cerrar la app sí corre prisa.
+                am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "no se pudo programar la alarma", e)
         }

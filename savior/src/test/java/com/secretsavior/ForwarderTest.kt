@@ -125,6 +125,45 @@ class ForwarderTest {
     }
 
     @Test
+    fun anUnreachableIpv6ServerDoesNotGetInTheWay() {
+        // Donde no hay IPv6 el envío falla al instante; la IPv4 contesta igual de rápido.
+        val v4 = fake()
+        val f = DnsForwarder(
+            listOf(InetSocketAddress("2001:db8::1", 53), v4.address), emptyList(), protect = {},
+            escalateAfterMs = 150, giveUpAfterMs = 600,
+        ).also { closeables += it }
+        val start = System.nanoTime()
+        assertNotNull(ask(f, 3))
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 150)
+    }
+
+    @Test
+    fun largeAnswersArriveWhole() {
+        // Un resolutor que contesta 9000 bytes: antes el búfer de 4096 la cortaba.
+        val big = DatagramSocket(0, InetAddress.getLoopbackAddress()).also { s -> closeables += AutoCloseable { s.close() } }
+        Thread {
+            val buf = ByteArray(512)
+            val p = DatagramPacket(buf, buf.size)
+            runCatching {
+                big.receive(p)
+                val reply = ByteArray(9000).also { buf.copyInto(it, 0, 0, 2); it[2] = 0x81.toByte() }
+                big.send(DatagramPacket(reply, reply.size, p.socketAddress))
+            }
+        }.apply { isDaemon = true; start() }
+        val f = DnsForwarder(listOf(InetSocketAddress(InetAddress.getLoopbackAddress(), big.localPort)), emptyList(), protect = {})
+            .also { closeables += it }
+        assertEquals(9000, ask(f, 4)!!.size)
+    }
+
+    @Test
+    fun keepsAnAverageLatency() {
+        val f = forwarder(listOf(fake(delayMs = 60)), listOf(fake()))
+        repeat(5) { assertNotNull(ask(f, 100 + it)) }
+        assertEquals(5, f.answered)
+        assertTrue("media ${f.averageMs} ms", f.averageMs in 50..400)
+    }
+
+    @Test
     fun ignoresAnswersFromStrangers() {
         val f = forwarder(listOf(fake(silent = true)), listOf(fake(silent = true)))
         val latch = CountDownLatch(1)

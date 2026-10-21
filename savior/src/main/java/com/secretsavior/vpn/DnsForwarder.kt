@@ -10,6 +10,8 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * Reenvía consultas DNS sin bloquear un hilo por consulta. Sin Android: se prueba suelto.
@@ -36,7 +38,12 @@ class DnsForwarder(
     private val giveUpAfterMs: Long = 4_000,
 ) : Closeable {
 
-    private class Pending(val originalId: Int, val query: ByteArray, val done: (ByteArray?) -> Unit) {
+    private class Pending(
+        val originalId: Int,
+        val query: ByteArray,
+        val sentAt: Long,
+        val done: (ByteArray?) -> Unit,
+    ) {
         @Volatile
         var timer: ScheduledFuture<*>? = null
     }
@@ -61,6 +68,11 @@ class DnsForwarder(
     @Volatile
     private var primariesDownUntil = 0L
 
+    // Antes que el hilo receptor: él los usa en cuanto arranca.
+    private val averageMicros = AtomicLong(0)
+    private val answeredCount = AtomicInteger()
+    private val failed = AtomicInteger()
+
     private val receiver = Thread(::receiveLoop, "savior-dns").apply {
         isDaemon = true
         start()
@@ -72,7 +84,7 @@ class DnsForwarder(
             done(null)
             return
         }
-        val p = Pending(u16(query, 0), query.copyOf(), done)
+        val p = Pending(u16(query, 0), query.copyOf(), now(), done)
         var id: Int
         do {
             id = ThreadLocalRandom.current().nextInt(0x10000)
@@ -100,15 +112,34 @@ class DnsForwarder(
     }
 
     private fun expire(id: Int, p: Pending) {
-        if (pending.remove(id, p)) finish(p, null)
+        if (pending.remove(id, p)) {
+            failed.incrementAndGet()
+            finish(p, null)
+        }
+    }
+
+    /** Tiempo medio de respuesta (media móvil), para verlo en la app y saber si el resolutor va lento. */
+    val averageMs: Long get() = averageMicros.get() / 1000
+
+    /** Consultas contestadas y consultas que se quedaron sin respuesta. */
+    val answered: Int get() = answeredCount.get()
+    val unanswered: Int get() = failed.get()
+
+    private fun noteLatency(ms: Long) {
+        val sample = ms * 1000
+        val n = answeredCount.incrementAndGet()
+        // Las primeras se promedian sin más; luego pesa más lo reciente (1/32).
+        averageMicros.updateAndGet { avg -> if (n <= 32) avg + (sample - avg) / n else avg + (sample - avg) / 32 }
     }
 
     private fun send(packet: ByteArray, to: List<InetSocketAddress>) {
         for (addr in to) {
             try {
                 socket.send(DatagramPacket(packet, packet.size, addr))
-            } catch (e: IOException) {
-                // Sin red en este instante: el temporizador decidirá.
+            } catch (e: Exception) {
+                // Sin red en este instante (IOException) o sin IPv6 en este sistema
+                // (UnsupportedAddressTypeException, que no es de E/S): el temporizador decidirá.
+                // Dejarla escapar tumbaría al hilo que llama, que puede ser el lector del túnel.
             }
         }
     }
@@ -127,6 +158,7 @@ class DnsForwarder(
             if (packet.length < 12 || packet.socketAddress !in known) continue
             val p = pending.remove(u16(buf, 0)) ?: continue // tardía o duplicada
             p.timer?.cancel(false)
+            noteLatency(now() - p.sentAt)
             val response = buf.copyOf(packet.length)
             put16(response, 0, p.originalId)
             finish(p, response)
@@ -153,7 +185,7 @@ class DnsForwarder(
 
     private companion object {
         const val MAX_PENDING = 2048
-        const val MAX_RESPONSE = 4096
+        const val MAX_RESPONSE = 65_535 // el máximo de UDP: una respuesta grande no se corta
         const val STREAK_WINDOW_MS = 10_000L
         const val STREAK_TO_MARK_DOWN = 3
         const val DOWN_FOR_MS = 30_000L

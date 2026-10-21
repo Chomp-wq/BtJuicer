@@ -32,6 +32,7 @@ class SaviorVpnService : VpnService() {
 
     private var tun: ParcelFileDescriptor? = null
     private var reader: Thread? = null
+    @Volatile
     private var forwarder: DnsForwarder? = null
     private val writeLock = Any()
 
@@ -103,6 +104,7 @@ class SaviorVpnService : VpnService() {
             null
         }
         tun = pfd
+        current = this
         running = true
         reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
     }
@@ -186,6 +188,7 @@ class SaviorVpnService : VpnService() {
     override fun onDestroy() {
         destroyed = true
         running = false
+        if (current === this) current = null
         reader?.interrupt()
         forwarder?.close()
         forwarder = null
@@ -215,14 +218,31 @@ class SaviorVpnService : VpnService() {
         private val DNS_BYTES = byteArrayOf(10, -1, -1, 1)
 
         /**
-         * CleanBrowsing "Adult Filter": bloquea pornografía, proxies/VPN de evasión y
-         * sitios mixtos, y fuerza búsqueda segura en Google, Bing y YouTube. Se pregunta
-         * a los dos a la vez y gana el primero.
+         * CleanBrowsing "Adult Filter": bloquea pornografía y contenido explícito y fuerza
+         * búsqueda segura en Google y Bing. Deja pasar sitios mixtos como Reddit (para eso
+         * está el guardián). Se pregunta a todos a la vez y gana el primero.
+         *
+         * Van también las direcciones IPv6: en redes móviles sólo IPv6 (muchas lo son) la
+         * IPv4 pasa por una traducción (464XLAT) que añade latencia. Donde no hay IPv6, el
+         * envío falla al instante y no cuesta nada.
          */
-        val PRIMARY = listOf(dns("185.228.168.10"), dns("185.228.169.11"))
+        val PRIMARY = listOf(
+            dns("185.228.168.10"), dns("185.228.169.11"),
+            dns("2a0d:2a00:1::1"), dns("2a0d:2a00:2::1"),
+        )
 
-        /** Cloudflare for Families, sólo si CleanBrowsing no contesta. */
-        val FALLBACK = listOf(dns("1.1.1.3"), dns("1.0.0.3"))
+        /** Cloudflare for Families (malware y adultos), sólo si CleanBrowsing no contesta. */
+        val FALLBACK = listOf(
+            dns("1.1.1.3"), dns("1.0.0.3"),
+            dns("2606:4700:4700::1113"), dns("2606:4700:4700::1003"),
+        )
+
+        /** Tiempo medio de respuesta del DNS en ms, o null si el filtro no corre. */
+        val dnsAverageMs: Long?
+            get() = current?.forwarder?.takeIf { it.answered > 0 }?.averageMs
+
+        @Volatile
+        private var current: SaviorVpnService? = null
 
         private fun dns(ip: String) = InetSocketAddress(ip, 53)
 

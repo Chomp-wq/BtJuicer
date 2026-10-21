@@ -14,7 +14,7 @@ Cuatro capas, cada una cubre un hueco de la anterior.
 
 | Capa | Qué hace |
 |---|---|
-| **Filtro DNS** (`VpnService` local) | Captura sólo las consultas DNS del teléfono. Los dominios de la lista local (palabras clave, TLD `.xxx/.porn/.sex/.adult`, ~70 sitios y CDN, redes de anuncios para adultos) reciben `0.0.0.0`. El resto se reenvía a **CleanBrowsing Adult Filter** (185.228.168.10), que bloquea adultos, proxies/VPN de evasión y sitios mixtos, y fuerza búsqueda segura en Google, Bing y YouTube; Cloudflare for Families (1.1.1.3) queda de reserva. Los proveedores de DNS cifrado (DoH) también se bloquean para que el navegador no se salte el filtro. No pasa tu tráfico por ningún servidor. |
+| **Filtro DNS** (`VpnService` local) | Captura sólo las consultas DNS del teléfono. Los dominios de la lista local (palabras clave, TLD `.xxx/.porn/.sex/.adult`, ~70 sitios y CDN, redes de anuncios para adultos) reciben `0.0.0.0`. El resto se reenvía a **CleanBrowsing Adult Filter** (185.228.168.10), que bloquea pornografía y contenido explícito y fuerza búsqueda segura en Google y Bing (deja pasar sitios mixtos como Reddit: ahí actúa el guardián); Cloudflare for Families (1.1.1.3) queda de reserva. Se usan también sus direcciones IPv6. Los proveedores de DNS cifrado (DoH) también se bloquean para que el navegador no se salte el filtro. No pasa tu tráfico por ningún servidor. |
 | **Guardián** (`AccessibilityService`) | Manda al inicio cualquier pantalla de Ajustes/instalador/VPN que nombre a la app (ficha, desinstalar, administradores, accesibilidad, «Desconectar» VPN) y el campo de DNS privado. Cierra el navegador si apunta a un sitio bloqueado, y **falla cerrado**: si el filtro está caído, los navegadores no funcionan hasta repararlo. Cierra el texto explícito que se escribe, sólo en navegadores, buscadores (Google, YouTube), Telegram y Reddit: WhatsApp, SMS y el resto de chats no se vigilan, para no limitar la comunicación. |
 | **Administrador del dispositivo** | Mientras la app sea administradora, Android se niega a desinstalarla. Quitarla de la lista es la pantalla que el guardián cierra. |
 | **Siempre activo** | El filtro va como servicio en primer plano con notificación fija, así que cerrar la app no lo detiene. Si el sistema aun así lo mata (Xiaomi al «Limpiar» Recientes), una alarma lo vuelve a levantar en segundos; la pantalla principal guía el autoinicio y la exclusión de ahorro de batería. |
@@ -45,6 +45,12 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   en datos móviles no cuesta segundos. Sin respuesta en 0,8 s se reintenta en todos;
   si CleanBrowsing falla seguido, durante 30 s se pregunta también a Cloudflare desde
   el principio.
+- **IPv4 e IPv6 a la vez.** En redes móviles sólo IPv6 la IPv4 pasa por una
+  traducción que añade latencia; preguntando también por IPv6 gana el camino directo.
+- **La ronda periódica no despierta al teléfono** con la pantalla apagada: se entrega
+  al despertar. Sólo el regreso tras cerrar la app usa una alarma que despierta.
+- **La app enseña el tiempo medio del DNS** en «Estado». Si pasa de ~250 ms, lo
+  lento es la red o la distancia al resolutor, no el teléfono.
 - **Lo bloqueado se contesta en el teléfono**, sin salir a la red; la búsqueda es por
   sufijos en un conjunto, no recorriendo listas.
 - **El túnel no gira en vacío.** El descriptor de la VPN es bloqueante: el hilo
