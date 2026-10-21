@@ -3,6 +3,10 @@
 Una sola app Android, sin Shizuku, sin root, sin permisos especiales. Mejora lo
 que se puede mejorar en la escucha por Bluetooth y es honesta sobre lo que no.
 
+
+> Este repositorio también contiene **[Secret Savior](savior/README.md)**, una app aparte
+> (módulo `:savior`) de bloqueo de pornografía que no se puede desactivar.
+
 ---
 
 ## Lo primero: el códec

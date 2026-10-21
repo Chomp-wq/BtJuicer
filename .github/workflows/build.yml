@@ -5,7 +5,7 @@ name: APK
 # iniciar sesión y llega comprimido.
 on:
   push:
-    branches: [main]
+    branches: [main, claude/secret-savior-05ik70]
   workflow_dispatch:
 
 permissions:
@@ -38,16 +38,27 @@ jobs:
           chmod +x gradlew
           ./gradlew assembleDebug --no-daemon --stacktrace
 
-      - name: Renombrar el APK
+      - name: Pruebas de Secret Savior
+        run: ./gradlew :savior:testDebugUnitTest --no-daemon --stacktrace
+
+      - name: Renombrar los APK
         run: |
           mkdir -p out
           cp app/build/outputs/apk/debug/app-debug.apk out/BT-Juicer.apk
+          cp savior/build/outputs/apk/debug/savior-debug.apk out/Secret-Savior.apk
 
       - name: Subir como artefacto
         uses: actions/upload-artifact@v4
         with:
           name: BT-Juicer-apk
           path: out/BT-Juicer.apk
+          if-no-files-found: error
+
+      - name: Subir Secret Savior como artefacto
+        uses: actions/upload-artifact@v4
+        with:
+          name: Secret-Savior-apk
+          path: out/Secret-Savior.apk
           if-no-files-found: error
 
       - name: Publicar release
@@ -60,8 +71,8 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "BT Juicer — última compilación" \
-              --notes "APK de depuración compilado automáticamente. Descarga BT-Juicer.apk y ábrelo en el teléfono." \
+              --notes "APK de depuración compilados automáticamente (BT-Juicer.apk y Secret-Savior.apk). Descarga el que quieras y ábrelo en el teléfono." \
               --prerelease
           fi
-          gh release upload "$TAG" out/BT-Juicer.apk --clobber
+          gh release upload "$TAG" out/BT-Juicer.apk out/Secret-Savior.apk --clobber
           echo "APK: $(gh release view "$TAG" --json url --jq .url)"
