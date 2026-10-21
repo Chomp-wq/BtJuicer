@@ -79,11 +79,13 @@ class GuardService : AccessibilityService() {
     }
 
     private fun onTyped(event: AccessibilityEvent, pkg: String) {
+        // Sólo donde se busca contenido. WhatsApp, SMS y el resto de chats quedan fuera: esto
+        // protege de lo que se busca, no limita con quién se habla.
+        val wide = pkg in BROWSERS || pkg in SEARCH_APPS
+        if (!wide && pkg !in FEED_APPS) return
         if (event.isPassword) return
         val text = event.text.joinToString(" ")
-        if (ContentRules.isExplicit(text, inBrowser = pkg in BROWSERS || pkg in SEARCH_APPS)) {
-            block(countIt = true)
-        }
+        if (ContentRules.isExplicit(text, inBrowser = wide)) block(countIt = true)
     }
 
     private fun onScreen(pkg: String) {
@@ -237,6 +239,17 @@ class GuardService : AccessibilityService() {
 
         /** Apps que se cierran en cuanto se abren: X / Twitter y su versión ligera. */
         val BLOCKED_APPS = setOf("com.twitter.android", "com.twitter.android.lite")
+
+        /**
+         * Telegram y Reddit: canales y comunidades con contenido para adultos. Aquí sólo
+         * se vigilan las palabras sin doble sentido, no las frases de búsqueda amplias.
+         */
+        val FEED_APPS = setOf(
+            "org.telegram.messenger", "org.telegram.messenger.web", "org.telegram.plus",
+            "org.thunderdog.challegram", "nekox.messenger", "tw.nekomimi.nekogram",
+            "com.reddit.frontpage", "com.rubenmayayo.reddit", "free.reddit.news",
+            "com.laurencedawson.reddit_sync", "reddit.news",
+        )
 
         /** Apps donde se busca pero que no son navegadores: sólo se vigila lo que se teclea. */
         val SEARCH_APPS = setOf("com.google.android.googlequicksearchbox", "com.google.android.youtube")
