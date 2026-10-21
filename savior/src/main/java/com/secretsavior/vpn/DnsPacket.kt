@@ -55,7 +55,7 @@ object DnsPacket {
             out[p++] = 0xC0.toByte(); out[p++] = 0x0C // puntero al nombre de la pregunta
             out[p++] = 0; out[p++] = q.type.toByte()
             out[p++] = 0; out[p++] = 1                // clase IN
-            out[p++] = 0; out[p++] = 0; out[p++] = 0; out[p++] = 60 // TTL
+            out[p++] = 0; out[p++] = 0; out[p++] = 0x01; out[p++] = 0x2C // TTL 300 s: menos consultas repetidas
             out[p++] = 0; out[p] = rdata.toByte()     // RDATA a ceros
         }
         return out

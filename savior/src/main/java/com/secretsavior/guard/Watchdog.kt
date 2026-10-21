@@ -10,7 +10,6 @@ import android.os.SystemClock
 import android.util.Log
 import com.secretsavior.MainActivity
 import com.secretsavior.data.Store
-import com.secretsavior.vpn.DnsFilter
 import com.secretsavior.vpn.SaviorVpnService
 
 /** Vuelve a levantar lo que se haya caído. Nunca apaga nada. */
@@ -22,7 +21,6 @@ object Watchdog {
     fun ensure(c: Context): Boolean {
         if (!Store.isLocked(c)) return true
         schedule(c)
-        DnsFilter.extra = Store.extraDomains(c)
         if (SaviorVpnService.running) return true
         if (VpnService.prepare(c) != null) return false // otra VPN le quitó el permiso
         return try {

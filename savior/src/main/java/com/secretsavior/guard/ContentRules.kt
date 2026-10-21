@@ -27,11 +27,14 @@ object ContentRules {
             "nudes?|desnud[ao]s?|naked\\s+(girls?|women|pics?)|tetas|follando|sex\\s*cams?)\\b",
     )
 
+    private val MARKS = Regex("\\p{Mn}+")
+
     /** [inBrowser] activa el conjunto ampliado. */
     fun isExplicit(text: CharSequence, inBrowser: Boolean): Boolean {
         if (text.isBlank()) return false
-        val t = Normalizer.normalize(text.toString().lowercase(), Normalizer.Form.NFD)
-            .replace(Regex("\\p{Mn}+"), "")
+        val lower = text.toString().lowercase()
+        // Se escribe una letra cada vez: no normalizar ni crear regex si no hace falta.
+        val t = if (lower.all { it.code < 128 }) lower else MARKS.replace(Normalizer.normalize(lower, Normalizer.Form.NFD), "")
         if (strict.containsMatchIn(t)) return true
         return inBrowser && search.containsMatchIn(t)
     }

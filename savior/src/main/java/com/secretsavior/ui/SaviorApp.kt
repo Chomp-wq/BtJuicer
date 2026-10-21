@@ -71,7 +71,7 @@ interface Actions {
     fun commit()
 }
 
-private class Snapshot(
+private data class Snapshot(
     val locked: Boolean,
     val vpn: Boolean,
     val guard: Boolean,

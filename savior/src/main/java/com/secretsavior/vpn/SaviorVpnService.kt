@@ -72,6 +72,9 @@ class SaviorVpnService : VpnService() {
         val builder = Builder()
             .setSession("Secret Savior")
             .setMtu(1500)
+            // Por defecto el descriptor del túnel es no bloqueante: read() devuelve 0 al
+            // instante si no hay nada y el bucle lector giraría sin parar con un núcleo al 100 %.
+            .setBlocking(true)
             .addAddress(ADDRESS, 24)
             .addDnsServer(DNS)
             .addRoute(SUBNET, 24)
@@ -112,8 +115,10 @@ class SaviorVpnService : VpnService() {
             while (!Thread.currentThread().isInterrupted) {
                 val n = input.read(buf)
                 if (n < 0) break
-                if (n > 0) handle(buf, n, output)
+                if (n > 0) handle(buf, n, output) else Thread.sleep(IDLE_MS) // por si acaso
             }
+        } catch (e: InterruptedException) {
+            // onDestroy: salir
         } catch (e: IOException) {
             // el túnel se cerró: salir del bucle es lo correcto
         } catch (e: Exception) {
@@ -201,6 +206,7 @@ class SaviorVpnService : VpnService() {
 
     companion object {
         private const val TAG = "SecretSavior"
+        private const val IDLE_MS = 20L
 
         /** Subred del túnel. El "servidor DNS" es .1 y el teléfono es .2. */
         private const val SUBNET = "10.255.255.0"

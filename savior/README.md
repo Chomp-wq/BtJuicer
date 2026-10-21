@@ -47,6 +47,13 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   el principio.
 - **Lo bloqueado se contesta en el teléfono**, sin salir a la red; la búsqueda es por
   sufijos en un conjunto, no recorriendo listas.
+- **El túnel no gira en vacío.** El descriptor de la VPN es bloqueante: el hilo
+  lector duerme hasta que llega una consulta, en vez de preguntar sin parar.
+- **Android sólo genera los eventos que hacen falta.** Con una app no vigilada
+  delante (WhatsApp, juegos, Instagram) el guardián pide únicamente los cambios de
+  ventana, y las apps dejan de construir un evento por cada cosa que se mueve en
+  pantalla. Los cambios de contenido y el texto escrito se piden sólo con un
+  navegador, un buscador, Telegram, Reddit o Ajustes delante.
 - **El guardián no frena otras apps.** Descarta al instante los eventos de las apps
   que no vigila, sin pedirles nada. En navegadores pide la barra de direcciones por su
   id (una consulta) y en Ajustes revisa la pantalla como mucho dos veces por segundo.

@@ -1,8 +1,10 @@
 package com.secretsavior.data
 
 import android.content.Context
+import android.os.SystemClock
 import com.secretsavior.guard.Status
 import com.secretsavior.vpn.DnsFilter
+import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * Lo poco que la app recuerda. Todo es de ida: se puede añadir un dominio, pero
@@ -22,7 +24,11 @@ object Store {
      * app, el administrador sigue ahí y el bloqueo no se evapora con ellos.
      */
     fun isLocked(c: Context): Boolean {
-        if (lockedAt(c) > 0) return true
+        if (lockedCache) return true // es de ida: una vez bloqueada no vuelve atrás
+        if (lockedAt(c) > 0) {
+            lockedCache = true
+            return true
+        }
         if (Status.isAdminActive(c)) {
             lock(c)
             return true
@@ -32,20 +38,43 @@ object Store {
 
     fun lock(c: Context) {
         if (lockedAt(c) == 0L) prefs(c).edit().putLong("locked_at", System.currentTimeMillis()).apply()
+        lockedCache = true
     }
+
+    /** Se consulta en cada evento de accesibilidad: mejor una variable que las preferencias. */
+    @Volatile
+    private var lockedCache = false
 
     fun daysLocked(c: Context): Long {
         val at = lockedAt(c)
         return if (at == 0L) 0 else (System.currentTimeMillis() - at) / DAY_MS
     }
 
-    fun blockedCount(c: Context): Int = prefs(c).getInt("blocked", 0)
+    fun blockedCount(c: Context): Int = prefs(c).getInt("blocked", 0) + unsaved.get()
+
+    /**
+     * Se cuenta en memoria y se guarda como mucho cada [FLUSH_MS]: una página puede tener
+     * muchos dominios bloqueados y cada guardado reescribe el archivo de preferencias.
+     */
+    fun countBlock(c: Context) {
+        unsaved.incrementAndGet()
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastFlush >= FLUSH_MS) flush(c, now)
+    }
 
     @Synchronized
-    fun countBlock(c: Context) {
+    private fun flush(c: Context, now: Long) {
+        lastFlush = now
+        val n = unsaved.getAndSet(0)
+        if (n == 0) return
         val p = prefs(c)
-        p.edit().putInt("blocked", p.getInt("blocked", 0) + 1).apply()
+        p.edit().putInt("blocked", p.getInt("blocked", 0) + n).apply()
     }
+
+    private val unsaved = AtomicInteger()
+
+    @Volatile
+    private var lastFlush = Long.MIN_VALUE / 2
 
     fun extraDomains(c: Context): Set<String> =
         prefs(c).getStringSet("extra", emptySet()).orEmpty().toSet()
@@ -78,6 +107,7 @@ object Store {
         prefs(c).edit().putString("reason", text.take(600)).apply()
     }
 
+    private const val FLUSH_MS = 30_000L
     private const val GRACE_MS = 120_000L
     private const val DAY_MS = 24L * 60 * 60 * 1000
 }

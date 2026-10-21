@@ -36,6 +36,14 @@ class GuardService : AccessibilityService() {
         deferredPkg?.let(::check)
     }
 
+    /**
+     * Android sólo genera los tipos de evento que algún servicio pide, en todas las apps.
+     * Con una app no vigilada delante se piden sólo los cambios de ventana; así WhatsApp, un
+     * juego o Instagram no construyen un evento por cada cosa que se mueve en pantalla.
+     */
+    private var watching: Boolean? = null
+    private var foreground: String? = null
+
     /** Qué id tiene la barra de direcciones de cada navegador, una vez averiguado. */
     private val urlBarIds = HashMap<String, String>()
     private val urlBarMisses = HashMap<String, Long>()
@@ -48,6 +56,10 @@ class GuardService : AccessibilityService() {
     }
 
     override fun onServiceConnected() {
+        // No se sabe qué hay delante: se empieza mirando todo y el primer cambio de ventana afina.
+        watching = null
+        foreground = null
+        setWatching(true)
         handler.removeCallbacks(tick)
         handler.post(tick)
     }
@@ -82,18 +94,22 @@ class GuardService : AccessibilityService() {
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
         val type = event.eventType
+        if (!Store.isLocked(this)) {
+            setWatching(false)
+            return
+        }
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) noteForeground(pkg)
 
         if (pkg in BLOCKED_APPS) {
             // Aunque la red falle o la app traiga contenido en caché, no se queda abierta.
-            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && Store.isLocked(this)) block(countIt = true)
+            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) block(countIt = true)
             return
         }
         if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
-            if (Store.isLocked(this)) onTyped(event, pkg)
+            onTyped(event, pkg)
             return
         }
         if (!isSystemSurface(pkg) && pkg !in BROWSERS) return
-        if (!Store.isLocked(this)) return
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             handler.removeCallbacks(deferred)
@@ -106,6 +122,33 @@ class GuardService : AccessibilityService() {
                 handler.postDelayed(deferred, SETTLE_MS)
             }
         }
+    }
+
+    /**
+     * Qué app hay delante. El paquete del evento no basta: el teclado, una burbuja de chat o
+     * un diálogo también cambian de ventana sin que cambie la app que se está usando. Se
+     * pregunta qué ventana tiene el foco, y sólo cuando el paquete es nuevo.
+     */
+    private fun noteForeground(pkg: String) {
+        if (pkg == foreground || isNeutral(pkg)) return
+        val active = rootInActiveWindow?.packageName?.toString() ?: pkg
+        if (active == packageName || isNeutral(active)) return
+        foreground = active
+        setWatching(isWatched(active))
+    }
+
+    private fun isWatched(pkg: String) =
+        pkg in BROWSERS || pkg in SEARCH_APPS || pkg in FEED_APPS || isSystemSurface(pkg)
+
+    /** La barra de notificaciones y los teclados: aparecen encima sin cambiar la app de debajo. */
+    private fun isNeutral(pkg: String) = pkg == "com.android.systemui" || NEUTRAL_HINTS.any { pkg.contains(it) }
+
+    private fun setWatching(on: Boolean) {
+        if (watching == on) return
+        val info = serviceInfo ?: return
+        info.eventTypes = if (on) EVENTS_WATCHING else AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        serviceInfo = info
+        watching = on
     }
 
     private fun onTyped(event: AccessibilityEvent, pkg: String) {
@@ -244,7 +287,10 @@ class GuardService : AccessibilityService() {
     }
 
     private companion object {
-        const val PATROL_MS = 10_000L
+        const val PATROL_MS = 30_000L
+        const val EVENTS_WATCHING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+        val NEUTRAL_HINTS = listOf("inputmethod", "keyboard", "swiftkey", "com.baidu.input", "honeyboard")
         const val NAG_MS = 60_000L
         const val TOAST_MS = 3_000L
         const val MAX_NODES = 400
