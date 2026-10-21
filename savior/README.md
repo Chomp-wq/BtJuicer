@@ -14,7 +14,7 @@ Cuatro capas, cada una cubre un hueco de la anterior.
 
 | Capa | Qué hace |
 |---|---|
-| **Filtro DNS** (`VpnService` local) | Captura sólo las consultas DNS del teléfono. Los dominios de la lista local (palabras clave, TLD `.xxx/.porn/.sex/.adult`, ~90 sitios y CDN, redes de anuncios para adultos) reciben `0.0.0.0`. El resto se reenvía a **CleanBrowsing Adult Filter** (185.228.168.10), que bloquea adultos, proxies/VPN de evasión y sitios mixtos, y fuerza búsqueda segura en Google, Bing y YouTube; Cloudflare for Families (1.1.1.3) queda de reserva. Los proveedores de DNS cifrado (DoH) también se bloquean para que el navegador no se salte el filtro. No pasa tu tráfico por ningún servidor. |
+| **Filtro DNS** (`VpnService` local) | Captura sólo las consultas DNS del teléfono. Los dominios de la lista local (palabras clave, TLD `.xxx/.porn/.sex/.adult`, ~70 sitios y CDN, redes de anuncios para adultos) reciben `0.0.0.0`. El resto se reenvía a **CleanBrowsing Adult Filter** (185.228.168.10), que bloquea adultos, proxies/VPN de evasión y sitios mixtos, y fuerza búsqueda segura en Google, Bing y YouTube; Cloudflare for Families (1.1.1.3) queda de reserva. Los proveedores de DNS cifrado (DoH) también se bloquean para que el navegador no se salte el filtro. No pasa tu tráfico por ningún servidor. |
 | **Guardián** (`AccessibilityService`) | Manda al inicio cualquier pantalla de Ajustes/instalador/VPN que nombre a la app (ficha, desinstalar, administradores, accesibilidad, «Desconectar» VPN) y el campo de DNS privado. Cierra el navegador si apunta a un sitio bloqueado, y **falla cerrado**: si el filtro está caído, los navegadores no funcionan hasta repararlo. Cierra el texto explícito que se escribe. |
 | **Administrador del dispositivo** | Mientras la app sea administradora, Android se niega a desinstalarla. Quitarla de la lista es la pantalla que el guardián cierra. |
 | **Vigilante** | Cada 10 s, al arrancar y al caerse el filtro, levanta lo que falte. Si otra VPN le quita el permiso o se retira un permiso, trae la app al frente para repararlo. |
@@ -44,9 +44,16 @@ una frase de compromiso antes de activar.
 Ningún bloqueo en el propio teléfono es imposible de quitar, y esta app no finge
 lo contrario:
 
-- **Restablecer de fábrica**, arrancar en **modo seguro** y desinstalar desde un
-  ordenador con **ADB** (`adb uninstall`, `dpm remove-active-admin`) lo quitan. Es
-  deliberado: son rutas que exigen querer de verdad y no se hacen en un impulso.
+- **Restablecer de fábrica** lo quita, como cualquier otra app.
+- **Modo seguro** (mantener «Apagar» en el menú de apagado): en él no corre
+  ninguna app de terceros, tampoco el guardián, y desde Ajustes se puede quitar el
+  administrador y desinstalar. Es el punto débil más fácil y una app normal no
+  puede cerrarlo; sólo una app «propietaria del dispositivo» podría (ver abajo).
+- Con un ordenador y **ADB** se puede apagar el guardián
+  (`settings put secure enabled_accessibility_services …`) y después quitar el
+  administrador desde Ajustes. `adb uninstall` a secas falla mientras sea
+  administradora.
+- Crear **otro usuario o un invitado** en el teléfono da un espacio sin filtro.
 - Otro navegador/app con **DNS-sobre-HTTPS por IP fija** o una **VPN** de terceros
   evita el filtro DNS. Una VPN ajena le quita el puesto a la nuestra y los
   navegadores se cierran hasta recuperarlo; una app con DoH propio por IP no se
@@ -56,6 +63,11 @@ lo contrario:
   bloquear algo inocente y dejar pasar algo).
 - No filtra el contenido de imágenes o vídeo dentro de apps (redes sociales,
   etc.): bloquea sitios y búsquedas, no lo que una app decida mostrar.
+
+Una versión más dura existe: si la app fuera **propietaria del dispositivo**
+(`adb shell dpm set-device-owner`, sólo en un teléfono sin cuentas añadidas)
+podría prohibir el modo seguro, el restablecimiento desde Ajustes, otros usuarios
+y otras VPN. Esta versión todavía no lo hace.
 
 Por eso el método real es **combinarlo con una persona**: cuéntaselo a alguien de
 confianza. La app sube mucho el esfuerzo; la otra mitad es humana.

@@ -36,6 +36,10 @@ class SaviorVpnService : VpnService() {
     private val pool = Executors.newFixedThreadPool(6)
     private val writeLock = Any()
 
+    /** Lo destruye el sistema: el hilo lector no debe llamar a stopSelf sobre un servicio ya relanzado. */
+    @Volatile
+    private var destroyed = false
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         start()
         return START_STICKY
@@ -63,9 +67,11 @@ class SaviorVpnService : VpnService() {
             null
         }
         val pfd = established ?: run {
+            failures++
             stopSelf()
             return
         }
+        failures = 0
         tun = pfd
         running = true
         reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
@@ -86,7 +92,7 @@ class SaviorVpnService : VpnService() {
         } catch (e: Exception) {
             Log.w(TAG, "bucle del túnel", e)
         }
-        stopSelf()
+        if (!destroyed) stopSelf()
     }
 
     private fun handle(buf: ByteArray, n: Int, out: FileOutputStream) {
@@ -164,6 +170,7 @@ class SaviorVpnService : VpnService() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         running = false
         reader?.interrupt()
         pool.shutdownNow()
@@ -173,11 +180,12 @@ class SaviorVpnService : VpnService() {
             // ya estaba cerrado
         }
         tun = null
-        // Si fue el sistema quien nos paró, volver. Si ya no hay permiso, pedirlo.
+        // Si fue el sistema quien nos paró, volver. Si ya no hay permiso, pedirlo. Si el
+        // túnel ni siquiera se pudo crear, esperar más: reintentar cada segundo sólo gasta batería.
         val app = applicationContext
         Handler(Looper.getMainLooper()).postDelayed({
             if (!Watchdog.ensure(app)) Watchdog.nag(app)
-        }, 1500)
+        }, if (failures > 0) 30_000L else 1_500L)
         super.onDestroy()
     }
 
@@ -201,5 +209,9 @@ class SaviorVpnService : VpnService() {
         @Volatile
         var running = false
             private set
+
+        /** Intentos seguidos en que establish() no dio túnel. */
+        @Volatile
+        private var failures = 0
     }
 }

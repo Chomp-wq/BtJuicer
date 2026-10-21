@@ -143,7 +143,7 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Lo que tienes que saber", fontWeight = FontWeight.Bold)
                 Text("• No habrá botón de desactivar. Ni con contraseña, ni con espera, ni para quien la escribió.")
-                Text("• Para quitarla habría que restablecer el teléfono de fábrica o usar un ordenador (ADB). Es a propósito: hace falta querer de verdad.")
+                Text("• Para quitarla habría que restablecer el teléfono de fábrica, arrancar en modo seguro o usar un ordenador (ADB). Es a propósito: hace falta querer de verdad, no un impulso.")
                 Text("• Ningún filtro es perfecto. Esto sube mucho el esfuerzo, no lo hace imposible. Cuéntaselo a alguien de confianza: es la mitad del método.")
                 Text("• Nada de lo que escribes o ves sale del teléfono. Sólo las consultas DNS viajan, a un resolutor con filtro familiar.")
             }

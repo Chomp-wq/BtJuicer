@@ -108,7 +108,13 @@ class GuardService : AccessibilityService() {
         }
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
         if (!Status.isAdminActive(this)) return
-        if (mentions(root, OURS) || mentions(root, PRIVATE_DNS_EDITOR)) block(countIt = false)
+        if (mentions(root, OURS)) {
+            block(countIt = false)
+            return
+        }
+        // Con DNS privado estricto los navegadores quedan cerrados (ver guardBrowser); hay
+        // que dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
+        if (!Status.isPrivateDnsStrict(this) && mentions(root, PRIVATE_DNS_EDITOR)) block(countIt = false)
     }
 
     private fun isSystemSurface(pkg: String): Boolean =
