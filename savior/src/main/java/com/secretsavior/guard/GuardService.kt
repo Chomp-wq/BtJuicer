@@ -65,6 +65,12 @@ class GuardService : AccessibilityService() {
         if (pkg == packageName) return
         if (!Store.isLocked(this)) return
 
+        if (pkg in BLOCKED_APPS) {
+            // Aunque la red falle o la app traiga contenido en caché, no se queda abierta.
+            if (event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) block(countIt = true)
+            return
+        }
+
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> onTyped(event, pkg)
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
@@ -212,6 +218,9 @@ class GuardService : AccessibilityService() {
             "com.UCMobile.intl", "com.android.browser", "com.mi.globalbrowser", "com.huawei.browser",
             "org.chromium.webview_shell", "org.torproject.torbrowser",
         )
+
+        /** Apps que se cierran en cuanto se abren: X / Twitter y su versión ligera. */
+        val BLOCKED_APPS = setOf("com.twitter.android", "com.twitter.android.lite")
 
         /** Apps donde se busca pero que no son navegadores: sólo se vigila lo que se teclea. */
         val SEARCH_APPS = setOf("com.google.android.googlequicksearchbox", "com.google.android.youtube")

@@ -29,6 +29,14 @@ class FilterTest {
     }
 
     @Test
+    fun blocksXAndTwitter() {
+        for (d in listOf("twitter.com", "x.com", "api.x.com", "mobile.twitter.com", "t.co", "pbs.twimg.com", "video.twimg.com"))
+            assertTrue(d, DnsFilter.isBlocked(d))
+        for (d in listOf("box.com", "dropbox.com", "netflix.com", "tx.com.mx", "xbox.com"))
+            assertFalse(d, DnsFilter.isBlocked(d))
+    }
+
+    @Test
     fun blocksEncryptedDnsProviders() {
         for (d in listOf("dns.google", "cloudflare-dns.com", "mozilla.cloudflare-dns.com"))
             assertTrue(d, DnsFilter.isBlocked(d))

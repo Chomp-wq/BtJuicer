@@ -23,6 +23,10 @@ El bloqueo no se guarda sólo en las preferencias de la app: si alguien borra lo
 datos, el administrador sigue activo en el sistema y la app lo detecta como
 «bloqueada».
 
+**X / Twitter** se bloquea entera: sus dominios (`twitter.com`, `x.com`, `t.co`,
+`twimg.com`…) en el filtro DNS, y la app (`com.twitter.android`) se cierra en cuanto
+se abre.
+
 Dentro de la app, con el bloqueo activo: contador de días, botón **«Tengo ganas
 ahora mismo»** (respiración 4-7-8 y tu propia razón, escrita por ti), y añadir más
 sitios a la lista (sólo se puede añadir, nunca quitar). No hay ninguna acción de

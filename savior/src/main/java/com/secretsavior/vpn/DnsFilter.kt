@@ -33,6 +33,16 @@ object DnsFilter {
         "trafficjunky.net", "ero-advertising.com", "adultfriendfinder.com", "literotica.com",
     )
 
+    /**
+     * X (antes Twitter): mucho contenido para adultos sin ningún filtro, y no hay
+     * forma de usarla sin verlo. Se bloquea entera, con sus dominios de medios y
+     * acortador, para que tampoco funcione desde el navegador.
+     */
+    private val socialBlocked = listOf(
+        "twitter.com", "x.com", "t.co", "twimg.com", "twttr.com", "twitter.map.fastly.net",
+        "pscp.tv", "periscope.tv", "vine.co",
+    )
+
     /** Palabras sueltas (separadas por . o -) que sólo aparecen en sitios para adultos. */
     private val blockedTokens = setOf(
         "sex", "sexo", "xxx", "porno", "nude", "nudes", "nsfw", "milf", "camgirls", "sexcams",
@@ -69,6 +79,7 @@ object DnsFilter {
         if (matches(name, allowed)) return false
         if (matches(name, extra)) return true
         if (matches(name, blockedDomains)) return true
+        if (matches(name, socialBlocked)) return true
         if (matches(name, encryptedDns)) return true
         if (name.substringAfterLast('.') in blockedTlds) return true
         val tokens = name.split('.', '-')
