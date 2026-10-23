@@ -229,7 +229,7 @@ class GuardService : AccessibilityService() {
             // cerrarlo: sólo la pantalla que ofrece desinstalar, parar o borrar sus datos.
             if (Status.isAdminActive(this)) {
                 val seen = scan(root)
-                if (seen.ours && seen.uninstall) block(countIt = false) else refreshShield(root)
+                if (seen.ours && seen.uninstall) block(countIt = false) else watchVendorScreen(root)
             }
             return
         }
@@ -265,21 +265,40 @@ class GuardService : AccessibilityService() {
     private var shield: View? = null
     private var shieldQueued = false
     private var lastShieldToast = 0L
-    private val shieldRefresh = Runnable {
+    private var shieldAttempts = 0
+    private val shieldRefresh: Runnable = Runnable {
         shieldQueued = false
         val root = activeRoot(prefetch = true)
         val pkg = root?.packageName?.toString()
         if (root != null && pkg != null && isVendorSurface(pkg) && Store.isLocked(this)) refreshShield(root) else hideShield()
+        // La lista suele cargar un instante después de abrirse la pantalla: se reintenta unas
+        // veces antes de darse por vencido. Una vez en modo AUTOSTART ya llegan los eventos.
+        if (mode != MODE_AUTOSTART && shieldAttempts > 0 && pkg != null && isVendorSurface(pkg)) {
+            shieldAttempts--
+            shieldQueued = true
+            handler.postDelayed(shieldRefresh, SHIELD_RETRY_MS)
+        }
+    }
+
+    /** Al abrirse una pantalla de la app de seguridad: mirarla ya y reintentar a medida que cargue. */
+    private fun watchVendorScreen(root: AccessibilityNodeInfo) {
+        refreshShield(root)
+        if (mode == MODE_AUTOSTART || shieldQueued) return
+        shieldAttempts = SHIELD_ATTEMPTS
+        shieldQueued = true
+        handler.postDelayed(shieldRefresh, SHIELD_RETRY_MS)
     }
 
     private fun refreshShield(root: AccessibilityNodeInfo) {
         // ¿Es la pantalla de autoinicio? Entonces se piden los eventos que hacen falta para
         // seguir la lista; si no, se vuelve al modo ligero.
-        val onAutostart = AUTOSTART_TITLES.any { root.findAccessibilityNodeInfosByText(it).isNotEmpty() }
+        val ours = root.findAccessibilityNodeInfosByText("Secret Savior")
+        val onAutostart = ours.isNotEmpty() &&
+            AUTOSTART_TITLES.any { root.findAccessibilityNodeInfosByText(it).isNotEmpty() }
         setMode(if (onAutostart) MODE_AUTOSTART else MODE_VENDOR)
         if (!onAutostart) return
 
-        for (label in root.findAccessibilityNodeInfosByText("Secret Savior")) {
+        for (label in ours) {
             val (row, sw) = rowOf(label) ?: continue
             if (!sw.isChecked) continue // apagado: no hay nada que proteger, y así se puede encender
             Store.setAutostartSeen(this)
@@ -374,7 +393,7 @@ class GuardService : AccessibilityService() {
         stack.add(root)
         while (stack.isNotEmpty() && budget-- > 0) {
             val n = stack.removeLast()
-            if (n.isCheckable) return n
+            if (n.isCheckable || SWITCH_CLASSES.any { n.className?.toString()?.lowercase()?.contains(it) == true }) return n
             for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
         }
         return null
@@ -498,10 +517,18 @@ class GuardService : AccessibilityService() {
         const val MODE_VENDOR = 2
         const val MODE_AUTOSTART = 3
         const val SHIELD_DELAY_MS = 120L
+        const val SHIELD_RETRY_MS = 450L
+        const val SHIELD_ATTEMPTS = 6
         const val RESTORE_GAP_MS = 1_500L
 
         /** Cómo se titula la pantalla de autoinicio en la app de seguridad del fabricante. */
-        val AUTOSTART_TITLES = listOf("autoinicio", "autostart", "inicio automático", "auto-start")
+        val AUTOSTART_TITLES = listOf(
+            "autoinicio", "autoencendido", "autostart", "auto-start", "inicio automático",
+            "segundo plano", "background",
+        )
+
+        /** Las clases de interruptor propias de cada fabricante (Xiaomi usa SlidingButton). */
+        val SWITCH_CLASSES = listOf("switch", "slidingbutton", "toggle", "checkbox")
         const val EVENTS_WATCHING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         val NEUTRAL_HINTS = listOf("inputmethod", "keyboard", "swiftkey", "com.baidu.input", "honeyboard")
