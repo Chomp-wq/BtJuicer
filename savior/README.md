@@ -68,7 +68,10 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   pantalla se piden eventos de contenido y desplazamiento y se recoloca la capa cada
   250 ms (al encender o apagar otra app la lista se reordena con una animación que no
   avisa al terminar); si la fila no se encuentra un instante, la capa se queda donde
-  estaba. En el resto de la app de seguridad no se hace nada de esto. Efecto lateral: no se puede arrastrar la
+  estaba. Además, en cuanto se toca cualquier otra fila se tapa **toda la lista** durante
+  0,7 s, sin consultar nada, y sólo cuando se asienta vuelve a taparse la fila: así,
+  tocando muy rápido, no hay un hueco en el que la fila de esta app se esté moviendo
+  sin cubrir (a cambio, justo después de cada toque hay que esperar unos instantes). En el resto de la app de seguridad no se hace nada de esto. Efecto lateral: no se puede arrastrar la
   lista empezando justo sobre esa fila. Si el autoinicio estaba apagado, la capa no
   aparece, para poder encenderlo. Pensado para Xiaomi; en otras marcas depende de cómo
   nombre y dibuje la pantalla.

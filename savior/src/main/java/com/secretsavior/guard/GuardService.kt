@@ -126,9 +126,17 @@ class GuardService : AccessibilityService() {
         if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             // Sólo en la pantalla de autoinicio (modo AUTOSTART) llegan estos eventos, y sirven
             // para que la capa que tapa la fila de esta app la siga al desplazar la lista.
-            if (mode == MODE_AUTOSTART && !shieldQueued) {
-                shieldQueued = true
-                handler.postDelayed(shieldRefresh, SHIELD_DELAY_MS)
+            if (mode == MODE_AUTOSTART) {
+                val tapped = type == AccessibilityEvent.TYPE_VIEW_CLICKED
+                // Un toque en otra fila reordena la lista con una animación y esta app se
+                // mueve con ella. Se tapa TODA la lista de inmediato (sin consultar nada) y sólo
+                // cuando se asienta vuelve a taparse la fila: así no hay hueco al tocar rápido.
+                if (tapped) coverList()
+                if (tapped || !shieldQueued) {
+                    handler.removeCallbacks(shieldRefresh)
+                    shieldQueued = true
+                    handler.postDelayed(shieldRefresh, if (tapped) SHIELD_FAST_MS else SHIELD_DELAY_MS)
+                }
             }
             return
         }
@@ -188,7 +196,8 @@ class GuardService : AccessibilityService() {
             // La app de seguridad del fabricante: nada de cambios de contenido, que frenan el
             // optimizador. Sólo en su pantalla de autoinicio se piden, para que la capa siga la lista.
             MODE_AUTOSTART -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_SCROLLED
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_SCROLLED or
+                AccessibilityEvent.TYPE_VIEW_CLICKED
             else -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         }
         serviceInfo = info
@@ -277,7 +286,8 @@ class GuardService : AccessibilityService() {
             // al terminar: los eventos no bastan. Mientras se esté en esta pantalla se vuelve a
             // colocar la capa cada pocos cientos de milisegundos.
             shieldQueued = true
-            handler.postDelayed(shieldRefresh, SHIELD_POLL_MS)
+            val covering = SystemClock.elapsedRealtime() < coverUntil
+            handler.postDelayed(shieldRefresh, if (covering) SHIELD_FAST_MS else SHIELD_POLL_MS)
         } else if (shieldAttempts > 0) {
             // La lista suele cargar un instante después de abrirse la pantalla.
             shieldAttempts--
@@ -313,13 +323,15 @@ class GuardService : AccessibilityService() {
                 return
             }
             Store.setAutostartSeen(this)
+            listRect = listBounds(row)
             val rect = Rect()
             val box = if (row.heightPx() in 1..maxRowPx()) row else sw
             box.getBoundsInScreen(rect)
             if (box === sw) rect.inset(-dp(16), -dp(16))
             if (!rect.isEmpty) {
                 misses = 0
-                showShield(rect)
+                // Mientras la lista se mueve, toda la lista; cuando se asienta, sólo la fila.
+                showShield(if (SystemClock.elapsedRealtime() < coverUntil) listRect ?: fallbackList() else rect)
                 return
             }
         }
@@ -332,6 +344,30 @@ class GuardService : AccessibilityService() {
     }
 
     private var misses = 0
+    private var listRect: Rect? = null
+    private var coverUntil = 0L
+
+    /** Tapa ya toda la lista durante [COVER_MS]; no consulta nada, así que no hay espera. */
+    private fun coverList() {
+        coverUntil = SystemClock.elapsedRealtime() + COVER_MS
+        showShield(listRect ?: fallbackList())
+    }
+
+    /** El contenedor desplazable que contiene la fila; si no se encuentra, el 80 % inferior de la pantalla. */
+    private fun listBounds(row: AccessibilityNodeInfo): Rect? {
+        var n: AccessibilityNodeInfo? = row.parent
+        repeat(8) {
+            val cur = n ?: return null
+            if (cur.isScrollable) return Rect().also { cur.getBoundsInScreen(it) }.takeIf { !it.isEmpty }
+            n = cur.parent
+        }
+        return null
+    }
+
+    private fun fallbackList(): Rect {
+        val m = resources.displayMetrics
+        return Rect(0, m.heightPixels / 5, m.widthPixels, m.heightPixels)
+    }
 
     private fun showShield(r: Rect) {
         try {
@@ -515,6 +551,8 @@ class GuardService : AccessibilityService() {
         const val SHIELD_DELAY_MS = 120L
         const val SHIELD_RETRY_MS = 450L
         const val SHIELD_POLL_MS = 250L
+        const val SHIELD_FAST_MS = 60L
+        const val COVER_MS = 700L
         const val MISS_LIMIT = 6
         const val SHIELD_ATTEMPTS = 6
 
