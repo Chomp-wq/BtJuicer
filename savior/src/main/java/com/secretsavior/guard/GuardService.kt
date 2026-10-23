@@ -271,9 +271,15 @@ class GuardService : AccessibilityService() {
         val root = activeRoot(prefetch = true)
         val pkg = root?.packageName?.toString()
         if (root != null && pkg != null && isVendorSurface(pkg) && Store.isLocked(this)) refreshShield(root) else hideShield()
-        // La lista suele cargar un instante después de abrirse la pantalla: se reintenta unas
-        // veces antes de darse por vencido. Una vez en modo AUTOSTART ya llegan los eventos.
-        if (mode != MODE_AUTOSTART && shieldAttempts > 0 && pkg != null && isVendorSurface(pkg)) {
+        if (pkg == null || !isVendorSurface(pkg)) return@Runnable
+        if (mode == MODE_AUTOSTART) {
+            // Al encender o apagar otra app la lista se reordena con una animación que no avisa
+            // al terminar: los eventos no bastan. Mientras se esté en esta pantalla se vuelve a
+            // colocar la capa cada pocos cientos de milisegundos.
+            shieldQueued = true
+            handler.postDelayed(shieldRefresh, SHIELD_POLL_MS)
+        } else if (shieldAttempts > 0) {
+            // La lista suele cargar un instante después de abrirse la pantalla.
             shieldAttempts--
             shieldQueued = true
             handler.postDelayed(shieldRefresh, SHIELD_RETRY_MS)
@@ -300,31 +306,32 @@ class GuardService : AccessibilityService() {
 
         for (label in ours) {
             val (row, sw) = rowOf(label) ?: continue
-            if (!sw.isChecked) continue // apagado: no hay nada que proteger, y así se puede encender
+            if (!sw.isChecked) {
+                // Apagado de verdad: no hay nada que proteger, y así se puede volver a encender.
+                misses = 0
+                hideShield()
+                return
+            }
             Store.setAutostartSeen(this)
             val rect = Rect()
             val box = if (row.heightPx() in 1..maxRowPx()) row else sw
             box.getBoundsInScreen(rect)
             if (box === sw) rect.inset(-dp(16), -dp(16))
             if (!rect.isEmpty) {
+                misses = 0
                 showShield(rect)
                 return
             }
         }
-        hideShield()
-        // Respaldo: si por lo que sea quedó apagado tras haberlo visto encendido, reencenderlo.
-        if (!Store.autostartSeen(this)) return
-        for (label in root.findAccessibilityNodeInfosByText("Secret Savior")) {
-            val (_, sw) = rowOf(label) ?: continue
-            if (sw.isChecked) continue
-            val now = SystemClock.elapsedRealtime()
-            if (now - lastRestore < RESTORE_GAP_MS) return
-            lastRestore = now
-            clickUp(sw)
+        // No se encuentra la fila: suele ser un instante, a mitad de la animación de reordenar.
+        // La capa se queda donde estaba; sólo se quita si falta varias veces seguidas.
+        if (++misses >= MISS_LIMIT) {
+            misses = 0
+            hideShield()
         }
     }
 
-    private var lastRestore = 0L
+    private var misses = 0
 
     private fun showShield(r: Rect) {
         try {
@@ -397,17 +404,6 @@ class GuardService : AccessibilityService() {
             for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
         }
         return null
-    }
-
-    /** Pulsa el interruptor, o el primer ancestro pulsable si el interruptor no lo es. */
-    private fun clickUp(node: AccessibilityNodeInfo): Boolean {
-        var n: AccessibilityNodeInfo? = node
-        repeat(4) {
-            val cur = n ?: return false
-            if (cur.isClickable && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
-            n = cur.parent
-        }
-        return false
     }
 
     private fun AccessibilityNodeInfo.heightPx(): Int = Rect().also { getBoundsInScreen(it) }.height()
@@ -518,8 +514,9 @@ class GuardService : AccessibilityService() {
         const val MODE_AUTOSTART = 3
         const val SHIELD_DELAY_MS = 120L
         const val SHIELD_RETRY_MS = 450L
+        const val SHIELD_POLL_MS = 250L
+        const val MISS_LIMIT = 6
         const val SHIELD_ATTEMPTS = 6
-        const val RESTORE_GAP_MS = 1_500L
 
         /** Cómo se titula la pantalla de autoinicio en la app de seguridad del fabricante. */
         val AUTOSTART_TITLES = listOf(

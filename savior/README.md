@@ -65,8 +65,10 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   reencenderlo después. Por eso, en la pantalla de autoinicio, si el de Secret Savior
   está encendido, el guardián pone sobre su fila una capa transparente (ventana de
   accesibilidad) que se traga los toques; el resto de filas quedan libres. Sólo en esa
-  pantalla se piden eventos de contenido y desplazamiento, para que la capa siga a la
-  fila; en el resto de la app de seguridad no. Efecto lateral: no se puede arrastrar la
+  pantalla se piden eventos de contenido y desplazamiento y se recoloca la capa cada
+  250 ms (al encender o apagar otra app la lista se reordena con una animación que no
+  avisa al terminar); si la fila no se encuentra un instante, la capa se queda donde
+  estaba. En el resto de la app de seguridad no se hace nada de esto. Efecto lateral: no se puede arrastrar la
   lista empezando justo sobre esa fila. Si el autoinicio estaba apagado, la capa no
   aparece, para poder encenderlo. Pensado para Xiaomi; en otras marcas depende de cómo
   nombre y dibuje la pantalla.
