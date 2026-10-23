@@ -1,10 +1,17 @@
 package com.secretsavior.guard
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.util.Log
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
@@ -68,7 +75,8 @@ class GuardService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         handler.removeCallbacks(deferred)
-        handler.removeCallbacks(autostartCheck)
+        handler.removeCallbacks(shieldRefresh)
+        hideShield()
         super.onDestroy()
     }
 
@@ -116,14 +124,15 @@ class GuardService : AccessibilityService() {
         // contenido sin parar mientras analizan o limpian. Se miran sólo al abrir una pantalla
         // nueva, nunca durante el trabajo: si no, se las frena justo cuando más lo necesitan.
         if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
-            // De todo lo que ocurre ahí sólo importa un toque: puede ser el del interruptor de
-            // autoinicio de esta app. Se mira un instante después, cuando el interruptor ya cambió.
-            if (type == AccessibilityEvent.TYPE_VIEW_CLICKED && !autostartQueued) {
-                autostartQueued = true
-                handler.postDelayed(autostartCheck, AUTOSTART_DELAY_MS)
+            // Sólo en la pantalla de autoinicio (modo AUTOSTART) llegan estos eventos, y sirven
+            // para que la capa que tapa la fila de esta app la siga al desplazar la lista.
+            if (mode == MODE_AUTOSTART && !shieldQueued) {
+                shieldQueued = true
+                handler.postDelayed(shieldRefresh, SHIELD_DELAY_MS)
             }
             return
         }
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && !isVendorSurface(pkg)) hideShield()
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             handler.removeCallbacks(deferred)
@@ -176,12 +185,14 @@ class GuardService : AccessibilityService() {
         val info = serviceInfo ?: return
         info.eventTypes = when (newMode) {
             MODE_WATCH -> EVENTS_WATCHING
-            // Las apps de seguridad del fabricante: nada de cambios de contenido (frenan el
-            // optimizador), pero sí los toques, para vigilar el interruptor de autoinicio.
-            MODE_VENDOR -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_VIEW_CLICKED
+            // La app de seguridad del fabricante: nada de cambios de contenido, que frenan el
+            // optimizador. Sólo en su pantalla de autoinicio se piden, para que la capa siga la lista.
+            MODE_AUTOSTART -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_SCROLLED
             else -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         }
         serviceInfo = info
+        if (newMode != MODE_AUTOSTART) hideShield()
         mode = newMode
     }
 
@@ -218,7 +229,7 @@ class GuardService : AccessibilityService() {
             // cerrarlo: sólo la pantalla que ofrece desinstalar, parar o borrar sus datos.
             if (Status.isAdminActive(this)) {
                 val seen = scan(root)
-                if (seen.ours && seen.uninstall) block(countIt = false) else keepAutostart(root)
+                if (seen.ours && seen.uninstall) block(countIt = false) else refreshShield(root)
             }
             return
         }
@@ -245,41 +256,114 @@ class GuardService : AccessibilityService() {
 
     // --- Autoinicio ----------------------------------------------------------------
 
-    private var autostartQueued = false
-    private var lastRestore = 0L
-    private val autostartCheck = Runnable {
-        autostartQueued = false
-        val root = activeRoot(prefetch = true) ?: return@Runnable
-        val pkg = root.packageName?.toString() ?: return@Runnable
-        if (isVendorSurface(pkg) && Store.isLocked(this)) keepAutostart(root)
+    /**
+     * En Xiaomi, apagar el autoinicio de una app la mata al instante y Android desactiva
+     * entonces su servicio de accesibilidad: no hay tiempo de reencender nada después. Por
+     * eso se impide el toque: sobre la fila de esta app se pone una capa transparente que se
+     * lo traga. El resto de filas de la lista quedan libres.
+     */
+    private var shield: View? = null
+    private var shieldQueued = false
+    private var lastShieldToast = 0L
+    private val shieldRefresh = Runnable {
+        shieldQueued = false
+        val root = activeRoot(prefetch = true)
+        val pkg = root?.packageName?.toString()
+        if (root != null && pkg != null && isVendorSurface(pkg) && Store.isLocked(this)) refreshShield(root) else hideShield()
     }
 
-    /**
-     * Una vez visto el autoinicio de esta app encendido, no se deja apagar: si en la lista
-     * de la app de seguridad su interruptor aparece apagado, se vuelve a encender. El resto
-     * de apps de la lista no se tocan. Si no se logra reencender, se cierra la pantalla.
-     */
-    private fun keepAutostart(root: AccessibilityNodeInfo) {
+    private fun refreshShield(root: AccessibilityNodeInfo) {
+        // ¿Es la pantalla de autoinicio? Entonces se piden los eventos que hacen falta para
+        // seguir la lista; si no, se vuelve al modo ligero.
+        val onAutostart = AUTOSTART_TITLES.any { root.findAccessibilityNodeInfosByText(it).isNotEmpty() }
+        setMode(if (onAutostart) MODE_AUTOSTART else MODE_VENDOR)
+        if (!onAutostart) return
+
         for (label in root.findAccessibilityNodeInfosByText("Secret Savior")) {
-            val sw = rowSwitch(label) ?: continue
-            if (sw.isChecked) {
-                Store.setAutostartSeen(this)
-                continue
+            val (row, sw) = rowOf(label) ?: continue
+            if (!sw.isChecked) continue // apagado: no hay nada que proteger, y así se puede encender
+            Store.setAutostartSeen(this)
+            val rect = Rect()
+            val box = if (row.heightPx() in 1..maxRowPx()) row else sw
+            box.getBoundsInScreen(rect)
+            if (box === sw) rect.inset(-dp(16), -dp(16))
+            if (!rect.isEmpty) {
+                showShield(rect)
+                return
             }
-            if (!Store.autostartSeen(this)) continue // nunca estuvo activo: no hay nada que mantener
+        }
+        hideShield()
+        // Respaldo: si por lo que sea quedó apagado tras haberlo visto encendido, reencenderlo.
+        if (!Store.autostartSeen(this)) return
+        for (label in root.findAccessibilityNodeInfosByText("Secret Savior")) {
+            val (_, sw) = rowOf(label) ?: continue
+            if (sw.isChecked) continue
             val now = SystemClock.elapsedRealtime()
-            if (now - lastRestore < RESTORE_GAP_MS) continue
+            if (now - lastRestore < RESTORE_GAP_MS) return
             lastRestore = now
-            if (!clickUp(sw)) block(countIt = false)
+            clickUp(sw)
         }
     }
 
-    /** El interruptor de la fila: el que cuelga del ancestro más bajo que contenga alguno. */
-    private fun rowSwitch(label: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+    private var lastRestore = 0L
+
+    private fun showShield(r: Rect) {
+        try {
+            val wm = getSystemService(WINDOW_SERVICE) as WindowManager
+            val lp = WindowManager.LayoutParams(
+                r.width(), r.height(), WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT,
+            ).apply {
+                gravity = Gravity.TOP or Gravity.START
+                x = r.left
+                y = r.top
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+                }
+            }
+            val v = shield
+            if (v == null) {
+                val nv = View(this)
+                nv.setOnTouchListener { _, e ->
+                    if (e.actionMasked == MotionEvent.ACTION_DOWN) {
+                        val now = SystemClock.elapsedRealtime()
+                        if (now - lastShieldToast > TOAST_MS) {
+                            lastShieldToast = now
+                            Toast.makeText(this, "Secret Savior: el autoinicio no se puede apagar.", Toast.LENGTH_SHORT).show()
+                        }
+                    }
+                    true // se traga el toque: el interruptor de abajo no llega a enterarse
+                }
+                wm.addView(nv, lp)
+                shield = nv
+            } else {
+                wm.updateViewLayout(v, lp)
+            }
+        } catch (e: Exception) {
+            Log.w("SecretSavior", "capa de autoinicio", e)
+        }
+    }
+
+    private fun hideShield() {
+        val v = shield ?: return
+        shield = null
+        try {
+            (getSystemService(WINDOW_SERVICE) as WindowManager).removeView(v)
+        } catch (e: Exception) {
+            // ya no estaba
+        }
+    }
+
+    /** La fila (el ancestro más bajo con algún interruptor) y su interruptor. */
+    private fun rowOf(label: AccessibilityNodeInfo): Pair<AccessibilityNodeInfo, AccessibilityNodeInfo>? {
         var n: AccessibilityNodeInfo? = label
         repeat(6) {
-            n = n?.parent ?: return null
-            firstCheckable(n!!)?.let { return it }
+            val parent = n?.parent ?: return null
+            n = parent
+            firstCheckable(parent)?.let { return parent to it }
         }
         return null
     }
@@ -306,6 +390,13 @@ class GuardService : AccessibilityService() {
         }
         return false
     }
+
+    private fun AccessibilityNodeInfo.heightPx(): Int = Rect().also { getBoundsInScreen(it) }.height()
+
+    /** Una fila de lista mide poco; si el "ancestro" ocupa media pantalla, no es la fila. */
+    private fun maxRowPx() = resources.displayMetrics.heightPixels / 5
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     private fun isSystemSurface(pkg: String): Boolean =
         SYSTEM_SURFACES.any { pkg.contains(it) } || isVendorSurface(pkg)
@@ -405,8 +496,12 @@ class GuardService : AccessibilityService() {
         const val MODE_OFF = 0
         const val MODE_WATCH = 1
         const val MODE_VENDOR = 2
-        const val AUTOSTART_DELAY_MS = 350L
+        const val MODE_AUTOSTART = 3
+        const val SHIELD_DELAY_MS = 120L
         const val RESTORE_GAP_MS = 1_500L
+
+        /** Cómo se titula la pantalla de autoinicio en la app de seguridad del fabricante. */
+        val AUTOSTART_TITLES = listOf("autoinicio", "autostart", "inicio automático", "auto-start")
         const val EVENTS_WATCHING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         val NEUTRAL_HINTS = listOf("inputmethod", "keyboard", "swiftkey", "com.baidu.input", "honeyboard")

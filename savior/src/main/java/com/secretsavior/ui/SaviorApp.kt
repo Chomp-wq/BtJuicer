@@ -327,8 +327,8 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                     Text("Xiaomi / Redmi / POCO:", fontWeight = FontWeight.Bold)
                     OutlinedButton(onClick = a::openAutostart) { Text("Activar «Autoinicio»") }
                     Text(
-                        "Una vez activado, no se puede volver a apagar: si alguien lo desactiva para " +
-                            "esta app, se reactiva solo. El del resto de apps no se toca.",
+                        "Una vez activado, no se puede volver a apagar: sobre su interruptor aparece una " +
+                            "capa invisible que se traga el toque. El del resto de apps queda libre.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(
