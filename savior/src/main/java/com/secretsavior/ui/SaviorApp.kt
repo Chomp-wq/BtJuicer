@@ -79,12 +79,14 @@ private data class Snapshot(
     val admin: Boolean,
     val dnsStrict: Boolean,
     val battery: Boolean,
+    /** Xiaomi/Redmi/POCO: el autoencendido de la app se vio activado. En otras marcas no se pide. */
+    val autostart: Boolean,
     val days: Long,
     val since: Long,
     val blocked: Int,
     val dnsMs: Long?,
 ) {
-    val ready get() = vpn && guard && admin && !dnsStrict
+    val ready get() = vpn && guard && admin && !dnsStrict && autostart
 }
 
 private fun read(c: Context) = Snapshot(
@@ -94,11 +96,14 @@ private fun read(c: Context) = Snapshot(
     admin = Status.isAdminActive(c),
     dnsStrict = Status.isPrivateDnsStrict(c),
     battery = Status.isBatteryExempt(c),
+    autostart = !isXiaomiFamily() || Store.autostartSeen(c),
     days = Store.daysLocked(c),
     since = Store.lockedAt(c),
     blocked = Store.blockedCount(c),
     dnsMs = SaviorVpnService.dnsAverageMs,
 )
+
+private fun isXiaomiFamily() = Build.MANUFACTURER.lowercase() in setOf("xiaomi", "redmi", "poco")
 
 @Composable
 fun SaviorApp(actions: Actions) {
@@ -189,6 +194,15 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
             },
         ) { if (s.dnsStrict) Button(onClick = a::openNetworkSettings) { Text("Abrir ajustes de red") } }
 
+        if (isXiaomiFamily()) {
+            Step(
+                "5. Autoencendido (Xiaomi)", s.autostart,
+                "Abre la pantalla y comprueba que Secret Savior está activado: la app lo detecta " +
+                    "sola (necesita el paso 2). Una vez bloqueado, esa pantalla se cierra para " +
+                    "siempre, así que cambia antes el autoencendido de tus otras apps.",
+            ) { Button(onClick = a::openAutostart) { Text("Abrir autoencendido") } }
+        }
+
         if (!s.battery) {
             Step(
                 "Opcional: que no lo duerman", false,
@@ -267,7 +281,7 @@ private fun Step(title: String, done: Boolean, text: String, action: @Composable
 @Composable
 private fun LockedScreen(s: Snapshot, a: Actions) {
     val context = LocalContext.current
-    val isXiaomi = Build.MANUFACTURER.lowercase() in setOf("xiaomi", "redmi", "poco")
+    val isXiaomi = isXiaomiFamily()
     var urge by remember { mutableStateOf(false) }
     var reason by remember { mutableStateOf(Store.reason(context)) }
     var domain by remember { mutableStateOf("") }
@@ -324,11 +338,9 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                 )
                 StatusRow("Sin ahorro de batería", s.battery, a::exemptBattery)
                 if (isXiaomi) {
-                    Text("Xiaomi / Redmi / POCO:", fontWeight = FontWeight.Bold)
-                    OutlinedButton(onClick = a::openAutostart) { Text("Activar «Autoinicio»") }
                     Text(
-                        "Una vez activado, no se puede volver a apagar: sobre su interruptor aparece una " +
-                            "capa invisible que se traga el toque. El del resto de apps queda libre.",
+                        "Xiaomi / Redmi / POCO: el autoencendido de esta app queda fijado, y su pantalla " +
+                            "de ajustes se cierra mientras dure el bloqueo.",
                         style = MaterialTheme.typography.bodySmall,
                     )
                     Text(

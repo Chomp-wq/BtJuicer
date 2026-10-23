@@ -60,21 +60,15 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   ventana, y las apps dejan de construir un evento por cada cosa que se mueve en
   pantalla. Los cambios de contenido y el texto escrito se piden sólo con un
   navegador, un buscador, Telegram, Reddit o Ajustes delante.
-- **El autoinicio no se puede apagar.** En Xiaomi, apagar el autoinicio de una app la
-  mata al instante y Android desactiva su accesibilidad, así que no hay tiempo de
-  reencenderlo después. Por eso, en la pantalla de autoinicio, si el de Secret Savior
-  está encendido, el guardián pone sobre su fila una capa transparente (ventana de
-  accesibilidad) que se traga los toques; el resto de filas quedan libres. Sólo en esa
-  pantalla se piden eventos de contenido y desplazamiento y se recoloca la capa cada
-  250 ms (al encender o apagar otra app la lista se reordena con una animación que no
-  avisa al terminar); si la fila no se encuentra un instante, la capa se queda donde
-  estaba. Además, en cuanto se toca cualquier otra fila se tapa **toda la lista** durante
-  0,7 s, sin consultar nada, y sólo cuando se asienta vuelve a taparse la fila: así,
-  tocando muy rápido, no hay un hueco en el que la fila de esta app se esté moviendo
-  sin cubrir (a cambio, justo después de cada toque hay que esperar unos instantes). En el resto de la app de seguridad no se hace nada de esto. Efecto lateral: no se puede arrastrar la
-  lista empezando justo sobre esa fila. Si el autoinicio estaba apagado, la capa no
-  aparece, para poder encenderlo. Pensado para Xiaomi; en otras marcas depende de cómo
-  nombre y dibuje la pantalla.
+- **El autoencendido, fijado.** En Xiaomi, apagar el autoencendido de una app la detiene
+  a la fuerza y Android desactiva su accesibilidad: no hay forma de reencenderlo después.
+  Se probó tapar el interruptor con una capa transparente, pero la lista se reordena con
+  una animación y tocando rápido se ganaba la carrera. Por eso: la configuración inicial
+  exige abrir la pantalla de autoencendido y comprobar que Secret Savior está activado
+  (el guardián lo detecta solo), y con el bloqueo activo esa pantalla se cierra entera
+  cada vez que se abre. Consecuencia: no se puede gestionar desde ahí el autoencendido
+  de otras apps; hay que hacerlo antes de activar. En otras marcas no se pide ni se cierra
+  nada.
 - **Las apps de seguridad del fabricante no se frenan.** Las de optimización
   (Seguridad de Xiaomi, Device Care de Samsung...) cambian de contenido sin parar
   mientras analizan o limpian. El guardián sólo las mira al abrirse una pantalla nueva
