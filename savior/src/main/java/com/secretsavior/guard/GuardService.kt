@@ -42,7 +42,7 @@ class GuardService : AccessibilityService() {
      * Con una app no vigilada delante se piden sólo los cambios de ventana; así WhatsApp, un
      * juego o Instagram no construyen un evento por cada cosa que se mueve en pantalla.
      */
-    private var watching: Boolean? = null
+    private var mode = -1
     private var foreground: String? = null
 
     /** Qué id tiene la barra de direcciones de cada navegador, una vez averiguado. */
@@ -58,9 +58,9 @@ class GuardService : AccessibilityService() {
 
     override fun onServiceConnected() {
         // No se sabe qué hay delante: se empieza mirando todo y el primer cambio de ventana afina.
-        watching = null
+        mode = -1
         foreground = null
-        setWatching(true)
+        setMode(MODE_WATCH)
         handler.removeCallbacks(tick)
         handler.post(tick)
     }
@@ -68,6 +68,7 @@ class GuardService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         handler.removeCallbacks(deferred)
+        handler.removeCallbacks(autostartCheck)
         super.onDestroy()
     }
 
@@ -96,7 +97,7 @@ class GuardService : AccessibilityService() {
         if (pkg == packageName) return
         val type = event.eventType
         if (!Store.isLocked(this)) {
-            setWatching(false)
+            setMode(MODE_OFF)
             return
         }
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) noteForeground(pkg)
@@ -114,7 +115,15 @@ class GuardService : AccessibilityService() {
         // Las apps de seguridad/optimización del fabricante (Xiaomi, Samsung...) cambian de
         // contenido sin parar mientras analizan o limpian. Se miran sólo al abrir una pantalla
         // nueva, nunca durante el trabajo: si no, se las frena justo cuando más lo necesitan.
-        if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            // De todo lo que ocurre ahí sólo importa un toque: puede ser el del interruptor de
+            // autoinicio de esta app. Se mira un instante después, cuando el interruptor ya cambió.
+            if (type == AccessibilityEvent.TYPE_VIEW_CLICKED && !autostartQueued) {
+                autostartQueued = true
+                handler.postDelayed(autostartCheck, AUTOSTART_DELAY_MS)
+            }
+            return
+        }
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             handler.removeCallbacks(deferred)
@@ -139,7 +148,7 @@ class GuardService : AccessibilityService() {
         val active = activeRoot(prefetch = false)?.packageName?.toString() ?: pkg
         if (active == packageName || isNeutral(active)) return
         foreground = active
-        setWatching(isWatched(active))
+        setMode(modeFor(active))
     }
 
     /**
@@ -153,18 +162,27 @@ class GuardService : AccessibilityService() {
             rootInActiveWindow
         }
 
-    private fun isWatched(pkg: String) =
-        pkg in BROWSERS || pkg in SEARCH_APPS || pkg in FEED_APPS || isSystemSurface(pkg)
+    private fun modeFor(pkg: String) = when {
+        isVendorSurface(pkg) -> MODE_VENDOR
+        pkg in BROWSERS || pkg in SEARCH_APPS || pkg in FEED_APPS || isSystemSurface(pkg) -> MODE_WATCH
+        else -> MODE_OFF
+    }
 
     /** La barra de notificaciones y los teclados: aparecen encima sin cambiar la app de debajo. */
     private fun isNeutral(pkg: String) = pkg == "com.android.systemui" || NEUTRAL_HINTS.any { pkg.contains(it) }
 
-    private fun setWatching(on: Boolean) {
-        if (watching == on) return
+    private fun setMode(newMode: Int) {
+        if (mode == newMode) return
         val info = serviceInfo ?: return
-        info.eventTypes = if (on) EVENTS_WATCHING else AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        info.eventTypes = when (newMode) {
+            MODE_WATCH -> EVENTS_WATCHING
+            // Las apps de seguridad del fabricante: nada de cambios de contenido (frenan el
+            // optimizador), pero sí los toques, para vigilar el interruptor de autoinicio.
+            MODE_VENDOR -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_VIEW_CLICKED
+            else -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
+        }
         serviceInfo = info
-        watching = on
+        mode = newMode
     }
 
     private fun onTyped(event: AccessibilityEvent, pkg: String) {
@@ -200,7 +218,7 @@ class GuardService : AccessibilityService() {
             // cerrarlo: sólo la pantalla que ofrece desinstalar, parar o borrar sus datos.
             if (Status.isAdminActive(this)) {
                 val seen = scan(root)
-                if (seen.ours && seen.uninstall) block(countIt = false)
+                if (seen.ours && seen.uninstall) block(countIt = false) else keepAutostart(root)
             }
             return
         }
@@ -223,6 +241,70 @@ class GuardService : AccessibilityService() {
         // Con DNS privado estricto los navegadores quedan cerrados (ver check); hay que
         // dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
         if (seen.privateDns && !Status.isPrivateDnsStrict(this)) block(countIt = false)
+    }
+
+    // --- Autoinicio ----------------------------------------------------------------
+
+    private var autostartQueued = false
+    private var lastRestore = 0L
+    private val autostartCheck = Runnable {
+        autostartQueued = false
+        val root = activeRoot(prefetch = true) ?: return@Runnable
+        val pkg = root.packageName?.toString() ?: return@Runnable
+        if (isVendorSurface(pkg) && Store.isLocked(this)) keepAutostart(root)
+    }
+
+    /**
+     * Una vez visto el autoinicio de esta app encendido, no se deja apagar: si en la lista
+     * de la app de seguridad su interruptor aparece apagado, se vuelve a encender. El resto
+     * de apps de la lista no se tocan. Si no se logra reencender, se cierra la pantalla.
+     */
+    private fun keepAutostart(root: AccessibilityNodeInfo) {
+        for (label in root.findAccessibilityNodeInfosByText("Secret Savior")) {
+            val sw = rowSwitch(label) ?: continue
+            if (sw.isChecked) {
+                Store.setAutostartSeen(this)
+                continue
+            }
+            if (!Store.autostartSeen(this)) continue // nunca estuvo activo: no hay nada que mantener
+            val now = SystemClock.elapsedRealtime()
+            if (now - lastRestore < RESTORE_GAP_MS) continue
+            lastRestore = now
+            if (!clickUp(sw)) block(countIt = false)
+        }
+    }
+
+    /** El interruptor de la fila: el que cuelga del ancestro más bajo que contenga alguno. */
+    private fun rowSwitch(label: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var n: AccessibilityNodeInfo? = label
+        repeat(6) {
+            n = n?.parent ?: return null
+            firstCheckable(n!!)?.let { return it }
+        }
+        return null
+    }
+
+    private fun firstCheckable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        var budget = 80
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(root)
+        while (stack.isNotEmpty() && budget-- > 0) {
+            val n = stack.removeLast()
+            if (n.isCheckable) return n
+            for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
+        }
+        return null
+    }
+
+    /** Pulsa el interruptor, o el primer ancestro pulsable si el interruptor no lo es. */
+    private fun clickUp(node: AccessibilityNodeInfo): Boolean {
+        var n: AccessibilityNodeInfo? = node
+        repeat(4) {
+            val cur = n ?: return false
+            if (cur.isClickable && cur.performAction(AccessibilityNodeInfo.ACTION_CLICK)) return true
+            n = cur.parent
+        }
+        return false
     }
 
     private fun isSystemSurface(pkg: String): Boolean =
@@ -320,6 +402,11 @@ class GuardService : AccessibilityService() {
 
     private companion object {
         const val PATROL_MS = 30_000L
+        const val MODE_OFF = 0
+        const val MODE_WATCH = 1
+        const val MODE_VENDOR = 2
+        const val AUTOSTART_DELAY_MS = 350L
+        const val RESTORE_GAP_MS = 1_500L
         const val EVENTS_WATCHING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         val NEUTRAL_HINTS = listOf("inputmethod", "keyboard", "swiftkey", "com.baidu.input", "honeyboard")

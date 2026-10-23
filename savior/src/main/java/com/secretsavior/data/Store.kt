@@ -100,6 +100,13 @@ object Store {
 
     fun inGrace(c: Context): Boolean = System.currentTimeMillis() < prefs(c).getLong("grace_until", 0L)
 
+    /** Se ha visto el autoinicio de la app encendido: desde entonces no se deja apagar. */
+    fun autostartSeen(c: Context): Boolean = prefs(c).getBoolean("autostart_seen", false)
+
+    fun setAutostartSeen(c: Context) {
+        if (!autostartSeen(c)) prefs(c).edit().putBoolean("autostart_seen", true).apply()
+    }
+
     /** Las razones propias, para leerlas justo cuando más falta hacen. */
     fun reason(c: Context): String = prefs(c).getString("reason", "").orEmpty()
 

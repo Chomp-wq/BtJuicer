@@ -60,6 +60,11 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   ventana, y las apps dejan de construir un evento por cada cosa que se mueve en
   pantalla. Los cambios de contenido y el texto escrito se piden sólo con un
   navegador, un buscador, Telegram, Reddit o Ajustes delante.
+- **El autoinicio no se puede apagar.** Cuando el guardián ve encendido el autoinicio
+  de Secret Savior en la app de seguridad del fabricante, vuelve a encenderlo si
+  alguien lo apaga (el del resto de apps no se toca). Sólo escucha los toques en esa
+  app, no los cambios de contenido. Está pensado para la pantalla de Xiaomi; en otras
+  marcas la lista puede ser distinta y, si no logra reencenderlo, cierra la pantalla.
 - **Las apps de seguridad del fabricante no se frenan.** Las de optimización
   (Seguridad de Xiaomi, Device Care de Samsung...) cambian de contenido sin parar
   mientras analizan o limpian. El guardián sólo las mira al abrirse una pantalla nueva
