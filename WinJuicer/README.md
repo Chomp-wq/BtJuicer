@@ -253,11 +253,18 @@ catálogo entero en ida y vuelta, el gestor de inicio, los ajustes por juego y
 las partes del diagnóstico que no dependen del hardware. El análisis estático
 comprueba que el código es válido en Windows PowerShell 5.1.
 
-En GitHub Actions corre además sobre Windows, en 5.1 y en 7, contra el registro
-y los servicios de verdad: aplica los tres niveles completos en la máquina del
-runner, lo deshace todo y comprueba que no queda rastro. Lo que esa máquina no
-tiene —una pantalla real, batería, Modern Standby, BitLocker— no se ha podido
-probar en ningún sitio, y es lo primero que conviene mirar en un PC de verdad.
+En GitHub Actions corre además sobre Windows Server 2025 (compilación 26100, la
+misma base que Windows 11 24H2), en 5.1 y en 7, contra el registro, los
+servicios, powercfg y bcdedit de verdad: aplica los tres niveles completos en la
+máquina del runner, lo deshace todo y comprueba que no queda rastro. Ahí se
+aplican 26 de los 34 ajustes; del resto, unos ya estaban como deben y otros no
+aplican a esa máquina.
+
+Lo que una máquina virtual no tiene no se ha podido probar en ningún sitio: una
+pantalla y una gráfica reales, batería y Modern Standby, BitLocker, y la
+hibernación (la VM no la admite, así que de «Inicio rápido» sólo se ha probado
+que, al fallar, deja todo como estaba). Es lo primero que conviene mirar en un PC
+de verdad, empezando por el diagnóstico, que no cambia nada.
 
 ## Pruebas
 
