@@ -257,8 +257,9 @@ En GitHub Actions corre además sobre Windows Server 2025 (compilación 26100, l
 misma base que Windows 11 24H2), en 5.1 y en 7, contra el registro, los
 servicios, powercfg y bcdedit de verdad: aplica los tres niveles completos en la
 máquina del runner, lo deshace todo y comprueba que no queda rastro. Ahí se
-aplican 26 de los 34 ajustes; del resto, unos ya estaban como deben y otros no
-aplican a esa máquina.
+aplican de verdad 22 de los 34 ajustes; otros diez ya estaban como deben, uno no
+aplica (el modo de energía, que es para Modern Standby) y otro falla a propósito
+de la máquina, como se explica abajo.
 
 Lo que una máquina virtual no tiene no se ha podido probar en ningún sitio: una
 pantalla y una gráfica reales, batería y Modern Standby, BitLocker, y la
