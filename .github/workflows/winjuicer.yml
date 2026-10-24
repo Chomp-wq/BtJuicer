@@ -41,25 +41,19 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shell: [powershell, pwsh]
+        powershell: ['5.1', '7']
+    env:
+      # La máquina del runner es desechable: aquí sí se prueba contra Windows de verdad.
+      WINJUICER_PRUEBAS_REALES: '1'
     steps:
       - uses: actions/checkout@v4
 
-      - name: Pester en ${{ matrix.shell }}
-        shell: ${{ matrix.shell }}
-        env:
-          # La máquina del runner es desechable: aquí sí se prueba contra Windows de verdad.
-          WINJUICER_PRUEBAS_REALES: '1'
-        run: |
-          $PSVersionTable.PSVersion.ToString()
-          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.5' })) {
-            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
-            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
-            Install-Module Pester -MinimumVersion 5.5 -Force -SkipPublisherCheck -Scope CurrentUser
-          }
-          Import-Module Pester -MinimumVersion 5.5
-          $c = New-PesterConfiguration
-          $c.Run.Path = 'WinJuicer/tests'
-          $c.Run.Exit = $true
-          $c.Output.Verbosity = 'Detailed'
-          Invoke-Pester -Configuration $c
+      - name: Pester en Windows PowerShell 5.1
+        if: matrix.powershell == '5.1'
+        shell: powershell
+        run: ./WinJuicer/tests/Invoke-Tests.ps1
+
+      - name: Pester en PowerShell 7
+        if: matrix.powershell == '7'
+        shell: pwsh
+        run: ./WinJuicer/tests/Invoke-Tests.ps1
