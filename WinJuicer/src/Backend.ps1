@@ -242,8 +242,12 @@ function Invoke-WinNative {
     # Windows PowerShell turns native stderr into terminating errors under
     # 'Stop'; tools like bcdedit write warnings there.
     $ErrorActionPreference = 'Continue'
-    $out = & $File @Arguments 2>&1 | ForEach-Object { "$_" }
-    [pscustomobject]@{ Code = $LASTEXITCODE; Output = ($out -join "`n") }
+    # stderr lines arrive as ErrorRecords; an empty one would print as its type
+    # name, so take the message and drop the blanks.
+    $out = & $File @Arguments 2>&1 | ForEach-Object {
+        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
+    } | Where-Object { $_ -match '\S' }
+    [pscustomobject]@{ Code = $LASTEXITCODE; Output = (@($out) -join "`n") }
 }
 
 function Get-WinDefenderExclusions {

@@ -1,6 +1,8 @@
 ﻿BeforeDiscovery {
     $root = Split-Path -Parent $PSScriptRoot
-    $script:Scripts = @(Get-ChildItem -LiteralPath $root -Recurse -File -Include '*.ps1', '*.psm1', '*.psd1' |
+    # (-Include is ignored with -LiteralPath in Windows PowerShell 5.1.)
+    $script:Scripts = @(Get-ChildItem -LiteralPath $root -Recurse -File |
+            Where-Object { $_.Extension -in '.ps1', '.psm1', '.psd1' } |
             ForEach-Object { @{ Path = $_.FullName; Name = $_.FullName.Substring($root.Length + 1) } })
 }
 

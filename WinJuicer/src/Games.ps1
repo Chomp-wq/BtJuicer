@@ -113,6 +113,6 @@ function Get-JuicerConfiguredGames {
 function Get-JuicerGpuCount {
     if (-not (Test-JuicerWindows)) { return 0 }
     @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | Where-Object {
-            $_.Name -notmatch 'Microsoft (Basic|Remote)|Virtual|Parsec|Citrix|Mirage|DisplayLink'
+            $_.Name -notmatch $script:VirtualGpuPattern
         }).Count
 }

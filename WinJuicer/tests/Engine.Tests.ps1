@@ -329,7 +329,9 @@ Describe 'Programas de inicio' {
     }
 
     It 'lee el estado igual que el Administrador de tareas' {
-        $items = @(Get-JuicerStartupItems)
+        # Only the registry entries the test wrote: on Windows the real startup
+        # folders and scheduled tasks are listed too.
+        $items = @(Get-JuicerStartupItems -NoTasks | Where-Object { $_.Kind -eq 'Registro' })
         $items.Count | Should -Be 2
         ($items | Where-Object { $_.Name -eq 'Discord' }).Enabled | Should -BeTrue
         ($items | Where-Object { $_.Name -eq 'Ya apagado' }).Enabled | Should -BeFalse
@@ -337,9 +339,9 @@ Describe 'Programas de inicio' {
 
     It 'desactivar y volver a activar no deja nada en el diario' {
         $before = Get-MachineSnapshot $m
-        $d = @(Get-JuicerStartupItems) | Where-Object { $_.Name -eq 'Discord' }
+        $d = @(Get-JuicerStartupItems -NoTasks) | Where-Object { $_.Name -eq 'Discord' }
         (Set-JuicerStartupItem $d $false).Outcome | Should -Be 'Aplicado'
-        $d = @(Get-JuicerStartupItems) | Where-Object { $_.Name -eq 'Discord' }
+        $d = @(Get-JuicerStartupItems -NoTasks) | Where-Object { $_.Name -eq 'Discord' }
         $d.Enabled | Should -BeFalse
         (Set-JuicerStartupItem $d $true).Outcome | Should -Be 'Deshecho'
         (Read-JuicerJournal).Count | Should -Be 0
@@ -348,9 +350,9 @@ Describe 'Programas de inicio' {
 
     It 'activar algo que ya estaba apagado se puede deshacer' {
         $before = Get-MachineSnapshot $m
-        $x = @(Get-JuicerStartupItems) | Where-Object { $_.Name -eq 'Ya apagado' }
+        $x = @(Get-JuicerStartupItems -NoTasks) | Where-Object { $_.Name -eq 'Ya apagado' }
         (Set-JuicerStartupItem $x $true).Outcome | Should -Be 'Aplicado'
-        (@(Get-JuicerStartupItems) | Where-Object { $_.Name -eq 'Ya apagado' }).Enabled | Should -BeTrue
+        (@(Get-JuicerStartupItems -NoTasks) | Where-Object { $_.Name -eq 'Ya apagado' }).Enabled | Should -BeTrue
         [void](Undo-JuicerTweak "inicio-on:$($x.Id)")
         Get-MachineSnapshot $m | Should -Be $before
     }

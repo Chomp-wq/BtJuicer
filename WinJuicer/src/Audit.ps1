@@ -5,6 +5,9 @@
 
 $script:SeverityOrder = @{ Alto = 0; Medio = 1; Bajo = 2; Info = 3; Ok = 4 }
 $script:LaptopChassis = @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32)
+# Display adapters that are not a graphics card: remote sessions, VMs, capture
+# and streaming drivers.
+$script:VirtualGpuPattern = 'Microsoft (Basic|Remote)|Hyper-V|Virtual|VMware|Parsec|Citrix|Mirage|DisplayLink|Spacedesk'
 
 function New-JuicerFinding {
     param([string]$Area, [string]$Severity, [string]$Title, [string]$Detail = '', [string]$Fix = '')
@@ -39,7 +42,8 @@ function Get-JuicerRamFindings {
     $speed = ($Modules | ForEach-Object { if ($_.ConfiguredClockSpeed) { $_.ConfiguredClockSpeed } else { $_.Speed } } | Measure-Object -Minimum).Minimum
     $type = @($Modules)[0].SMBIOSMemoryType
     $typeName = switch ($type) { 26 { 'DDR4' } 34 { 'DDR5' } 24 { 'DDR3' } default { 'RAM' } }
-    $out += New-JuicerFinding $area 'Info' ('{0} de {1} en {2} módulo(s), a {3} MT/s' -f (Format-JuicerBytes $total), $typeName, $Modules.Count, $speed)
+    $at = if ($speed -gt 0) { ", a $speed MT/s" } else { '' }
+    $out += New-JuicerFinding $area 'Info' ('{0} de {1} en {2} módulo(s){3}' -f (Format-JuicerBytes $total), $typeName, $Modules.Count, $at)
 
     if ($total -lt 15GB) {
         $out += New-JuicerFinding $area 'Bajo' 'Menos de 16 GB de RAM' 'Muchos juegos actuales piden 16 GB; con menos, Windows pagina a disco y aparecen tirones.'
@@ -60,7 +64,7 @@ function Get-JuicerRamFindings {
 
     if (-not $Laptop) {
         $jedec = if ($type -eq 26) { 2666 } elseif ($type -eq 34) { 4800 } else { 0 }
-        if ($jedec -and $speed -le $jedec) {
+        if ($jedec -and $speed -gt 0 -and $speed -le $jedec) {
             $xmp = if ($type -eq 34) { 'EXPO o XMP' } else { 'XMP (DOCP en ASUS con AMD)' }
             $label = if ($type -eq 34) { 'DDR5-6000 o 6400' } else { 'DDR4-3200 o 3600' }
             $out += New-JuicerFinding $area 'Medio' "La RAM va a $speed MT/s, la velocidad estándar" "Si tu kit es más rápido (mira la etiqueta: $label…), activa $xmp en la BIOS. En juegos limitados por CPU suele ser la mejora gratuita más grande que queda."
@@ -186,7 +190,7 @@ function Get-JuicerGraphicsAudit {
     $out = @()
     try {
         $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction Stop)
-        $real = @($gpus | Where-Object { $_.Name -notmatch 'Microsoft (Basic|Remote)|Virtual|Parsec|Citrix|Mirage|DisplayLink' })
+        $real = @($gpus | Where-Object { $_.Name -notmatch $script:VirtualGpuPattern })
         if ($real.Count -eq 0 -and $gpus.Count -gt 0) {
             $out += New-JuicerFinding 'Gráfica' 'Alto' 'No hay driver de la tarjeta gráfica' 'Windows usa el adaptador básico, sin aceleración. Instala el driver de NVIDIA, AMD o Intel desde su web.'
         }
@@ -239,11 +243,11 @@ function Get-JuicerStorageAudit {
         $pct = 100 * $c.FreeSpace / $c.Size
         $free = '{0} libres de {1} ({2:N0} %)' -f (Format-JuicerBytes $c.FreeSpace), (Format-JuicerBytes $c.Size), $pct
         if ($c.FreeSpace -lt 20GB -or $pct -lt 10) {
-            $out += New-JuicerFinding 'Disco' 'Alto' "Queda poco espacio en ${sys}: $free" 'Un SSD casi lleno escribe mucho más lento, y Windows necesita sitio para la paginación y las actualizaciones. Usa Mantenimiento > Limpieza, o mueve juegos a otra unidad.'
+            $out += New-JuicerFinding 'Disco' 'Alto' "Queda poco espacio en ${sys} $free" 'Un SSD casi lleno escribe mucho más lento, y Windows necesita sitio para la paginación y las actualizaciones. Usa Mantenimiento > Limpieza, o mueve juegos a otra unidad.'
         } elseif ($pct -lt 20) {
-            $out += New-JuicerFinding 'Disco' 'Medio' "Espacio justo en ${sys}: $free" 'Por debajo de un 20 % libre, los SSD empiezan a perder velocidad de escritura.'
+            $out += New-JuicerFinding 'Disco' 'Medio' "Espacio justo en ${sys} $free" 'Por debajo de un 20 % libre, los SSD empiezan a perder velocidad de escritura.'
         } else {
-            $out += New-JuicerFinding 'Disco' 'Ok' "${sys}: $free"
+            $out += New-JuicerFinding 'Disco' 'Ok' "${sys} $free"
         }
     } catch {
         Write-Verbose "Sin espacio libre de ${sys}: $_"
