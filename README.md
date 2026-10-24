@@ -208,3 +208,12 @@ Cada push a `main` compila el APK en GitHub Actions y lo publica en la release
 
 Descarga `BT-Juicer.apk` desde el navegador del teléfono y ábrelo para instalar.
 No hace falta PC.
+
+---
+
+## También aquí: Win Juicer, para Windows 11
+
+En la carpeta [`WinJuicer/`](WinJuicer/) vive una herramienta hermana con la
+misma filosofía, para PC: exprime Windows 11 para juegos y cargas rápidas,
+diciendo qué hace cada ajuste, qué ganas y qué te cuesta, y con todo reversible.
+Ver [WinJuicer/README.md](WinJuicer/README.md).

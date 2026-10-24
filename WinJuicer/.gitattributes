@@ -1,0 +1,3 @@
+# The launcher must keep CRLF wherever it is checked out or downloaded from:
+# cmd.exe misreads labels and blocks in LF-only batch files.
+*.cmd -text

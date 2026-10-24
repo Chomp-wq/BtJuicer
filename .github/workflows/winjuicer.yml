@@ -1,0 +1,65 @@
+name: Win Juicer
+
+# Pruebas de la herramienta para Windows. El análisis estático comprueba que el
+# código es válido en Windows PowerShell 5.1, la que trae Windows 11. Pester
+# corre en 5.1 y en PowerShell 7; en Windows, además, aplica el catálogo entero
+# sobre la máquina del runner, lo deshace y comprueba que todo vuelve a su sitio.
+on:
+  push:
+    paths:
+      - 'WinJuicer/**'
+      - '.github/workflows/winjuicer.yml'
+  pull_request:
+    paths:
+      - 'WinJuicer/**'
+      - '.github/workflows/winjuicer.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  analisis:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: PSScriptAnalyzer
+        shell: pwsh
+        run: |
+          if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
+            Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
+          }
+          $r = 'src', 'WinJuicer.ps1', 'WinJuicer.psm1' | ForEach-Object {
+            Invoke-ScriptAnalyzer -Path (Join-Path WinJuicer $_) -Recurse -Settings WinJuicer/PSScriptAnalyzerSettings.psd1
+          }
+          $r | Format-Table -AutoSize RuleName, ScriptName, Line, Message | Out-String -Width 250
+          if ($r) { exit 1 }
+
+  pruebas:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shell: [powershell, pwsh]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Pester en ${{ matrix.shell }}
+        shell: ${{ matrix.shell }}
+        env:
+          # La máquina del runner es desechable: aquí sí se prueba contra Windows de verdad.
+          WINJUICER_PRUEBAS_REALES: '1'
+        run: |
+          $PSVersionTable.PSVersion.ToString()
+          if (-not (Get-Module -ListAvailable Pester | Where-Object { $_.Version -ge [version]'5.5' })) {
+            [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+            Install-Module Pester -MinimumVersion 5.5 -Force -SkipPublisherCheck -Scope CurrentUser
+          }
+          Import-Module Pester -MinimumVersion 5.5
+          $c = New-PesterConfiguration
+          $c.Run.Path = 'WinJuicer/tests'
+          $c.Run.Exit = $true
+          $c.Output.Verbosity = 'Detailed'
+          Invoke-Pester -Configuration $c
