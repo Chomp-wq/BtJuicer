@@ -102,6 +102,14 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         { Test-JuicerModernStandby } | Should -Not -Throw
     }
 
+    It 'lee la salud de los discos y la versión de Windows' {
+        $disks = @(Get-JuicerDiskHealth)
+        $disks.Count | Should -BeGreaterThan 0
+        $disks[0].Name | Should -Not -BeNullOrEmpty
+        { Get-JuicerDiskHealthFindings $disks } | Should -Not -Throw
+        { Get-JuicerWindowsSupportInfo } | Should -Not -Throw
+    }
+
     It 'lee el hardware y hace la revisión de overclock, BIOS y estabilidad' {
         $hw = Get-JuicerHardwareProfile -Refresh
         foreach ($l in (Format-JuicerHardwareSummary $hw)) { Write-Host "    $l" }

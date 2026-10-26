@@ -405,3 +405,99 @@ Describe 'Consejero' {
         @($r | Where-Object { $_.Level -eq 3 }).Count | Should -Be 0
     }
 }
+
+Describe 'Pantallas, discos y versión de Windows' {
+    It 'lee la resolución nativa del EDID' {
+        $e = [byte[]]::new(128)
+        0..7 | ForEach-Object { $e[$_] = 0xFF }
+        $e[0] = 0; $e[7] = 0
+        $e[54] = 0x56; $e[55] = 0x5E; $e[56] = 0x00; $e[58] = 0xA0; $e[59] = 0xA0; $e[61] = 0x50
+        $n = ConvertFrom-JuicerEdid $e
+        $n.Width | Should -Be 2560
+        $n.Height | Should -Be 1440
+        ConvertFrom-JuicerEdid ([byte[]]::new(128)) | Should -BeNullOrEmpty
+        ConvertFrom-JuicerEdid ([byte[]]@(1, 2, 3)) | Should -BeNullOrEmpty
+        ConvertTo-JuicerEdidKey '\\?\DISPLAY#GSM5B7F#5&2d3b7a1f&0&UID4353#{e6f07b5f-ee97-4a90-b076-33f57bf4eaa7}' |
+            Should -Be 'HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY\GSM5B7F\5&2d3b7a1f&0&UID4353\Device Parameters'
+        ConvertTo-JuicerEdidKey '' | Should -BeNullOrEmpty
+    }
+
+    It 'avisa si la pantalla está por debajo de su resolución nativa' {
+        $d = [pscustomobject]@{ Monitor = 'LG'; Width = 1920; Height = 1080; Hz = 144; MaxHz = 144; NativeWidth = 2560; NativeHeight = 1440; Resolutions = @('1920x1080', '2560x1440') }
+        $f = @(Get-JuicerDisplayFindings @($d))
+        $f.Count | Should -Be 1
+        $f[0].Severity | Should -Be 'Medio'
+        $f[0].Title | Should -BeLike '*1920×1080*2560×1440*'
+        # Without the native mode on offer (a cable that cannot carry it), nothing to say about it.
+        $d.Resolutions = @('1920x1080')
+        @(Get-JuicerDisplayFindings @($d))[0].Severity | Should -Be 'Ok'
+    }
+
+    It 'avisa si el monitor de un sobremesa está en la placa base' {
+        $gpus = @((Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070'), (Get-JuicerGpuTraits 'Intel(R) UHD Graphics 770'))
+        $main = [pscustomobject]@{ Monitor = 'Dell'; Adapter = 'Intel(R) UHD Graphics 770'; Primary = $true; Width = 1920; Height = 1080; Hz = 60; MaxHz = 60 }
+        $side = [pscustomobject]@{ Monitor = 'AOC'; Adapter = 'Intel(R) UHD Graphics 770'; Primary = $false; Width = 1920; Height = 1080; Hz = 60; MaxHz = 60 }
+        $good = [pscustomobject]@{ Monitor = 'LG'; Adapter = 'NVIDIA GeForce RTX 4070'; Primary = $true; Width = 1920; Height = 1080; Hz = 60; MaxHz = 60 }
+        $f = @(Get-JuicerDisplayFindings @($main) $gpus $false)
+        $f[0].Severity | Should -Be 'Alto'
+        $f[0].Title | Should -BeLike '*placa base*RTX 4070*'
+        @(Get-JuicerDisplayFindings @($side) $gpus $false)[0].Severity | Should -Be 'Info'
+        @(Get-JuicerDisplayFindings @($good) $gpus $false | Where-Object { $_.Title -like '*placa base*' }).Count | Should -Be 0
+        # A laptop with hybrid graphics draws the screen with the integrated one on purpose.
+        @(Get-JuicerDisplayFindings @($main) $gpus $true | Where-Object { $_.Title -like '*placa base*' }).Count | Should -Be 0
+        # Without a dedicated card there is nothing else to plug it into.
+        @(Get-JuicerDisplayFindings @($main) @($gpus[1]) $false | Where-Object { $_.Title -like '*placa base*' }).Count | Should -Be 0
+    }
+
+    It 'revisa desgaste, temperatura y errores de los discos' {
+        $f = @(Get-JuicerDiskHealthFindings @(
+                @{ Name = 'Samsung 980'; Media = 'SSD'; Health = 'Healthy'; Wear = 93; Temperature = 45; ReadErrors = 0 }
+                @{ Name = 'WD SN770'; Media = 'SSD'; Health = 'Healthy'; Wear = 3; Temperature = 78; ReadErrors = 0 }
+                @{ Name = 'Seagate'; Media = 'HDD'; Health = 'Healthy'; Wear = 0; Temperature = 0; ReadErrors = 12 }
+                @{ Name = 'Kingston'; Media = 'SSD'; Health = 'Warning'; Wear = 100; Temperature = 40; ReadErrors = 0 }
+                @{ Name = 'Sin datos'; Media = 'Unspecified'; Health = 'Healthy'; Wear = 0; Temperature = 0; ReadErrors = $null }
+            ))
+        $f.Title | Should -Contain 'El SSD Samsung 980 ha gastado el 93 % de su vida útil'
+        @($f | Where-Object { $_.Title -like '*WD SN770*78 °C*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like '*WD SN770*3 %*' })[0].Severity | Should -Be 'Ok'
+        @($f | Where-Object { $_.Title -like '*Seagate*12 lecturas*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like '*Seagate*vida*' }).Count | Should -Be 0
+        @($f | Where-Object { $_.Title -like '*Kingston*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like '*Sin datos*' }).Count | Should -Be 0
+    }
+
+    It 'sabe hasta cuándo tiene parches cada versión y edición' {
+        (Get-JuicerWindowsSupport 26100 'Professional').End | Should -Be ([datetime]'2026-10-13')
+        (Get-JuicerWindowsSupport 26100 'Enterprise').End | Should -Be ([datetime]'2027-10-12')
+        (Get-JuicerWindowsSupport 22631 'Core').Version | Should -Be '23H2'
+        (Get-JuicerWindowsSupport 19045 'Professional').Windows10 | Should -BeTrue
+        Get-JuicerWindowsSupport 19044 'EnterpriseS' | Should -BeNullOrEmpty
+        Get-JuicerWindowsSupport 26100 'ServerStandard' | Should -BeNullOrEmpty
+        Get-JuicerWindowsSupport 28000 'Professional' | Should -BeNullOrEmpty
+    }
+
+    It 'avisa del fin de soporte, de una versión fijada y del retraso' {
+        $now = [datetime]'2026-10-26'
+        $old = Get-JuicerWindowsSupport 26100 'Professional'
+        $f = @(Get-JuicerSupportFindings $old -Now $now)
+        $f[0].Severity | Should -Be 'Alto'
+        $f[0].Title | Should -BeLike '*24H2 ya no recibe*'
+        @(Get-JuicerSupportFindings $old -Now $now -Pinned '24H2')[0].Detail | Should -BeLike '*TargetReleaseVersion*'
+        @(Get-JuicerSupportFindings $old -Now $now -Deferral 365)[0].Detail | Should -BeLike '*365 días*'
+        @(Get-JuicerSupportFindings $old -Now ([datetime]'2026-09-01'))[0].Severity | Should -Be 'Medio'
+        @(Get-JuicerSupportFindings (Get-JuicerWindowsSupport 26200 'Core') -Now $now)[0].Severity | Should -Be 'Ok'
+        @(Get-JuicerSupportFindings (Get-JuicerWindowsSupport 19045 'Core') -Now $now)[0].Title | Should -BeLike 'Windows 10*'
+        @(Get-JuicerSupportFindings $null).Count | Should -Be 0
+    }
+
+    It 'no aconseja retrasar versiones si la actual se acaba' {
+        $hw = New-TestHw -Extra @{ Support = (Get-JuicerWindowsSupport 26100 'Professional') }
+        $hw.Support.End = (Get-Date).AddDays(30)
+        (Get-JuicerAdvice $hw)['update.diferir'].Verdict | Should -Be 'NoRecomendado'
+        $hw.Support.End = (Get-Date).AddDays(500)
+        (Get-JuicerAdvice $hw)['update.diferir'].Reason | Should -BeLike '*dos años*'
+        $hw.Support.Business = $true
+        (Get-JuicerAdvice $hw)['update.diferir'].Verdict | Should -Be 'Opcional'
+        (Format-JuicerHardwareSummary $hw) -join "`n" | Should -BeLike '*Windows: 24H2, con parches*'
+    }
+}

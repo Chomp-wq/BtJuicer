@@ -27,7 +27,8 @@ registro de Windows. Están aquí:
   DDR5-6000 a 4800. Se activa en la BIOS.
 - **Un solo módulo de RAM, o dos en el mismo canal.** La mitad de ancho de banda.
 - **Un monitor de 144 Hz funcionando a 60.** Pasa muchísimo, y se arregla en
-  Configuración en diez segundos.
+  Configuración en diez segundos. O por debajo de su resolución nativa.
+- **El monitor enchufado a la placa base** en vez de a la tarjeta gráfica.
 - **Windows o la biblioteca de juegos en un disco duro mecánico.** Ningún ajuste
   compensa eso.
 - **Un portátil jugando con batería**, o sin la gráfica dedicada.
@@ -178,6 +179,18 @@ Windows guarda las pruebas, y Win Juicer las lee:
   ThrottleStop), de RGB pesado (Armoury Crate, iCUE…) y antivirus de terceros
   preinstalados.
 - **BitLocker** por software, como información: si lo quitas es decisión tuya.
+- **Pantallas**: la frecuencia por debajo de la que admite el monitor, la
+  resolución por debajo de la nativa (la lee del EDID del propio monitor) y, en
+  un sobremesa con gráfica dedicada, un monitor conectado a la salida de la
+  placa base.
+- **Discos**: además del espacio libre, cuánta vida útil ha gastado cada SSD,
+  si un NVMe pasa de 70 °C (y baja velocidad para protegerse) y lecturas que el
+  disco no pudo recuperar.
+- **Soporte de Windows**: hasta cuándo recibe parches de seguridad tu versión
+  y edición (24H2 en Home y Pro dejó de recibirlos en octubre de 2026; Windows
+  10, en octubre de 2025). Si una directiva `TargetReleaseVersion` te ata a una
+  versión antigua (algunas herramientas de «debloat» la ponen) o tienes las
+  versiones nuevas retrasadas, lo dice, y entonces no recomienda retrasarlas.
 
 ## Los tres perfiles
 

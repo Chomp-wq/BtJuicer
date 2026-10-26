@@ -94,16 +94,36 @@ function Get-JuicerRamFindings {
     $out
 }
 
+# Gpus are the traits of the graphics cards. On a desktop with a dedicated
+# card, a monitor on the motherboard's outputs is drawn by the integrated
+# graphics; on a laptop that is how hybrid graphics work, and fine.
 function Get-JuicerDisplayFindings {
-    param([object[]]$Displays)
+    param([object[]]$Displays, [object[]]$Gpus = @(), [bool]$Laptop)
     $out = @()
     $n = 0
+    $dedicated = @($Gpus | Where-Object { $_.Discrete } | Select-Object -First 1)
     foreach ($d in $Displays) {
         $n++
         $name = if ($d.Monitor) { $d.Monitor } else { "Pantalla $n" }
+        if (-not $Laptop -and $dedicated.Count -gt 0 -and $d.Adapter) {
+            $a = Get-JuicerGpuTraits $d.Adapter
+            if (-not $a.Discrete -and $a.Vendor -in 'Intel', 'AMD') {
+                if ($d.Primary) {
+                    $out += New-JuicerFinding 'Pantalla' 'Alto' "$name está conectada a la placa base, no a la $($dedicated[0].Name)" "La dibuja la $($a.Name): los juegos rinden mucho menos o pasan cada fotograma por ella. Conecta el cable a las salidas de la tarjeta gráfica, las que están más abajo, en horizontal."
+                } else {
+                    $out += New-JuicerFinding 'Pantalla' 'Info' "$name (secundaria) está conectada a la placa base" "Lo que se vea en ella lo dibuja la $($a.Name). Para un navegador o un chat vale; para jugar en ella, conéctala a la $($dedicated[0].Name)."
+                }
+            }
+        }
+        $sizes = @($d.Resolutions)
+        $native = '{0}x{1}' -f $d.NativeWidth, $d.NativeHeight
+        $below = $d.NativeWidth -gt 0 -and $d.Width -lt $d.NativeWidth -and $d.Height -lt $d.NativeHeight -and $sizes -contains $native
+        if ($below) {
+            $out += New-JuicerFinding 'Pantalla' 'Medio' "$name está a $($d.Width)×$($d.Height), pero su resolución nativa es $($d.NativeWidth)×$($d.NativeHeight)" 'Fuera de la nativa todo se ve algo borroso. Elige la marcada como «(recomendado)» en Configuración > Sistema > Pantalla; si es para ganar FPS, baja la resolución dentro del juego, no la de Windows.'
+        }
         if ($d.MaxHz -gt $d.Hz + 1) {
             $out += New-JuicerFinding 'Pantalla' 'Alto' "$name funciona a $($d.Hz) Hz pero admite $($d.MaxHz) Hz" 'Cámbialo en Configuración > Sistema > Pantalla > Pantalla avanzada > Frecuencia de actualización. Si no aparece, el cable o el puerto no dan para más (usa DisplayPort o HDMI 2.1).'
-        } else {
+        } elseif (-not $below) {
             $out += New-JuicerFinding 'Pantalla' 'Ok' "$name a $($d.Width)×$($d.Height) y $($d.Hz) Hz, el máximo disponible"
         }
     }
@@ -159,6 +179,71 @@ function Get-JuicerDriveMedia {
     $null
 }
 
+# --- Windows support -------------------------------------------------------
+
+# Last month of security updates for each version of Windows 11, by build:
+# Home and Pro get 24 months, Enterprise and Education 36. Windows 10 ended
+# in October 2025 for everyone; the paid extension (ESU) for homes ran out a
+# year later. LTSC editions and Windows Server have their own dates and are
+# left out.
+$script:WindowsSupport = @{
+    22000 = @{ Version = '21H2'; Home = '2023-10-10'; Business = '2024-10-08' }
+    22621 = @{ Version = '22H2'; Home = '2024-10-08'; Business = '2025-10-14' }
+    22631 = @{ Version = '23H2'; Home = '2025-11-11'; Business = '2026-11-10' }
+    26100 = @{ Version = '24H2'; Home = '2026-10-13'; Business = '2027-10-12' }
+    26200 = @{ Version = '25H2'; Home = '2027-10-12'; Business = '2028-10-10' }
+}
+
+# Null when the dates are unknown: LTSC, Insider, or a build newer than the
+# table, which is newer than anything about to expire.
+function Get-JuicerWindowsSupport {
+    param([int]$Build, [string]$Edition)
+    if ($Edition -cmatch 'S$|SN$' -or ($Edition -like 'Server*' -and $Edition -ne 'ServerRdsh')) { return $null }
+    $business = $Edition -match '^(Enterprise|Education|IoTEnterprise|ServerRdsh)'
+    if ($Build -gt 0 -and $Build -lt 22000) {
+        return @{ Version = 'Windows 10'; End = [datetime]'2025-10-14'; Business = $business; Windows10 = $true }
+    }
+    $row = $script:WindowsSupport[$Build]
+    if (-not $row) { return $null }
+    @{ Version = $row.Version; End = [datetime]$(if ($business) { $row.Business } else { $row.Home }); Business = $business; Windows10 = $false }
+}
+
+function Get-JuicerWindowsSupportInfo {
+    if (Test-JuicerInsider) { return $null }
+    $e = Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'EditionID'
+    Get-JuicerWindowsSupport (Get-JuicerWindowsBuild) $(if ($e) { [string]$e.Value } else { '' })
+}
+
+# Pinned is the version a TargetReleaseVersion policy holds the PC at (some
+# debloat tools set it to dodge a new version); Deferral, the days feature
+# updates are held back.
+function Get-JuicerSupportFindings {
+    param([hashtable]$Support, [datetime]$Now = (Get-Date), [string]$Pinned, [int]$Deferral)
+    $out = @()
+    if (-not $Support) { return $out }
+    $end = $Support.End.ToString('d')
+    $days = ($Support.End - $Now).TotalDays
+    if ($Support.Windows10) {
+        $extra = if ($Support.Business) { ' Salvo que tu empresa pague las actualizaciones extendidas (ESU), ya no hay parches.' } else { ' La extensión ESU para hogares terminó en octubre de 2026.' }
+        $out += New-JuicerFinding 'Sistema' 'Alto' 'Windows 10 ya no recibe actualizaciones de seguridad' ('Terminó el {0}.{1} Si el equipo lo admite, Windows 11 es gratis desde Windows Update; si no, cada fallo nuevo queda abierto.' -f $end, $extra)
+        return $out
+    }
+    $how = 'Instala la versión siguiente desde Configuración > Windows Update; es gratis y conserva programas y archivos.'
+    if ($Pinned) {
+        $how = "Una directiva fija el equipo en la versión $Pinned (TargetReleaseVersion; la ponen algunas herramientas de «debloat»). Bórrala de HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate. $how"
+    } elseif ($Deferral -gt 0) {
+        $how += " Tienes las versiones nuevas retrasadas $Deferral días: quita ese retraso (ajuste «Versiones nuevas de Windows con un año de retraso») para que llegue antes."
+    }
+    if ($days -lt 0) {
+        $out += New-JuicerFinding 'Sistema' 'Alto' "Windows 11 $($Support.Version) ya no recibe actualizaciones de seguridad" "Dejó de recibirlas el $end. $how"
+    } elseif ($days -lt 90) {
+        $out += New-JuicerFinding 'Sistema' 'Medio' "Windows 11 $($Support.Version) deja de recibir actualizaciones de seguridad el $end" $how
+    } else {
+        $out += New-JuicerFinding 'Sistema' 'Ok' "Windows 11 $($Support.Version) recibe actualizaciones de seguridad hasta el $end"
+    }
+    $out
+}
+
 function Get-JuicerSystemAudit {
     $out = @()
     $cv = 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
@@ -172,6 +257,15 @@ function Get-JuicerSystemAudit {
     if ($build -lt 22000) {
         $out += New-JuicerFinding 'Sistema' 'Info' 'Win Juicer está pensado para Windows 11' 'Casi todo funciona también en Windows 10; lo que no aplica aparece como «no aplica».'
     }
+
+    $wu = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+    $pin = Read-JuicerReg $wu 'TargetReleaseVersion'
+    $pinInfo = Read-JuicerReg $wu 'TargetReleaseVersionInfo'
+    $defer = Read-JuicerReg $wu 'DeferFeatureUpdatesPeriodInDays'
+    $deferOn = Read-JuicerReg $wu 'DeferFeatureUpdates'
+    $out += Get-JuicerSupportFindings (Get-JuicerWindowsSupportInfo) `
+        -Pinned $(if ($pin -and [int]$pin.Value -eq 1 -and $pinInfo) { [string]$pinInfo.Value }) `
+        -Deferral $(if ($deferOn -and [int]$deferOn.Value -eq 1 -and $defer) { [int]$defer.Value } else { 0 })
 
     try {
         $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
@@ -238,7 +332,7 @@ function Get-JuicerGraphicsAudit {
     }
 
     try {
-        $out += Get-JuicerDisplayFindings (Get-JuicerDisplays)
+        $out += Get-JuicerDisplayFindings (Get-JuicerDisplays) @($real | ForEach-Object { Get-JuicerGpuTraits $_.Name }) (Test-JuicerLaptop)
     } catch {
         $out += New-JuicerFinding 'Pantalla' 'Info' 'No se pudieron leer los modos de pantalla.'
     }
@@ -251,6 +345,51 @@ function Get-JuicerGraphicsAudit {
             $out += New-JuicerFinding 'Gráfica' 'Medio' 'Resizable BAR desactivado' 'Actívalo en la BIOS («Above 4G Decoding» y «Re-Size BAR Support»). NVIDIA lo usa juego a juego: según el título, de nada a un 10 %.'
         } elseif ($bar) {
             $out += New-JuicerFinding 'Gráfica' 'Ok' 'Resizable BAR activado'
+        }
+    }
+    $out
+}
+
+# What each disk says about itself: Windows' health verdict and, from the
+# SMART counters, how much of its rated life an SSD has used (Wear, in %),
+# its temperature and the reads it could not recover.
+function Get-JuicerDiskHealth {
+    foreach ($d in @(Get-PhysicalDisk -ErrorAction Stop)) {
+        $c = $null
+        try { $c = $d | Get-StorageReliabilityCounter -ErrorAction Stop } catch { Write-Verbose "Sin contadores de $($d.FriendlyName): $_" }
+        @{
+            Name = [string]$d.FriendlyName; Media = [string]$d.MediaType; Health = [string]$d.HealthStatus
+            Wear = $(if ($c) { $c.Wear }); Temperature = $(if ($c) { $c.Temperature }); ReadErrors = $(if ($c) { $c.ReadErrorsUncorrected })
+        }
+    }
+}
+
+function Get-JuicerDiskHealthFindings {
+    param([object[]]$Disks)
+    $out = @()
+    foreach ($d in $Disks) {
+        if ($d.Health -and $d.Health -ne 'Healthy') {
+            $out += New-JuicerFinding 'Disco' 'Alto' "El disco $($d.Name) informa de un estado «$($d.Health)»" 'Haz copia de seguridad cuanto antes; un disco que falla también se vuelve lento.'
+            continue
+        }
+        if ($d.ReadErrors -gt 0) {
+            $out += New-JuicerFinding 'Disco' 'Alto' "El disco $($d.Name) tiene $($d.ReadErrors) lecturas que no pudo recuperar" 'Son datos que se han perdido o están a punto. Haz copia de seguridad y vigílalo con CrystalDiskInfo.'
+        }
+        # SSDs only: a hard disk reports no wear, or nonsense.
+        if ($null -ne $d.Wear -and ($d.Media -eq 'SSD' -or ($d.Media -ne 'HDD' -and $d.Wear -gt 0))) {
+            $w = [int]$d.Wear
+            if ($w -ge 90) {
+                $out += New-JuicerFinding 'Disco' 'Alto' "El SSD $($d.Name) ha gastado el $w % de su vida útil" 'Pasado el 100 % sigue funcionando, pero el fabricante ya no garantiza que guarde los datos. Haz copia de seguridad y planea cambiarlo.'
+            } elseif ($w -ge 70) {
+                $out += New-JuicerFinding 'Disco' 'Medio' "El SSD $($d.Name) ha gastado el $w % de su vida útil" 'Aún le queda, pero ten copia de seguridad de lo importante.'
+            } else {
+                $out += New-JuicerFinding 'Disco' 'Ok' "SSD $($d.Name): $w % de su vida útil gastada"
+            }
+        }
+        # Outside 1–110 °C the sensor is not reporting.
+        $t = [int]$d.Temperature
+        if ($t -ge 70 -and $t -le 110) {
+            $out += New-JuicerFinding 'Disco' 'Medio' "El disco $($d.Name) está a $t °C" 'A partir de unos 70 °C los NVMe bajan la velocidad para protegerse. Un disipador (muchas placas traen uno para el M.2) o más flujo de aire en la caja lo evita.'
         }
     }
     $out
@@ -285,9 +424,7 @@ function Get-JuicerStorageAudit {
     }
 
     try {
-        foreach ($d in @(Get-PhysicalDisk -ErrorAction Stop | Where-Object { $_.HealthStatus -and $_.HealthStatus -ne 'Healthy' })) {
-            $out += New-JuicerFinding 'Disco' 'Alto' "El disco $($d.FriendlyName) informa de un estado «$($d.HealthStatus)»" 'Haz copia de seguridad cuanto antes; un disco que falla también se vuelve lento.'
-        }
+        $out += Get-JuicerDiskHealthFindings (Get-JuicerDiskHealth)
     } catch {
         Write-Verbose "Sin estado de salud de discos: $_"
     }

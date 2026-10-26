@@ -141,6 +141,11 @@ function Get-JuicerAdviceRule {
         }
         'update.diferir' {
             if ($Hw.Home) { return New-JuicerVerdict 'NoRecomendado' 'Windows Home lo ignora.' }
+            $s = $Hw.Support
+            if ($s -and ($s.Windows10 -or ($s.End - (Get-Date)).TotalDays -lt 180)) {
+                return New-JuicerVerdict 'NoRecomendado' ('Tu versión ({0}) deja de recibir parches el {1}: lo que toca es instalar la siguiente, no retrasarla.' -f $s.Version, $s.End.ToString('d'))
+            }
+            if ($s -and -not $s.Business) { return New-JuicerVerdict 'Opcional' 'Estabilidad a cambio de recibir las novedades un año más tarde. En Pro cada versión tiene dos años de parches, así que con el retraso llegas justo al final: la revisión avisa cuando queden menos de 90 días.' }
             return New-JuicerVerdict 'Opcional' 'Estabilidad a cambio de recibir las novedades de Windows un año más tarde. Los parches de seguridad siguen llegando.'
         }
         'seguridad.integridad' {
