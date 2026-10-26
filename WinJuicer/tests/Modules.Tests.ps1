@@ -825,6 +825,7 @@ Describe 'Tus juegos' {
         $g = @(Get-JuicerGames -Collectors @({ New-JuicerGame 'Steam' '1' 'Cyberpunk 2077' $d (Join-Path $d 'Cyberpunk2077.exe') }.GetNewClosure()))
         $g.Count | Should -Be 1
         # Without a screen to size the limit, it says so for that game and goes on.
+        Mock -ModuleName WinJuicer Get-JuicerPrimaryMonitor { $null }
         $r = @(Invoke-JuicerGameSetup $g 'Recomendado' 0 -GpuCount 2)
         $r[0].Outcome | Should -Be 'Error'
         $r[0].Message | Should -BeLike '*pantalla*'
