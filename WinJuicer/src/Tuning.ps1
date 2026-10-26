@@ -427,3 +427,170 @@ function Get-JuicerSoftwareAudit {
     try { $av = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop | ForEach-Object { [string]$_.displayName }) } catch { Write-Verbose "Sin Centro de seguridad: $_" }
     Get-JuicerSoftwareFindings -Installed (Get-JuicerInstalledPrograms) -Antivirus $av
 }
+
+# --- Combinations ------------------------------------------------------------
+#
+# Advice that only exists because of what goes with what: the same graphics
+# card is fine on one board and short of bandwidth on another; 8 GB of VRAM
+# is enough at 1080p and not at 4K; a top card on an old processor wants a
+# different kind of setting than on a new one.
+
+# Cards wired with fewer than 16 PCIe lanes. On a PCIe 3.0 slot they get half
+# (or a quarter) of the bandwidth they were designed for, and that shows the
+# moment the VRAM fills and textures stream over the bus.
+function Get-JuicerPcieLanes {
+    param([string]$Name)
+    if ($Name -match 'RX\s*(?:6500|6400)\b') { return 4 }
+    if ($Name -match 'RTX\s*(?:3050|4060|5060)|RX\s*(?:5500|6600|6650|7600)\b|Arc(?:\(TM\))?\s*(?:A310|A380|B570|B580)') { return 8 }
+    $null
+}
+
+# Why the slot the card sits in is PCIe 3.0 at most, from the processor and
+# the board's chipset. Null when it is newer or cannot be told.
+function Get-JuicerPcie3Reason {
+    param([hashtable]$Cpu, [string]$Board = '')
+    $n = [string]$Cpu.Name
+    if ($Cpu.Vendor -eq 'AMD' -and -not $Cpu.Mobile) {
+        # APU dies (Cezanne, Renoir, Picasso, Raven) and Zen/Zen+ only speak
+        # 3.0, including the 5500 and 5700 that are APUs without graphics.
+        if ($n -match 'Ryzen [3579] (?:[12]\d{3}|[2-5]\d{3}GT?|5500|5700)\b') { return "tu $n da como mucho PCIe 3.0" }
+        if ($Cpu.Am4 -and $Board -match '\b(?:A320|B350|X370|B450|X470|A520)') { return "la placa ($Board) da PCIe 3.0 a la gráfica" }
+    }
+    if ($Cpu.Vendor -eq 'Intel' -and -not $Cpu.Mobile) {
+        if ($n -match 'i[3579]-(?:[2-9]\d{3}|10\d{3})(?!\d)') { return "tu $n da como mucho PCIe 3.0" }
+        # With an 11th gen Core, Z490/H470/B560 give 4.0; H510 never does.
+        if ($Board -match '\bH510') { return "la placa ($Board) da PCIe 3.0 a la gráfica" }
+    }
+    $null
+}
+
+function Get-JuicerPcieFindings {
+    param([object[]]$Gpus = @(), [hashtable]$Cpu, [string]$Board = '', [bool]$Laptop)
+    if ($Laptop -or -not $Cpu) { return @() }
+    $why = Get-JuicerPcie3Reason $Cpu $Board
+    if (-not $why) { return @() }
+    $out = @()
+    foreach ($g in @($Gpus | Where-Object { $_.Discrete })) {
+        $lanes = Get-JuicerPcieLanes $g.Name
+        if ($lanes -eq 4) {
+            $out += New-JuicerFinding 'Gráfica' 'Alto' "Tu $($g.Name) usa 4 líneas PCIe, y $why" 'Con PCIe 3.0 x4 tiene un cuarto del ancho de banda para el que se diseñó: en cuanto la VRAM se llena, los FPS se hunden. Texturas en bajo o medio para que nunca se llene, y Resizable BAR activado.'
+        } elseif ($lanes -eq 8) {
+            $out += New-JuicerFinding 'Gráfica' 'Medio' "Tu $($g.Name) usa 8 líneas PCIe, y $why" 'En PCIe 3.0 x8 tiene la mitad del ancho de banda de diseño. Casi no se nota mientras la VRAM no se llene; cuando se llena, la pérdida es mayor que en una placa PCIe 4.0. Mantén las texturas un escalón por debajo del máximo y activa Resizable BAR.'
+        }
+    }
+    $out
+}
+
+# VRAM against the resolution of the main screen, with what the driver
+# reports for the card (not the old 4 GB-capped WMI figure).
+function Get-JuicerVramFindings {
+    param([object[]]$Gpus = @(), [int]$Width, [int]$Height)
+    $g = @($Gpus | Where-Object { $_.Discrete -and $_.Vram -gt 0 } | Sort-Object { $_.Vram } -Descending) | Select-Object -First 1
+    if (-not $g -or $Width -le 0) { return @() }
+    $gb = [int][Math]::Round($g.Vram / 1GB)
+    $px = $Width * $Height
+    $res = "${Width}×${Height}"
+    if ($px -ge 3840 * 2160 * 0.9 -and $gb -le 10) {
+        return (New-JuicerFinding 'Gráfica' 'Medio' "$gb GB de VRAM para jugar a $res" 'En 4K los juegos actuales piden 12 GB o más con texturas altas. Usa DLSS, FSR o XeSS (renderizan por debajo y caben en menos VRAM) y texturas en medio o alto.')
+    }
+    if ($px -ge 2560 * 1440 * 0.9 -and $gb -le 8) {
+        return (New-JuicerFinding 'Gráfica' $(if ($gb -le 6) { 'Medio' } else { 'Info' }) "$gb GB de VRAM a $res" 'Justo para 1440p en juegos recientes: texturas en alto, no en ultra, y sin trazado de rayos al máximo. Cuando la VRAM se llena no bajan los FPS medios sino los mínimos: tirones al girar la cámara.')
+    }
+    if ($gb -le 4) {
+        return (New-JuicerFinding 'Gráfica' 'Medio' "Sólo $gb GB de VRAM" 'Incluso a 1080p muchos juegos recientes piden 6-8 GB: texturas en bajo o medio. Es lo primero que hay que bajar si hay tirones.')
+    }
+    @()
+}
+
+# AMD APUs playing on their integrated graphics: its VRAM is a slice of the
+# system RAM set in the BIOS (UMA Frame Buffer Size).
+function Get-JuicerApuFindings {
+    param([object[]]$Gpus = @(), [hashtable]$Cpu, [int64]$RamBytes)
+    if (-not $Cpu -or $Cpu.Vendor -ne 'AMD' -or $Cpu.Mobile -or [string]$Cpu.Name -notmatch 'Ryzen [3579] \d{4}GT?\b') { return @() }
+    if (@($Gpus | Where-Object { $_.Discrete }).Count -gt 0) { return @() }
+    $igpu = @($Gpus | Where-Object { $_.Vendor -eq 'AMD' }) | Select-Object -First 1
+    $ramGb = [int][Math]::Round($RamBytes / 1GB)
+    $uma = if ($igpu -and $igpu.Vram -gt 0) { [int][Math]::Round($igpu.Vram / 1MB) } else { 0 }
+    $want = if ($ramGb -ge 32) { '4 GB' } elseif ($ramGb -ge 16) { '2 o 4 GB' } else { '1 o 2 GB' }
+    if ($uma -gt 0 -and $uma -lt 1024) {
+        return (New-JuicerFinding 'Gráfica' 'Medio' "La gráfica integrada sólo tiene $uma MB reservados" "En la BIOS, «UMA Frame Buffer Size» (a veces en AMD CBS > NBIO > GFX): con $ramGb GB de RAM, pon $want. Muchos juegos van a tirones o no arrancan con 512 MB. Y para esta gráfica la RAM es su VRAM: dos módulos y lo más rápida que sostenga tu APU.")
+    }
+    New-JuicerFinding 'Gráfica' 'Info' 'Juegas con la gráfica integrada de tu APU' "Su VRAM sale de la RAM: dos módulos (doble canal) y la mayor velocidad estable cuentan más que ningún ajuste de Windows. En la BIOS, «UMA Frame Buffer Size» de $want con $ramGb GB de RAM."
+}
+
+# A rough tier per card and per processor, to tell when one holds back the
+# other. 4 is the top of the current generations.
+function Get-JuicerGpuTier {
+    param([string]$Name)
+    if ($Name -match 'RTX\s*(?:4080|4090|5080|5090)|RX\s*(?:7900|9070\s*XT)|RTX\s*(?:4070|5070)\s*Ti') { return 4 }
+    if ($Name -match 'RTX\s*(?:3080|3090|4070|5070)|RX\s*(?:6800|6900|6950|7800|9070)') { return 3 }
+    if ($Name -match 'RTX\s*(?:2070|2080|3060|3070|4060|5060)|RX\s*(?:5700|6600|6650|6700|6750|7600|7700|9060)|Arc(?:\(TM\))?\s*(?:A750|A770|B570|B580)') { return 2 }
+    if ($Name -match 'GTX|RTX\s*(?:2060|3050)|RX\s*(?:4\d0|5[0-6]0|5500|5600|6400|6500)\b|Arc') { return 1 }
+    0
+}
+
+function Get-JuicerCpuTier {
+    param([hashtable]$Cpu)
+    $n = [string]$Cpu.Name
+    if (-not $n) { return 0 }
+    if ($Cpu.X3D -or $n -match 'Ryzen [579] (?:7\d{3}|9\d{3})|i[79]-1[34]\d{3}|Ultra [79] 2\d{2}') { return 3 }
+    if (($Cpu.Cores -gt 0 -and $Cpu.Cores -le 4) -or $n -match 'Ryzen [3579] [12]\d{3}|Ryzen [3579] 3\d{3}G|i[3579]-[2-8]\d{3}(?!\d)') { return 1 }
+    2
+}
+
+function Get-JuicerBalanceFindings {
+    param([object[]]$Gpus = @(), [hashtable]$Cpu)
+    $g = @($Gpus | Where-Object { $_.Discrete }) | Select-Object -First 1
+    if (-not $g -or -not $Cpu -or $Cpu.Mobile) { return @() }
+    $gt = Get-JuicerGpuTier $g.Name
+    $ct = Get-JuicerCpuTier $Cpu
+    if ($gt -ge 3 -and $ct -eq 1) {
+        return (New-JuicerFinding 'Gráfica' 'Medio' "Tu $($g.Name) va sobrada para tu $($Cpu.Name)" 'En muchos juegos el procesador marcará los FPS, sobre todo a 1080p. Aprovecha la gráfica donde no cuesta CPU: más resolución (1440p/4K, DLDSR o VSR), DLAA o FSR nativo en vez de reescalar, calidad alta. Reescalar más no dará más FPS, y la generación de fotogramas suaviza pero no quita los tirones del procesador. Un límite de FPS a lo que tu CPU sostiene deja los frametimes planos.')
+    }
+    if ($gt -eq 1 -and $ct -eq 3) {
+        return (New-JuicerFinding 'Gráfica' 'Info' "Tu $($Cpu.Name) va sobrado para tu $($g.Name)" 'Casi siempre limitará la gráfica: lo que da FPS es bajar la resolución interna (DLSS, FSR o XeSS en calidad o equilibrado), sombras y efectos. Lo que carga el procesador (distancia de dibujado, población, física) puedes subirlo casi gratis.')
+    }
+    @()
+}
+
+# Laptops whose internal screen is drawn by the integrated graphics while the
+# dedicated card renders the game (Optimus, hybrid): every frame is copied
+# across, which costs FPS and adds latency. Many gaming laptops have a MUX
+# switch to wire the screen to the dedicated card.
+$script:LaptopGpuApps = [ordered]@{
+    Alienware = 'Alienware Command Center o la BIOS (desactivar Hybrid Graphics)'; ASUS = 'Armoury Crate (Modo GPU: Ultimate)'
+    Lenovo = 'Legion Space o Lenovo Vantage (desactivar el modo híbrido)'; 'MSI|Micro-Star' = 'MSI Center (GPU Switch: Discrete Graphics Mode)'
+    HP = 'OMEN Gaming Hub (modo de gráficos: Discreto)'; Acer = 'NitroSense o PredatorSense'
+    Dell = 'la BIOS (desactivar Hybrid Graphics), si tu modelo lo permite'; Gigabyte = 'Gigabyte Control Center'; Razer = 'Razer Synapse (GPU Mode)'
+}
+
+function Get-JuicerOptimusFindings {
+    param([object[]]$Gpus = @(), [object[]]$Displays = @(), [bool]$Laptop, [string]$Maker = '')
+    if (-not $Laptop) { return @() }
+    $dgpu = @($Gpus | Where-Object { $_.Discrete }) | Select-Object -First 1
+    $panel = @($Displays | Where-Object { $_.Primary }) | Select-Object -First 1
+    if (-not $dgpu -or -not $panel -or -not $panel.Adapter) { return @() }
+    $a = Get-JuicerGpuTraits $panel.Adapter
+    if ($a.Discrete -or $a.Vendor -notin 'Intel', 'AMD') { return @() }
+    $brand = @($script:LaptopGpuApps.Keys | Where-Object { $Maker -match $_ }) | Select-Object -First 1
+    $where = if ($brand) { " En tu portátil se cambia en $($script:LaptopGpuApps[$brand]); pide reiniciar." } else { ' Se cambia en la app de control del fabricante o en la BIOS; pide reiniciar.' }
+    New-JuicerFinding 'Gráfica' 'Info' "La pantalla la dibuja la $($a.Name), no la $($dgpu.Name)" ("Es el modo híbrido (Optimus): la dedicada renderiza y cada fotograma se copia a la integrada, con algo menos de FPS y algo más de latencia. Si tu portátil tiene conmutador MUX o «Advanced Optimus», el modo de sólo la dedicada lo quita, a cambio de batería.$where Juega enchufado y con el modo de rendimiento del fabricante. Un monitor externo en un puerto conectado a la dedicada también lo evita.")
+}
+
+# Everything above, with what it needs read once.
+function Get-JuicerComboAudit {
+    $hw = Get-JuicerHardwareProfile
+    $out = @()
+    $board = ''; $maker = ''
+    try { $bb = Get-CimInstance Win32_BaseBoard -ErrorAction Stop; $board = ('{0} {1}' -f $bb.Manufacturer, $bb.Product).Trim() } catch { Write-Verbose "Sin placa: $_" }
+    try { $maker = [string](Get-CimInstance Win32_ComputerSystem -ErrorAction Stop).Manufacturer } catch { Write-Verbose "Sin fabricante: $_" }
+    $displays = @()
+    try { $displays = @(Get-JuicerDisplays) } catch { Write-Verbose "Sin pantallas: $_" }
+    $main = @($displays | Where-Object { $_.Primary }) | Select-Object -First 1
+    $out += Get-JuicerPcieFindings $hw.Gpus $hw.Cpu $board $hw.Laptop
+    if ($main) { $out += Get-JuicerVramFindings $hw.Gpus ([int]$main.Width) ([int]$main.Height) }
+    $out += Get-JuicerApuFindings $hw.Gpus $hw.Cpu $hw.RamBytes
+    $out += Get-JuicerBalanceFindings $hw.Gpus $hw.Cpu
+    $out += Get-JuicerOptimusFindings $hw.Gpus $displays $hw.Laptop $maker
+    $out
+}

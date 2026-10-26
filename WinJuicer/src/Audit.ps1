@@ -585,7 +585,7 @@ function Get-JuicerAudit {
     $sections = @(
         @('Sistema', ${function:Get-JuicerSystemAudit}), @('Procesador y memoria', ${function:Get-JuicerHardwareAudit}),
         @('Overclock y BIOS', ${function:Get-JuicerTuningAudit}), @('Estabilidad', ${function:Get-JuicerStabilityAudit}),
-        @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}),
+        @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}), @('Combinaciones', ${function:Get-JuicerComboAudit}),
         @('Discos', ${function:Get-JuicerStorageAudit}), @('Red', ${function:Get-JuicerNetworkAudit}),
         @('Seguridad', ${function:Get-JuicerSecurityAudit}), @('Arranque', ${function:Get-JuicerBootAudit}),
         @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajustes', ${function:Get-JuicerCatalogAudit})

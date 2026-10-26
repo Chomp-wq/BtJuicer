@@ -201,6 +201,25 @@ Windows guarda las pruebas, y Win Juicer las lee:
   10, en octubre de 2025). Si una directiva `TargetReleaseVersion` te ata a una
   versión antigua (algunas herramientas de «debloat» la ponen) o tienes las
   versiones nuevas retrasadas, lo dice, y entonces no recomienda retrasarlas.
+- **Combinaciones**: lo que sólo se ve mirando las piezas juntas.
+  - La **RAM según el procesador**: en un Ryzen 5000 lo que rinde es 3600-3800
+    en 1:1 con el Infinity Fabric, así que un kit de 4000 a 3600 está bien
+    elegido y a 4000 pierde; en AM5, 6000-6400; en Zen 2 y anteriores, menos;
+    las APU aguantan más. Ya no pide el XMP de un kit por encima de eso.
+  - Qué **ajuste fino** admite tu Ryzen: Curve Optimizer en los X3D (los
+    5000X3D y 7000X3D no se pueden subir de frecuencia), PBO completo en los
+    9000X3D.
+  - **Gráficas de 8 o 4 líneas PCIe** (RTX 4060/5060, RX 6600/7600, RX 6500
+    XT, Arc B580…) en un procesador o una placa de PCIe 3.0 (APU de AM4,
+    Ryzen 5500/5700, B450/A520, Intel de 10.ª o anterior, H510).
+  - La **VRAM frente a la resolución** de tu monitor (8 GB a 1440p o 4K).
+  - Una **APU sin gráfica dedicada**: la memoria que la BIOS le reserva (UMA
+    Frame Buffer Size).
+  - **Procesador y gráfica desequilibrados**: qué ajustes dan FPS y cuáles no
+    según cuál de los dos manda.
+  - **Portátil en modo híbrido**: la pantalla la dibuja la integrada; dónde
+    se cambia a sólo la dedicada (MUX) según la marca.
+  - Un **procesador híbrido de Intel en Windows 10**, sin Thread Director.
 
 ## Los tres perfiles
 

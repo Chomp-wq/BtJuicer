@@ -572,3 +572,89 @@ Describe 'Procesador y memoria juntos' {
         @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name '13th Gen Intel(R) Core(TM) i7-13700K' -Vendor 'GenuineIntel')).Count | Should -Be 0
     }
 }
+
+Describe 'Combinaciones de hardware' {
+    BeforeAll {
+        function New-Gpu {
+            param([string]$Name, [uint64]$Vram = 8GB)
+            $g = Get-JuicerGpuTraits $Name
+            $g.Vram = $Vram
+            $g
+        }
+        function New-Cpu { param([string]$Name, [int]$Cores = 6) Get-JuicerCpuTraits -Name $Name -Vendor $(if ($Name -match 'Intel') { 'GenuineIntel' } else { 'AuthenticAMD' }) -Cores $Cores -Threads (2 * $Cores) }
+    }
+
+    It 'gráficas de 8 y 4 líneas en PCIe 3.0, por la CPU o por la placa' {
+        Get-JuicerPcieLanes 'NVIDIA GeForce RTX 4060 Ti' | Should -Be 8
+        Get-JuicerPcieLanes 'AMD Radeon RX 6500 XT' | Should -Be 4
+        Get-JuicerPcieLanes 'NVIDIA GeForce RTX 4070' | Should -BeNullOrEmpty
+
+        $apu = New-Cpu 'AMD Ryzen 5 5600G with Radeon Graphics'
+        $f = @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 4060')) $apu 'ASUSTeK COMPUTER INC. TUF GAMING B550-PLUS')
+        $f.Count | Should -Be 1
+        $f[0].Severity | Should -Be 'Medio'
+        $f[0].Title | Should -BeLike '*8 líneas*5600G*da como mucho PCIe 3.0'
+
+        $vermeer = New-Cpu 'AMD Ryzen 7 5700X3D 8-Core Processor' 8
+        @(Get-JuicerPcieFindings @((New-Gpu 'AMD Radeon RX 6500 XT' 4GB)) $vermeer 'Micro-Star International Co., Ltd. B450 TOMAHAWK MAX')[0].Severity | Should -Be 'Alto'
+        # The same processor on a B550 board: PCIe 4.0, nothing to say.
+        @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 4060')) $vermeer 'Micro-Star International Co., Ltd. MAG B550 TOMAHAWK').Count | Should -Be 0
+        # A full x16 card on 3.0 loses next to nothing.
+        @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 3070')) $apu '').Count | Should -Be 0
+        # The 5700 and 5500 are APUs without graphics; the 5600 is not; the 8600G gives 4.0.
+        Get-JuicerPcie3Reason (New-Cpu 'AMD Ryzen 7 5700 8-Core Processor') '' | Should -Not -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu 'AMD Ryzen 5 5600 6-Core Processor') '' | Should -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu 'AMD Ryzen 5 8600G w/ Radeon 760M Graphics') '' | Should -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu 'Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz') '' | Should -Not -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu '11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz') 'ASUSTeK COMPUTER INC. PRIME Z490-P' | Should -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu '11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz') 'Gigabyte Technology Co., Ltd. H510M H' | Should -Not -BeNullOrEmpty
+        # Laptops wire their own lanes.
+        @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 4060')) $apu '' $true).Count | Should -Be 0
+    }
+
+    It 'la VRAM frente a la resolución del monitor' {
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4060 Ti' 8GB)) 3840 2160)[0].Severity | Should -Be 'Medio'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4060 Ti' 8GB)) 2560 1440)[0].Severity | Should -Be 'Info'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 2060' 6GB)) 2560 1440)[0].Severity | Should -Be 'Medio'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4060 Ti' 8GB)) 1920 1080).Count | Should -Be 0
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce GTX 1650' 4GB)) 1920 1080)[0].Title | Should -Be 'Sólo 4 GB de VRAM'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4090' 24GB)) 3840 2160).Count | Should -Be 0
+        @(Get-JuicerVramFindings @((New-Gpu 'Intel(R) UHD Graphics 770' 128MB)) 3840 2160).Count | Should -Be 0
+    }
+
+    It 'APU sin gráfica dedicada: la memoria reservada en la BIOS' {
+        $apu = New-Cpu 'AMD Ryzen 7 5700G with Radeon Graphics' 8
+        $f = @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 512MB)) $apu 16GB)
+        $f[0].Severity | Should -Be 'Medio'
+        $f[0].Title | Should -BeLike '*512 MB*'
+        $f[0].Detail | Should -BeLike '*UMA Frame Buffer Size*2 o 4 GB*'
+        @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 4GB)) $apu 32GB)[0].Severity | Should -Be 'Info'
+        @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 512MB), (New-Gpu 'NVIDIA GeForce RTX 3060')) $apu 16GB).Count | Should -Be 0
+        @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 512MB)) (New-Cpu 'AMD Ryzen 7 7840HS w/ Radeon 780M Graphics' 8) 16GB).Count | Should -Be 0
+    }
+
+    It 'procesador y gráfica desequilibrados' {
+        $old = New-Cpu 'Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz'
+        $f = @(Get-JuicerBalanceFindings @((New-Gpu 'NVIDIA GeForce RTX 4080 SUPER' 16GB)) $old)
+        $f[0].Severity | Should -Be 'Medio'
+        $f[0].Title | Should -BeLike '*4080 SUPER va sobrada para tu*8700K*'
+        @(Get-JuicerBalanceFindings @((New-Gpu 'NVIDIA GeForce GTX 1650' 4GB)) (New-Cpu 'AMD Ryzen 7 7800X3D 8-Core Processor' 8))[0].Severity | Should -Be 'Info'
+        @(Get-JuicerBalanceFindings @((New-Gpu 'NVIDIA GeForce RTX 4070' 12GB)) (New-Cpu 'AMD Ryzen 5 5600 6-Core Processor')).Count | Should -Be 0
+        Get-JuicerGpuTier 'NVIDIA GeForce RTX 4070 Ti SUPER' | Should -Be 4
+        Get-JuicerGpuTier 'AMD Radeon RX 6600' | Should -Be 2
+        Get-JuicerCpuTier (New-Cpu 'AMD Ryzen 5 2600 Six-Core Processor') | Should -Be 1
+    }
+
+    It 'portátil en modo híbrido: dónde se cambia a sólo la dedicada' {
+        $gpus = @((Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070 Laptop GPU'), (Get-JuicerGpuTraits 'AMD Radeon(TM) 780M'))
+        $hybrid = @([pscustomobject]@{ Adapter = 'AMD Radeon(TM) 780M'; Primary = $true })
+        $f = @(Get-JuicerOptimusFindings $gpus $hybrid $true 'ASUSTeK COMPUTER INC.')
+        $f.Count | Should -Be 1
+        $f[0].Detail | Should -BeLike '*Armoury Crate (Modo GPU: Ultimate)*'
+        @(Get-JuicerOptimusFindings $gpus $hybrid $true 'Alienware')[0].Detail | Should -BeLike '*Alienware Command Center*'
+        @(Get-JuicerOptimusFindings $gpus $hybrid $true 'Micro-Star International Co., Ltd.')[0].Detail | Should -BeLike '*MSI Center*'
+        @(Get-JuicerOptimusFindings $gpus $hybrid $true 'Clevo')[0].Detail | Should -BeLike '*app de control del fabricante*'
+        @(Get-JuicerOptimusFindings $gpus @([pscustomobject]@{ Adapter = 'NVIDIA GeForce RTX 4070 Laptop GPU'; Primary = $true }) $true 'ASUSTeK COMPUTER INC.').Count | Should -Be 0
+        @(Get-JuicerOptimusFindings $gpus $hybrid $false 'ASUSTeK COMPUTER INC.').Count | Should -Be 0
+    }
+}
