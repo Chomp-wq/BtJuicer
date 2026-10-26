@@ -170,6 +170,63 @@ Import-Module '$psm' -Force
         }
     }
 
+    It 'la ventana hace su trabajo en segundo plano: leer, diagnosticar, aplicar y deshacer' {
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.ApartmentState = 'STA'
+        $rs.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
+        [void]$ps.AddScript(@"
+Import-Module '$psm' -Force
+& (Get-Module WinJuicer) {
+    # What the window's timer does, without a window loop to drive it.
+    function Wait-Gui {
+        `$limit = (Get-Date).AddMinutes(8)
+        while ((`$script:Gui.Task -or `$script:Gui.Queue.Count -gt 0) -and (Get-Date) -lt `$limit) {
+            if (`$script:Gui.Task -and `$script:Gui.Task.Handle.IsCompleted) { Complete-JuicerGuiTask } else { Start-Sleep -Milliseconds 200 }
+        }
+    }
+    `$null = Show-JuicerGui -NoShow
+    Start-JuicerGuiTask 'x' 'Init' @{} { param(`$r) Complete-JuicerGuiInit `$r }
+    Wait-Gui
+    `$init = @{ Checks = `$script:Gui.Checks.Count; Findings = @(`$script:Gui.Findings).Count; Cpu = `$script:Gui.Hw.Cpu.Name }
+    `$on = (Get-JuicerTweakState (Find-JuicerTweak 'pref.extensiones')).State -eq 'Aplicado'
+    Start-JuicerGuiTask 'x' 'Run' @{ Toggles = @(@{ Id = 'pref.extensiones'; On = (-not `$on) }) } { param(`$r) `$script:Gui.Last = `$r; Complete-JuicerGuiRun `$r }
+    Wait-Gui
+    `$flipped = (Get-JuicerTweakState (Find-JuicerTweak 'pref.extensiones')).State -eq 'Aplicado'
+    `$ids = @(Read-JuicerJournal | ForEach-Object { `$_.Id })
+    Start-JuicerGuiTask 'x' 'Run' @{ Undo = `$ids } { param(`$r) Complete-JuicerGuiRun `$r }
+    Wait-Gui
+    Start-JuicerGuiTask 'x' 'Debloat' @{} { param(`$r) Show-JuicerGuiDebloat `$r.Apps }
+    Wait-Gui
+    `$script:Gui.Window.Close()
+    @{
+        Init = `$init; Flipped = (`$flipped -ne `$on); Outcome = `$script:Gui.Last.Results[0].Outcome; Journal = (Read-JuicerJournal).Count
+        Messages = @(`$script:Gui.Silent); Pending = [bool]`$script:Gui.Task
+    }
+}
+"@)
+        try {
+            $out = @($ps.Invoke())
+            foreach ($e in $ps.Streams.Error) { Write-Host "    $e" }
+            $ps.Streams.Error.Count | Should -Be 0
+            $r = $out[-1]
+            foreach ($m in $r.Messages) { Write-Host "    mensaje: $m" }
+            $r.Pending | Should -BeFalse
+            $r.Init.Cpu | Should -Not -BeNullOrEmpty
+            $r.Init.Checks | Should -BeGreaterThan 30
+            $r.Init.Findings | Should -BeGreaterThan 5
+            $r.Flipped | Should -BeTrue
+            $r.Outcome | Should -BeIn @('Aplicado', 'Deshecho')
+            $r.Journal | Should -Be 0
+            @($r.Messages | Where-Object { $_ -like '`[Error`]*' }) | Should -BeNullOrEmpty
+        } finally {
+            $ps.Dispose()
+            $rs.Dispose()
+        }
+    }
+
     It 'añade y quita una exclusión de Defender' {
         $dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-def-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $dir | Out-Null

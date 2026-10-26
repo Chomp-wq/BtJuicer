@@ -361,8 +361,11 @@ function New-JuicerTip {
     New-JuicerUi TextBlock @{ Text = (@($Lines | Where-Object { $_ }) -join "`n`n"); TextWrapping = 'Wrap'; MaxWidth = 480 }
 }
 
+# Silent: the tests drive the window with nobody to click, so messages are
+# collected and every question is answered «No».
 function Show-JuicerGuiMessage {
     param([string]$Text, [string]$Kind = 'Information', [string]$Buttons = 'OK')
+    if ($null -ne $script:Gui.Silent) { [void]$script:Gui.Silent.Add("[$Kind] $Text"); return 'No' }
     $mb = 'System.Windows.MessageBox' -as [type]
     [string]$mb::Show($script:Gui.Window, $Text, 'Win Juicer', $Buttons, $Kind)
 }
@@ -1092,7 +1095,10 @@ function Show-JuicerGui {
     Register-JuicerGuiHandlers
     Show-JuicerGuiMyths
     Show-JuicerGuiUndo
-    if ($NoShow) { return $script:Gui }
+    if ($NoShow) {
+        $script:Gui.Silent = New-Object System.Collections.ArrayList
+        return $script:Gui
+    }
     $win.Add_ContentRendered({ Start-JuicerGuiTask 'Leyendo el equipo…' 'Init' @{} { param($r) Complete-JuicerGuiInit $r } })
     [void]$win.ShowDialog()
 }
