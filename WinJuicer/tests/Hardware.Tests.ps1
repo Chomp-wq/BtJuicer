@@ -658,3 +658,75 @@ Describe 'Combinaciones de hardware' {
         @(Get-JuicerOptimusFindings $gpus $hybrid $false 'ASUSTeK COMPUTER INC.').Count | Should -Be 0
     }
 }
+
+Describe 'Ajuste fino' {
+    BeforeEach { Remove-JuicerTuneRecord }
+
+    It 'da la receta de undervolt de cada procesador' {
+        $x3d = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD'
+        $g = Get-JuicerCpuTuneGuide $x3d
+        $g.Key | Should -Be 'zen3x3d'
+        $g.Steps | Should -BeLike '*-15*-30*-40 mV*'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen4x3d'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 9800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen5x3d'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 7600X 6-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen3plus'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 3600 6-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen2older'
+        $rpl = Get-JuicerCpuTraits -Name '13th Gen Intel(R) Core(TM) i7-13700K' -Vendor 'GenuineIntel' -Identifier 'Intel64 Family 6 Model 183 Stepping 1'
+        (Get-JuicerCpuTuneGuide $rpl).Steps | Should -BeLike '*0x12B*AC Load Line*'
+        Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name '13th Gen Intel(R) Core(TM) i5-13400F' -Vendor 'GenuineIntel') | Should -BeNullOrEmpty
+        Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7840HS w/ Radeon 780M Graphics' -Vendor 'AuthenticAMD') | Should -BeNullOrEmpty
+    }
+
+    It 'y la de cada arquitectura de gráfica, con cómo se aplica en cada inicio' {
+        @{ 'NVIDIA GeForce RTX 5070 Ti' = 'blackwell'; 'NVIDIA GeForce RTX 4070 SUPER' = 'ada'; 'NVIDIA GeForce RTX 3080' = 'ampere'
+            'NVIDIA GeForce GTX 1660 SUPER' = 'turing'; 'NVIDIA GeForce GTX 1080 Ti' = 'pascal'; 'AMD Radeon RX 9070 XT' = 'rdna4'
+            'AMD Radeon RX 7800 XT' = 'rdna3'; 'AMD Radeon RX 6700 XT' = 'rdna2'; 'Intel(R) Arc(TM) B580 Graphics' = 'arc' }.GetEnumerator() | ForEach-Object {
+            Get-JuicerGpuArch $_.Key | Should -Be $_.Value -Because $_.Key
+        }
+        Get-JuicerGpuArch 'AMD Radeon(TM) Graphics' | Should -BeNullOrEmpty
+        $a = Get-JuicerGpuTuneGuide 'NVIDIA GeForce RTX 3080'
+        $a.Steps | Should -BeLike '*850-900 mV*GDDR6X*'
+        $a.Persist | Should -BeLike '*Aplicar overclock al iniciar el sistema*'
+        (Get-JuicerGpuTuneGuide 'AMD Radeon RX 7800 XT').Persist | Should -BeLike '*AMD Software*'
+        $f = @(Get-JuicerTuneGuideFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD') @((Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070'), (Get-JuicerGpuTraits 'AMD Radeon(TM) Graphics')) $false)
+        $f.Count | Should -Be 3
+        $f[0].Detail | Should -BeLike '*BIOS lo guarda y lo aplica en cada arranque*'
+        $f[1].Title | Should -BeLike '*RTX 4070 (Ada Lovelace*'
+        # On a laptop the BIOS rarely lets you: no CPU recipe.
+        @(Get-JuicerTuneGuideFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD') @() $true).Count | Should -Be 0
+    }
+
+    It 'recuerda lo aplicado y avisa si la BIOS o la RAM cambian o hay errores' {
+        $r = Save-JuicerTuneRecord -Cpu 'Curve Optimizer -30' -Gpu 'curva 900 mV' -GpuTool 'Afterburner' -Bios 'F15 2024-05-01' -RamSpeed 3600
+        (Read-JuicerTuneRecord).Cpu | Should -Be 'Curve Optimizer -30'
+        $ok = @(Get-JuicerTuneCheckFindings $r 'F15 2024-05-01' 3600 0 0 $true)
+        @($ok | Where-Object { $_.Severity -in 'Alto', 'Medio' }).Count | Should -Be 0
+        @($ok | Where-Object { $_.Severity -eq 'Ok' }).Count | Should -Be 2
+        $bad = @(Get-JuicerTuneCheckFindings $r 'F17 2025-02-10' 2133 3 2 $false)
+        @($bad | Where-Object { $_.Title -like 'La BIOS ha cambiado*' })[0].Detail | Should -BeLike '*Curve Optimizer -30*'
+        @($bad | Where-Object { $_.Title -like 'La RAM va a 2133*' }).Count | Should -Be 1
+        @($bad | Where-Object { $_.Title -like '3 errores*' }).Count | Should -Be 1
+        @($bad | Where-Object { $_.Title -like '*reiniciado 2 veces*' }).Count | Should -Be 1
+        @($bad | Where-Object { $_.Title -like 'MSI Afterburner no arranca*' }).Count | Should -Be 1
+        @(Get-JuicerTuneCheckFindings $null '' 0 0 0 $null).Count | Should -Be 0
+        # Once recorded, the guide stops asking to record it.
+        @(Get-JuicerTuneGuideFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD') @() $false | Where-Object { $_.Title -like 'Apunta*' }).Count | Should -Be 0
+    }
+
+    It 'el script que vigila al iniciar sesión es PowerShell válido' {
+        $text = Get-JuicerTuneWatchScript "C:\ProgramData\WinJuicer\ajuste-fino.json"
+        $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errors)
+        $errors | Should -BeNullOrEmpty
+        $text | Should -BeLike "*'C:\ProgramData\WinJuicer\ajuste-fino.json'*"
+        (Get-JuicerTuneWatchScript "C:\Users\O'Brien\x.json") | Should -BeLike "*'C:\Users\O''Brien\x.json'*"
+    }
+
+    It 'desde la línea de órdenes' {
+        @(Start-Juicer -ApuntarAjuste -Si 6>$null)[-1] | Should -Be 2
+        @(Start-Juicer -ApuntarAjuste -AjusteCpu 'CO -25' -Si 6>$null)[-1] | Should -Be 0
+        (Read-JuicerTuneRecord).Cpu | Should -Be 'CO -25'
+        @(Start-Juicer -OlvidarAjuste -Si 6>$null)[-1] | Should -Be 0
+        Read-JuicerTuneRecord | Should -BeNullOrEmpty
+    }
+}

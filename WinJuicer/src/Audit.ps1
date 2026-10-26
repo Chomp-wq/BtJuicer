@@ -580,6 +580,16 @@ function Save-JuicerAuditReport {
 
 # OnSection, if given, is told the name of each part as it starts: the
 # window shows it while the diagnosis runs.
+# Undervolt and overclock: the recipe for this processor and card, and
+# whether what was applied is still there and stable.
+function Get-JuicerFineTuneAudit {
+    $gpus = @()
+    try { $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | ForEach-Object { Get-JuicerGpuTraits $_.Name }) } catch { Write-Verbose "Sin gráficas: $_" }
+    $out = @(Get-JuicerTuneCheck)
+    $out += Get-JuicerTuneGuideFindings (Get-JuicerCpuInfo) $gpus (Test-JuicerLaptop)
+    $out
+}
+
 function Get-JuicerAudit {
     param([scriptblock]$OnSection)
     $sections = @(
@@ -588,7 +598,8 @@ function Get-JuicerAudit {
         @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}), @('Combinaciones', ${function:Get-JuicerComboAudit}),
         @('Discos', ${function:Get-JuicerStorageAudit}), @('Red', ${function:Get-JuicerNetworkAudit}),
         @('Seguridad', ${function:Get-JuicerSecurityAudit}), @('Arranque', ${function:Get-JuicerBootAudit}),
-        @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajustes', ${function:Get-JuicerCatalogAudit})
+        @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajuste fino', ${function:Get-JuicerFineTuneAudit}),
+        @('Ajustes', ${function:Get-JuicerCatalogAudit})
     )
     $all = @()
     foreach ($s in $sections) {

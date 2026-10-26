@@ -112,6 +112,8 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # límite recomendado, aplicado solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o el tuyo
+.\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
+.\WinJuicer.ps1 -OlvidarAjuste
 .\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el límite va exacto a los Hz
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
@@ -359,6 +361,46 @@ se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
   edge sync» los frametimes más planos.
 - Se deshace como todo lo demás, devolviendo el límite que tuviera el juego.
   Mide antes y después: la medida compara FPS, 1 % bajo y latencia.
+
+### Ajuste fino: undervolt y overclock
+
+Pestaña **Ajuste fino** (opción 14 de la consola). Para tu procesador y tu
+gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
+
+- **Procesador, en la BIOS.**
+  - Ryzen 5000X3D (5700X3D, 5800X3D…): Curve Optimizer de -15 a -30, o un
+    offset de -0,03 a -0,05 V.
+  - 7000X3D: Curve Optimizer.
+  - 9000X3D: Curve Optimizer más PBO y Boost Override.
+  - Ryzen 5000/7000/9000: Curve Optimizer por núcleo y PBO.
+  - Intel K de 12.ª a 14.ª: AC Load Line u offset, tras el microcódigo 0x12B
+    en 13.ª y 14.ª.
+  - La placa lo guarda y lo aplica en cada arranque, antes de Windows, sin
+    ningún programa. Win Juicer no lo aplica desde Windows: las herramientas que
+    lo hacen necesitan un driver de núcleo (WinRing0 y similares) que Microsoft
+    Defender marca como vulnerable desde 2025 y que los anti-trampas vigilan.
+- **Gráfica, en su herramienta**, con la receta de cada arquitectura:
+  - RTX 50: frecuencia +200-300 y GDDR7.
+  - RTX 40: curva a 0,95-1,00 V.
+  - RTX 30: curva a 850-900 mV; la GDDR6X rinde menos, sin colgarse, si te
+    pasas de memoria.
+  - RTX 20/GTX 16, GTX 10, RX 9000/7000/6000 e Intel Arc: cada una con su
+    receta.
+  - Cómo hacer que se aplique en cada inicio: el perfil de Afterburner con
+    «Aplicar overclock al iniciar el sistema», o AMD Software, que lo conserva
+    salvo tras un cuelgue. La API pública de NVIDIA permite leer frecuencias y
+    voltajes, no fijarlos, así que Win Juicer no escribe un overclock a ciegas.
+- **Lo apuntas y lo vigila.** Escribes lo que aplicaste («Curve Optimizer
+  -30», «curva 900 mV a 1900 MHz»). Win Juicer guarda también la versión de la
+  BIOS y la velocidad de la RAM, y en cada inicio de sesión (una tarea como tu
+  usuario, sin administrador) avisa con una notificación si:
+  - una actualización de BIOS lo ha borrado;
+  - la RAM ha vuelto a otra velocidad;
+  - hay errores WHEA o cuelgues del driver de la gráfica desde entonces;
+  - Afterburner ya no arranca con Windows.
+
+Los valores son puntos de partida: cada chip es distinto. Pruébalos como dice
+cada receta y mide FPS antes y después con Juegos > Medir.
 
 ### El monitor
 
@@ -614,6 +656,7 @@ WinJuicer/
   src/Frames.ps1          FPS y frametimes con PresentMon
   src/Monitor.ps1         el monitor: EDID, FreeSync, VRR, HDR y consejos
   src/Limiter.ps1         limitador de FPS por juego
+  src/FineTune.ps1        undervolt de CPU y overclock de GPU: recetas, registro y vigilancia
   src/Version.ps1         aviso de versión nueva
   src/Startup.ps1         programas de inicio
   src/Games.ps1           bibliotecas de juegos y ajustes por ejecutable

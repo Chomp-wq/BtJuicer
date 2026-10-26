@@ -299,6 +299,40 @@ function Write-JuicerFindings {
     }
 }
 
+function Show-JuicerFineTune {
+    while ($true) {
+        Write-JuicerHeader 'Ajuste fino'
+        Write-JuicerWrapped 'El undervolt del procesador va en la BIOS (la placa lo aplica en cada arranque, sin programas ni drivers de núcleo); el de la gráfica, en su herramienta. Valores de partida para tus componentes:' 2 'Gray'
+        $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { Get-JuicerGpuTraits $_.Name })
+        Write-JuicerFindings @(Get-JuicerTuneGuideFindings (Get-JuicerCpuInfo) $gpus (Test-JuicerLaptop))
+        Write-Host ''
+        Write-JuicerFindings @(Get-JuicerTuneCheck)
+        Write-Host ''
+        Write-JuicerMenu @(
+            @('A', 'Apuntar lo que he aplicado', 'y comprobarlo en cada inicio de sesión'),
+            @('O', 'Olvidarlo', 'y dejar de comprobarlo')
+        )
+        switch ((Read-JuicerChoice 'Elige, Intro para volver').ToUpperInvariant()) {
+            'A' {
+                $cpu = Read-JuicerChoice 'Procesador (por ejemplo «Curve Optimizer -30»; Intro si nada)'
+                $gpu = Read-JuicerChoice 'Gráfica (por ejemplo «curva 900 mV a 1900 MHz, memoria +500»; Intro si nada)'
+                $tool = ''
+                if ($gpu) {
+                    $t = Read-JuicerChoice 'La aplica: 1 Afterburner, 2 AMD Software, 3 Intel, Intro no lo sé'
+                    $tool = @{ '1' = 'Afterburner'; '2' = 'Adrenalin'; '3' = 'Intel' }[$t]
+                    if (-not $tool) { $tool = '' }
+                }
+                if ($cpu -or $gpu) {
+                    [void](Save-JuicerTuneRecord -Cpu $cpu -Gpu $gpu -GpuTool $tool)
+                    if (Confirm-JuicerAction '¿Comprobarlo cada vez que inicies sesión y avisarte si algo cambia?') { Register-JuicerTuneWatch }
+                }
+            }
+            'O' { Remove-JuicerTuneRecord; Unregister-JuicerTuneWatch }
+            '' { return }
+        }
+    }
+}
+
 function Show-JuicerMeasure {
     while ($true) {
         Write-JuicerHeader 'Antes y después'
@@ -966,6 +1000,7 @@ function Show-JuicerMainMenu {
             @('11', 'Deshacer', 'todo, o cambio a cambio'),
             @('12', 'Lo que no hacemos', 'los «trucos» que circulan, y por qué no'),
             @('13', 'Antes y después', 'arranque, procesos y memoria: qué han cambiado los ajustes'),
+            @('14', 'Ajuste fino', 'undervolt de CPU y overclock de GPU para tus componentes, y vigilarlos'),
             @('0', 'Salir', '')
         )
         if ($script:UpdateNotice) {
@@ -987,6 +1022,7 @@ function Show-JuicerMainMenu {
             '11' { Show-JuicerUndo }
             '12' { Show-JuicerMyths }
             '13' { Show-JuicerMeasure }
+            '14' { Show-JuicerFineTune }
             '0' { return }
         }
     }
@@ -1059,6 +1095,11 @@ function Start-Juicer {
         [switch]$Equipo,
         [switch]$Medir,
         [switch]$NuevaMedida,
+        [switch]$ApuntarAjuste,
+        [string]$AjusteCpu,
+        [string]$AjusteGpu,
+        [ValidateSet('', 'Afterburner', 'Adrenalin', 'Intel')][string]$HerramientaGpu = '',
+        [switch]$OlvidarAjuste,
         [int]$MedirJuego,
         [string]$Juego,
         [string[]]$LimitarFps = @(),
@@ -1088,7 +1129,7 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
@@ -1149,6 +1190,14 @@ function Start-Juicer {
             Write-Host "  No se pudo medir: $_" -ForegroundColor Yellow
             return 1
         }
+    }
+    if ($OlvidarAjuste) { Remove-JuicerTuneRecord; Unregister-JuicerTuneWatch; Write-Host '  Ajuste fino olvidado.'; return 0 }
+    if ($ApuntarAjuste) {
+        if (-not $AjusteCpu -and -not $AjusteGpu) { Write-Host '  Indica -AjusteCpu, -AjusteGpu o los dos.' -ForegroundColor Yellow; return 2 }
+        [void](Save-JuicerTuneRecord -Cpu $AjusteCpu -Gpu $AjusteGpu -GpuTool $HerramientaGpu)
+        Register-JuicerTuneWatch
+        Write-JuicerFindings @(Get-JuicerTuneCheck)
+        return 0
     }
     if ($Medir -or $NuevaMedida) { Write-JuicerFindings (Invoke-JuicerMeasure -Reset:$NuevaMedida); return 0 }
     if ($Exportar) {

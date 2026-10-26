@@ -346,6 +346,39 @@ $script:GuiXaml = @'
         </ScrollViewer>
       </TabItem>
 
+      <TabItem Header="Ajuste fino" x:Name="TabAjusteFino">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="14,4,14,10">
+            <TextBlock Text="Undervolt y overclock para tu equipo" Style="{StaticResource Head}"/>
+            <TextBlock Style="{StaticResource Note}" Text="El del procesador va en la BIOS: la placa lo guarda y lo aplica en cada arranque sin ningún programa, y Win Juicer no instala drivers de núcleo para tocarlo desde Windows (Defender los marca como vulnerables y los anti-trampas los vigilan). El de la gráfica, en su herramienta (Afterburner, AMD Software o Intel), que lo aplica al iniciar. Aquí tienes los valores de partida para tus componentes."/>
+            <StackPanel x:Name="FineGuidePanel"/>
+            <TextBlock Text="Lo que has aplicado" Style="{StaticResource Head}"/>
+            <TextBlock Style="{StaticResource Note}" Text="Apúntalo y Win Juicer lo recordará: en cada inicio de sesión comprueba que una actualización de BIOS no lo ha borrado, que la RAM sigue a su velocidad y que no hay errores ni cuelgues desde entonces, y te avisa si algo cambia."/>
+            <Grid Margin="0,4,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <TextBlock Grid.Row="0" Text="Procesador (BIOS)" VerticalAlignment="Center" Foreground="#9A9AA5"/>
+              <TextBox Grid.Row="0" Grid.Column="1" x:Name="FineCpu" Margin="3" ToolTip="Por ejemplo: Curve Optimizer -30, o offset -40 mV"/>
+              <TextBlock Grid.Row="1" Text="Gráfica" VerticalAlignment="Center" Foreground="#9A9AA5"/>
+              <TextBox Grid.Row="1" Grid.Column="1" x:Name="FineGpu" Margin="3" ToolTip="Por ejemplo: curva 900 mV a 1900 MHz, memoria +500"/>
+              <TextBlock Grid.Row="2" Text="La aplica" VerticalAlignment="Center" Foreground="#9A9AA5"/>
+              <ComboBox Grid.Row="2" Grid.Column="1" x:Name="FineGpuTool" Margin="3" Width="220" HorizontalAlignment="Left" SelectedIndex="0">
+                <ComboBoxItem Content="Nada / no lo sé" Tag=""/>
+                <ComboBoxItem Content="MSI Afterburner" Tag="Afterburner"/>
+                <ComboBoxItem Content="AMD Software (Adrenalin)" Tag="Adrenalin"/>
+                <ComboBoxItem Content="Intel Graphics Software" Tag="Intel"/>
+              </ComboBox>
+            </Grid>
+            <CheckBox x:Name="FineWatch" Content="Comprobarlo cada vez que inicio sesión y avisarme" IsChecked="True"/>
+            <WrapPanel>
+              <Button x:Name="BtnFineSave" Content="Apuntar mi ajuste" Style="{StaticResource Accent}"/>
+              <Button x:Name="BtnFineForget" Content="Olvidarlo"/>
+            </WrapPanel>
+            <StackPanel x:Name="FineCheckPanel"/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
       <TabItem Header="Mantenimiento" x:Name="TabMantenimiento">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="14,4,14,10">
@@ -470,6 +503,20 @@ $script:GuiWork = @{
     }
     Frames     = {
         @{ Findings = @(Invoke-JuicerFrameCapture -Seconds ([int]$A.Seconds) -Delay 10 -OnStatus { param($t) $Sync.Status = $t }) }
+    }
+    FineTune   = {
+        if ($A.Save) {
+            $Sync.Status = 'Apuntando tu ajuste…'
+            [void](Save-JuicerTuneRecord -Cpu $A.Cpu -Gpu $A.Gpu -GpuTool $A.Tool)
+            if ($A.Watch) { Register-JuicerTuneWatch } else { Unregister-JuicerTuneWatch }
+        }
+        if ($A.Forget) { Remove-JuicerTuneRecord; Unregister-JuicerTuneWatch }
+        $Sync.Status = 'Comprobando tu ajuste fino…'
+        $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { Get-JuicerGpuTraits $_.Name })
+        @{
+            Guide = @(Get-JuicerTuneGuideFindings (Get-JuicerCpuInfo) $gpus (Test-JuicerLaptop) | Where-Object { $_.Title -notlike 'Apunta en Win Juicer*' })
+            Check = @(Get-JuicerTuneCheck); Record = (Read-JuicerTuneRecord); Watch = (Test-JuicerTuneWatch)
+        }
     }
     Measure    = {
         $Sync.Status = 'Midiendo arranque, procesos y memoria…'
@@ -1030,6 +1077,26 @@ function Start-JuicerGuiInstalled {
     }
 }
 
+function Start-JuicerGuiFineTune {
+    param([hashtable]$Arguments = @{})
+    Start-JuicerGuiTask 'Leyendo tu ajuste fino…' 'FineTune' $Arguments {
+        param($r)
+        $c = $script:Gui.C
+        $c.FineGuidePanel.Children.Clear()
+        foreach ($f in @($r.Guide)) { [void]$c.FineGuidePanel.Children.Add((New-JuicerFindingCard $f)) }
+        if (@($r.Guide).Count -eq 0) { [void]$c.FineGuidePanel.Children.Add((New-JuicerUi TextBlock @{ Text = 'Para tus componentes no hay una receta que merezca la pena (portátil, o procesador sin margen).'; Foreground = '#9A9AA5'; TextWrapping = 'Wrap' })) }
+        $c.FineCheckPanel.Children.Clear()
+        foreach ($f in @($r.Check)) { [void]$c.FineCheckPanel.Children.Add((New-JuicerFindingCard $f)) }
+        if ($r.Record) {
+            $c.FineCpu.Text = [string]$r.Record.Cpu
+            $c.FineGpu.Text = [string]$r.Record.Gpu
+            foreach ($i in $c.FineGpuTool.Items) { if ([string]$i.Tag -eq [string]$r.Record.GpuTool) { $c.FineGpuTool.SelectedItem = $i } }
+            $c.FineWatch.IsChecked = [bool]$r.Watch
+        }
+        Set-JuicerGuiStatus 'Ajuste fino al día.'
+    }
+}
+
 function Start-JuicerGuiGames {
     Start-JuicerGuiTask 'Buscando bibliotecas de juegos…' 'Games' @{} { param($r) Show-JuicerGuiGames $r.Libraries; Show-JuicerGuiLimiter $r.Limiter }
 }
@@ -1135,6 +1202,17 @@ function Register-JuicerGuiHandlers {
     $h = @{
         BtnAudit              = { Start-JuicerGuiAudit }
         BtnMeasure            = { Start-JuicerGuiMeasure $false }
+        BtnFineSave           = {
+            $c = $script:Gui.C
+            $cpu = ([string]$c.FineCpu.Text).Trim(); $gpu = ([string]$c.FineGpu.Text).Trim()
+            if (-not $cpu -and -not $gpu) { Show-JuicerGuiMessage 'Escribe qué has aplicado al procesador, a la gráfica o a los dos.' | Out-Null; return }
+            $tool = if ($c.FineGpuTool.SelectedItem) { [string]$c.FineGpuTool.SelectedItem.Tag } else { '' }
+            Start-JuicerGuiFineTune @{ Save = $true; Cpu = $cpu; Gpu = $gpu; Tool = $tool; Watch = [bool]$c.FineWatch.IsChecked }
+        }
+        BtnFineForget         = {
+            if (-not (Confirm-JuicerGui '¿Olvidar tu ajuste apuntado y dejar de comprobarlo al iniciar sesión? No cambia nada en la BIOS ni en la gráfica.')) { return }
+            Start-JuicerGuiFineTune @{ Forget = $true }
+        }
         BtnFrameMeasure       = {
             $item = $script:Gui.C.FrameSeconds.SelectedItem
             $secs = if ($item) { [int]$item.Tag } else { 60 }
@@ -1363,6 +1441,7 @@ function Register-JuicerGuiHandlers {
             elseif ($tab -eq $script:Gui.C.TabInstalar -and $null -eq $script:Gui.Installed) { Start-JuicerGuiInstalled }
             elseif ($tab -eq $script:Gui.C.TabInicio -and -not $script:Gui.StartupLoaded) { $script:Gui.StartupLoaded = $true; Start-JuicerGuiStartupList }
             elseif ($tab -eq $script:Gui.C.TabJuegos -and -not $script:Gui.GamesLoaded) { $script:Gui.GamesLoaded = $true; Start-JuicerGuiGames }
+            elseif ($tab -eq $script:Gui.C.TabAjusteFino -and -not $script:Gui.FineLoaded) { $script:Gui.FineLoaded = $true; Start-JuicerGuiFineTune }
             elseif ($tab -eq $script:Gui.C.TabDeshacer) { Show-JuicerGuiUndo }
         })
 }
@@ -1423,7 +1502,7 @@ function Show-JuicerGui {
         Window = $win; C = @{}; Sync = [hashtable]::Synchronized(@{ Status = '' }); Task = $null
         Checks = @{}; AppChecks = @{}; InstallChecks = @{}; UndoChecks = @{}
         Hw = @{ Cpu = @{}; Gpus = @() }; Advice = @{}; Snapshot = @{ States = @{}; Dns = @() }
-        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; GameExe = $null; Findings = @(); Measure = @()
+        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; GameExe = $null; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }

@@ -25,6 +25,15 @@
 .PARAMETER NuevaMedida
     Descarta la medida inicial y guarda la de ahora como punto de partida.
 
+.PARAMETER ApuntarAjuste
+    Apunta el undervolt u overclock que has aplicado (-AjusteCpu, -AjusteGpu,
+    -HerramientaGpu) y lo comprueba en cada inicio de sesión: avisa si una
+    actualización de BIOS lo borra, si la RAM cambia de velocidad o si hay
+    errores WHEA o cuelgues del driver de la gráfica desde entonces.
+
+.PARAMETER OlvidarAjuste
+    Borra el ajuste apuntado y deja de comprobarlo.
+
 .PARAMETER MedirJuego
     Mide FPS y frametimes durante esos segundos (de 10 a 600), empezando 10
     segundos después para dar tiempo a volver al juego. Usa PresentMon de Intel.
@@ -114,6 +123,11 @@ param(
     [switch]$Equipo,
     [switch]$Medir,
     [switch]$NuevaMedida,
+    [switch]$ApuntarAjuste,
+    [string]$AjusteCpu,
+    [string]$AjusteGpu,
+    [ValidateSet('', 'Afterburner', 'Adrenalin', 'Intel')][string]$HerramientaGpu = '',
+    [switch]$OlvidarAjuste,
     [int]$MedirJuego,
     [string]$Juego,
     [string[]]$LimitarFps = @(),
