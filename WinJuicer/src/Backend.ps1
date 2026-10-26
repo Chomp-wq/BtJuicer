@@ -420,6 +420,87 @@ function Set-WinFeature {
     [IO.File]::WriteAllText((Join-Path (Get-JuicerHome) 'componentes-pendientes.json'), (ConvertTo-JuicerJson $p), (New-Object Text.UTF8Encoding $false))
 }
 
+# Frame limits per program: the NVIDIA driver's when there is one, RTSS's
+# profiles otherwise. Read returns @{ Backend; Fps (null = none); Existed }.
+$script:FpsBackendName = $null
+
+function Get-WinRtssDir {
+    foreach ($d in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        if (-not $d) { continue }
+        $dir = Join-Path $d 'RivaTuner Statistics Server'
+        if (Test-Path -LiteralPath (Join-Path $dir 'RTSS.exe')) { return $dir }
+    }
+    $null
+}
+
+function Get-WinFpsBackend {
+    if ($null -eq $script:FpsBackendName) {
+        $script:FpsBackendName = ''
+        try {
+            Initialize-JuicerNvApi
+            if ([WinJuicer.NvDrs]::Available()) { $script:FpsBackendName = 'nvidia' }
+        } catch {
+            Write-JuicerLog "NVAPI no disponible: $_"
+        }
+        if (-not $script:FpsBackendName -and (Get-WinRtssDir)) { $script:FpsBackendName = 'rtss' }
+    }
+    $script:FpsBackendName
+}
+
+function Get-WinRtssProfile { param([string]$Exe) Join-Path (Join-Path (Get-WinRtssDir) 'Profiles') "$Exe.cfg" }
+
+function Read-WinFpsLimit {
+    param([string]$Exe)
+    switch (Get-WinFpsBackend) {
+        'nvidia' {
+            $v = [WinJuicer.NvDrs]::GetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId)
+            return @{ Backend = 'nvidia'; Fps = $(if ($v -gt 0) { $v } else { $null }); Existed = ($v -ge 0) }
+        }
+        'rtss' {
+            $f = Get-WinRtssProfile $Exe
+            if (-not (Test-Path -LiteralPath $f)) { return @{ Backend = 'rtss'; Fps = $null; Existed = $false } }
+            $v = Get-JuicerIniValue ([IO.File]::ReadAllLines($f)) 'Framerate' 'Limit'
+            return @{ Backend = 'rtss'; Fps = $(if ([int]$v -gt 0) { [int]$v } else { $null }); Existed = $true }
+        }
+    }
+    $null
+}
+
+# Fps 0 or null takes the limit away. For RTSS, a new profile starts as a
+# copy of the Global one, as RTSS itself does; Remove deletes it again.
+function Set-WinFpsLimit {
+    param([string]$Exe, $Fps, [string]$Backend, [switch]$Remove)
+    $n = if ($Fps) { [int]$Fps } else { 0 }
+    switch ($Backend) {
+        'nvidia' { Initialize-JuicerNvApi; [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } else { -1 })) }
+        'rtss' {
+            $f = Get-WinRtssProfile $Exe
+            if ($Remove) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; return }
+            $lines = if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllLines($f) } else {
+                $global = Join-Path (Split-Path -Parent $f) 'Global'
+                if (Test-Path -LiteralPath $global) { [IO.File]::ReadAllLines($global) } else { @() }
+            }
+            [IO.File]::WriteAllLines($f, [string[]](Set-JuicerIniValue $lines 'Framerate' 'Limit' "$n"), (New-Object Text.ASCIIEncoding))
+        }
+        default { throw 'No hay limitador de FPS: hace falta una gráfica NVIDIA o RivaTuner Statistics Server.' }
+    }
+}
+
+# Any other DWORD of a program's NVIDIA profile: @{ Value } with null when
+# the user has none.
+function Read-WinNvSetting {
+    param([string]$Exe, [uint32]$Id)
+    if ((Get-WinFpsBackend) -ne 'nvidia') { return $null }
+    $v = [WinJuicer.NvDrs]::GetDword($Exe, $Id)
+    @{ Value = $(if ($v -ge 0) { [uint32]$v } else { $null }) }
+}
+
+function Set-WinNvSetting {
+    param([string]$Exe, [uint32]$Id, $Value)
+    Initialize-JuicerNvApi
+    [WinJuicer.NvDrs]::SetDword($Exe, $Id, $(if ($null -ne $Value) { [long]$Value } else { -1 }))
+}
+
 function New-JuicerWindowsBackend {
     @{
         Name         = 'Windows'
@@ -450,6 +531,11 @@ function New-JuicerWindowsBackend {
         DnsSet       = ${function:Set-WinDns}
         FeatRead     = ${function:Read-WinFeature}
         FeatSet      = ${function:Set-WinFeature}
+        FpsBackend   = ${function:Get-WinFpsBackend}
+        FpsRead      = ${function:Read-WinFpsLimit}
+        FpsWrite     = ${function:Set-WinFpsLimit}
+        NvRead       = ${function:Read-WinNvSetting}
+        NvWrite      = ${function:Set-WinNvSetting}
     }
 }
 
@@ -474,6 +560,9 @@ function New-JuicerMemoryBackend {
         Appx     = @{}   # name -> @{ Installed; Provisioned }
         Adapters = New-Object System.Collections.ArrayList   # @{ Guid; Name; Description; Wireless; LinkSpeed }
         Features = @{}   # name -> @{ Enabled }
+        FpsBackend = ''   # 'nvidia', 'rtss' or '' for none
+        FpsLimits = @{}   # exe -> fps; an entry with 0 is a profile without a limit
+        NvSettings = @{}  # 'exe|id' -> value, the user values of NVIDIA profiles
         Calls    = New-Object System.Collections.ArrayList
         Run      = $Run
     }
@@ -549,6 +638,30 @@ function New-JuicerMemoryBackend {
             @{ Enabled = $f.Enabled }
         }
         FeatSet     = { param($Name, $Enabled) $script:Mem.Features[$Name].Enabled = [bool]$Enabled }
+        FpsBackend  = { $script:Mem.FpsBackend }
+        FpsRead     = {
+            param($Exe)
+            if (-not $script:Mem.FpsBackend) { return $null }
+            $has = $script:Mem.FpsLimits.ContainsKey($Exe)
+            $v = if ($has) { [int]$script:Mem.FpsLimits[$Exe] } else { 0 }
+            @{ Backend = $script:Mem.FpsBackend; Fps = $(if ($v -gt 0) { $v } else { $null }); Existed = $has }
+        }
+        FpsWrite    = {
+            param($Exe, $Fps, $Backend, [switch]$Remove)
+            if ($Backend -ne $script:Mem.FpsBackend) { throw "Limitador $Backend no disponible" }
+            if ($Remove) { $script:Mem.FpsLimits.Remove($Exe) } else { $script:Mem.FpsLimits[$Exe] = $(if ($Fps) { [int]$Fps } else { 0 }) }
+        }
+        NvRead      = {
+            param($Exe, $Id)
+            if ($script:Mem.FpsBackend -ne 'nvidia') { return $null }
+            $k = '{0}|{1}' -f $Exe, [uint32]$Id
+            @{ Value = $(if ($script:Mem.NvSettings.ContainsKey($k)) { [uint32]$script:Mem.NvSettings[$k] } else { $null }) }
+        }
+        NvWrite     = {
+            param($Exe, $Id, $Value)
+            $k = '{0}|{1}' -f $Exe, [uint32]$Id
+            if ($null -eq $Value) { $script:Mem.NvSettings.Remove($k) } else { $script:Mem.NvSettings[$k] = [uint32]$Value }
+        }
     }
 }
 

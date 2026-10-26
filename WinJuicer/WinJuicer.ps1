@@ -33,6 +33,14 @@
     Con -MedirJuego, el .exe que medir (por ejemplo cs2.exe). Sin él, el que
     más fotogramas presente.
 
+.PARAMETER LimitarFps
+    Juegos (.exe, separados por comas) a los que poner un límite de FPS que se
+    aplica solo cada vez que se abren: con NVIDIA, en el driver; si no, con
+    RivaTuner Statistics Server. Sin -Fps, el recomendado para tu monitor.
+
+.PARAMETER Fps
+    Con -LimitarFps, el límite (de 20 a 1000).
+
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
 
@@ -103,6 +111,8 @@ param(
     [switch]$NuevaMedida,
     [int]$MedirJuego,
     [string]$Juego,
+    [string[]]$LimitarFps = @(),
+    [int]$Fps,
     [switch]$Lista,
     [switch]$Recomendado,
     [ValidateSet('Seguro', 'Rendimiento', 'Extremo')][string]$Perfil,

@@ -236,3 +236,195 @@ function ConvertFrom-JuicerEdid {
     if ($w -lt 640 -or $h -lt 480) { return $null }
     @{ Width = $w; Height = $h }
 }
+
+# The NVIDIA driver's own frame limiter («Max Frame Rate» in the NVIDIA
+# Control Panel), per program, through NVAPI's driver settings (DRS): the
+# same profiles the Control Panel and Profile Inspector edit. Nothing is
+# injected into the game, so anti-cheats have nothing to object to, and the
+# driver applies it every time that .exe runs, with Win Juicer closed.
+# Function ids, structures and codes are those of NVIDIA's nvapi.h and
+# nvapi_interface.h (github.com/NVIDIA/nvapi).
+function Initialize-JuicerNvApi {
+    if ('WinJuicer.NvDrs' -as [type]) { return }
+    Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+
+namespace WinJuicer {
+    public static class NvDrs {
+        public const uint FrameRateLimiterId = 0x10835002;   // FRL_FPS_ID
+        public const uint VSyncModeId = 0x00A879CF;          // VSYNCMODE_ID
+        public const uint VSyncForceOn = 0x47814940;         // VSYNCMODE_FORCEON
+        public const uint PreRenderLimitId = 0x007BA09E;     // PRERENDERLIMIT_ID
+        const int StrMax = 2048;                              // NVAPI_UNICODE_STRING_MAX
+        const int NotFoundApp = -166, NotFoundSetting = -160, NotFoundProfile = -163, AppInUse = -167;
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        public struct Setting {
+            public uint version;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = StrMax)] public ushort[] settingName;
+            public uint settingId;
+            public int settingType;
+            public int settingLocation;
+            public uint isCurrentPredefined;
+            public uint isPredefinedValid;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4100)] public byte[] predefinedValue;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = 4100)] public byte[] currentValue;
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        public struct Application {
+            public uint version;
+            public uint isPredefined;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = StrMax)] public ushort[] appName;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = StrMax)] public ushort[] userFriendlyName;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = StrMax)] public ushort[] launcher;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = StrMax)] public ushort[] fileInFolder;
+            public uint flags;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = StrMax)] public ushort[] commandLine;
+        }
+
+        [StructLayout(LayoutKind.Sequential, Pack = 4)]
+        public struct Profile {
+            public uint version;
+            [MarshalAs(UnmanagedType.ByValArray, SizeConst = StrMax)] public ushort[] profileName;
+            public uint gpuSupport;
+            public uint isPredefined;
+            public uint numOfApps;
+            public uint numOfSettings;
+        }
+
+        // MAKE_NVAPI_VERSION: the size in the low word, the version above it.
+        public static uint SettingVersion { get { return (uint)Marshal.SizeOf(typeof(Setting)) | (1u << 16); } }
+        public static uint ApplicationVersion { get { return (uint)Marshal.SizeOf(typeof(Application)) | (4u << 16); } }
+        public static uint ProfileVersion { get { return (uint)Marshal.SizeOf(typeof(Profile)) | (1u << 16); } }
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int NoArgs();
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int CreateSessionFn(out IntPtr session);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int SessionFn(IntPtr session);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int FindAppFn(IntPtr session, ushort[] appName, out IntPtr profile, ref Application app);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int FindProfileFn(IntPtr session, ushort[] name, out IntPtr profile);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int CreateProfileFn(IntPtr session, ref Profile info, out IntPtr profile);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int CreateAppFn(IntPtr session, IntPtr profile, ref Application app);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int SetSettingFn(IntPtr session, IntPtr profile, ref Setting setting);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int GetSettingFn(IntPtr session, IntPtr profile, uint id, ref Setting setting);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int DeleteSettingFn(IntPtr session, IntPtr profile, uint id);
+
+        [DllImport("nvapi64.dll", EntryPoint = "nvapi_QueryInterface", CallingConvention = CallingConvention.Cdecl)]
+        static extern IntPtr QueryInterface(uint id);
+
+        static T Fn<T>(uint id) where T : class {
+            IntPtr p = QueryInterface(id);
+            if (p == IntPtr.Zero) throw new InvalidOperationException("NVAPI no tiene la función 0x" + id.ToString("X8"));
+            return Marshal.GetDelegateForFunctionPointer(p, typeof(T)) as T;
+        }
+
+        static void Check(int status, string what) {
+            if (status != 0) throw new InvalidOperationException("NVAPI " + what + ": código " + status);
+        }
+
+        public static ushort[] Str(string s) {
+            var a = new ushort[StrMax];
+            for (int i = 0; i < s.Length && i < StrMax - 1; i++) a[i] = s[i];
+            return a;
+        }
+
+        static Application NewApplication(string name) {
+            var a = new Application();
+            a.version = ApplicationVersion;
+            a.appName = Str(name ?? "");
+            a.userFriendlyName = Str(""); a.launcher = Str(""); a.fileInFolder = Str(""); a.commandLine = Str("");
+            return a;
+        }
+
+        static Setting NewSetting() {
+            var s = new Setting();
+            s.version = SettingVersion;
+            s.settingName = Str("");
+            s.predefinedValue = new byte[4100];
+            s.currentValue = new byte[4100];
+            return s;
+        }
+
+        // A 64-bit process with an NVIDIA driver that answers.
+        public static bool Available() {
+            if (IntPtr.Size != 8) return false;
+            try { return Fn<NoArgs>(0x0150E828)() == 0; } catch { return false; }
+        }
+
+        static IntPtr Open() {
+            Check(Fn<NoArgs>(0x0150E828)(), "Initialize");
+            IntPtr s;
+            Check(Fn<CreateSessionFn>(0x0694D52E)(out s), "CreateSession");
+            int r = Fn<SessionFn>(0x375DBD6B)(s);
+            if (r != 0) { Fn<SessionFn>(0xDAD9CFF8)(s); Check(r, "LoadSettings"); }
+            return s;
+        }
+
+        static void Close(IntPtr s) { Fn<SessionFn>(0xDAD9CFF8)(s); }
+
+        // The profile the driver uses for this .exe, or zero if none has it.
+        static IntPtr FindApp(IntPtr s, string exe) {
+            IntPtr profile;
+            var app = NewApplication(null);
+            int r = Fn<FindAppFn>(0xEEE566B2)(s, Str(exe), out profile, ref app);
+            if (r == NotFoundApp) return IntPtr.Zero;
+            Check(r, "FindApplicationByName");
+            return profile;
+        }
+
+        // A DWORD setting set by the user in this program's profile, or -1
+        // when there is none (no profile, or only NVIDIA's own value).
+        public static long GetDword(string exe, uint id) {
+            IntPtr s = Open();
+            try {
+                IntPtr profile = FindApp(s, exe);
+                if (profile == IntPtr.Zero) return -1;
+                var st = NewSetting();
+                int r = Fn<GetSettingFn>(0x73BF8338)(s, profile, id, ref st);
+                if (r == NotFoundSetting) return -1;
+                Check(r, "GetSetting");
+                if (st.settingLocation != 0 || st.isCurrentPredefined != 0) return -1;
+                return (long)BitConverter.ToUInt32(st.currentValue, 0);
+            } finally { Close(s); }
+        }
+
+        // A negative value removes the user value, back to NVIDIA's. The
+        // program gets a «Win Juicer - name.exe» profile if it had none.
+        public static void SetDword(string exe, uint id, long value) {
+            IntPtr s = Open();
+            try {
+                IntPtr profile = FindApp(s, exe);
+                if (profile == IntPtr.Zero) {
+                    if (value < 0) return;
+                    string name = "Win Juicer - " + exe;
+                    int r = Fn<FindProfileFn>(0x7E4A9A0B)(s, Str(name), out profile);
+                    if (r == NotFoundProfile) {
+                        var info = new Profile();
+                        info.version = ProfileVersion;
+                        info.profileName = Str(name);
+                        Check(Fn<CreateProfileFn>(0xCC176068)(s, ref info, out profile), "CreateProfile");
+                    } else {
+                        Check(r, "FindProfileByName");
+                    }
+                    var app = NewApplication(exe);
+                    r = Fn<CreateAppFn>(0x4347A9DE)(s, profile, ref app);
+                    if (r != AppInUse) Check(r, "CreateApplication");
+                }
+                if (value >= 0) {
+                    var st = NewSetting();
+                    st.settingId = id;
+                    st.settingType = 0;   // NVDRS_DWORD_TYPE
+                    BitConverter.GetBytes((uint)value).CopyTo(st.currentValue, 0);
+                    Check(Fn<SetSettingFn>(0x577DD202)(s, profile, ref st), "SetSetting");
+                } else {
+                    int r = Fn<DeleteSettingFn>(0xE4A26362)(s, profile, id);
+                    if (r != NotFoundSetting) Check(r, "DeleteProfileSetting");
+                }
+                Check(Fn<SessionFn>(0xFCBC7E14)(s), "SaveSettings");
+            } finally { Close(s); }
+        }
+    }
+}
+'@
+}

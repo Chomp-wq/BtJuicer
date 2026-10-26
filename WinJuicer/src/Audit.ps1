@@ -337,6 +337,14 @@ function Get-JuicerGraphicsAudit {
         $out += New-JuicerFinding 'Pantalla' 'Info' 'No se pudieron leer los modos de pantalla.'
     }
 
+    try {
+        $traits = @($real | ForEach-Object { Get-JuicerGpuTraits $_.Name })
+        $main = @($traits | Where-Object { $_.Discrete }) + @($traits) | Select-Object -First 1
+        $out += Get-JuicerMonitorFindings @(Get-JuicerMonitors) $(if ($main) { $main.Vendor } else { '' }) @(Read-JuicerFrameHistory)
+    } catch {
+        Write-Verbose "Sin datos del monitor: $_"
+    }
+
     $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
     if (Test-Path -LiteralPath $smi) {
         $r = Invoke-JuicerNative $smi @('-q', '-d', 'MEMORY')

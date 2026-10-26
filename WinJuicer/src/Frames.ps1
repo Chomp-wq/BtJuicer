@@ -131,12 +131,13 @@ function Measure-JuicerFrames {
     $median = Get-JuicerPercentile $sorted 0.5
     $stutters = 0
     foreach ($t in $ft) { if ($t -ge 2 * $median -and $t -ge $median + 8) { $stutters++ } }
+    $p90 = Get-JuicerPercentile $sorted 0.9
     $p99 = Get-JuicerPercentile $sorted 0.99
     $p999 = Get-JuicerPercentile $sorted 0.999
     $mode = if ($modes.Count -gt 0) { @($modes.GetEnumerator() | Sort-Object Value -Descending)[0].Key } else { '' }
     @{
         Application = [string]$rows[0].Application; Frames = $n; Seconds = [Math]::Round($total / 1000, 1)
-        AvgFps = [Math]::Round(1000 * $n / $total, 1); Low1 = [Math]::Round(1000 / $p99, 1); Low01 = [Math]::Round(1000 / $p999, 1)
+        AvgFps = [Math]::Round(1000 * $n / $total, 1); Low1 = [Math]::Round(1000 / $p99, 1); Low01 = [Math]::Round(1000 / $p999, 1); Fps90 = [Math]::Round(1000 / $p90, 1)
         MedianMs = [Math]::Round($median, 2); P99Ms = [Math]::Round($p99, 2); Stutters = $stutters
         GpuBound = $(if ($gpuKnown -gt 0) { [Math]::Round(100 * $gpuBound / $gpuKnown) } else { $null })
         Latency = $(if ($latency.Count -gt 0) { $s = 0.0; foreach ($l in $latency) { $s += $l }; [Math]::Round($s / $latency.Count, 1) } else { $null })
@@ -202,7 +203,7 @@ function Get-JuicerFrameFindings {
         $d = if ($Previous.AvgFps -gt 0) { 100 * ($Result.AvgFps - $Previous.AvgFps) / $Previous.AvgFps } else { 0 }
         $dl = if ($Previous.Low1 -gt 0) { 100 * ($Result.Low1 - $Previous.Low1) / $Previous.Low1 } else { 0 }
         $sev = if ($d -ge 3 -or $dl -ge 5) { 'Ok' } elseif ($d -le -3 -or $dl -le -5) { 'Bajo' } else { 'Info' }
-        $out += New-JuicerFinding $area $sev ('Respecto al {0}: media {1:N0} → {2:N0} FPS ({3:+0;-0} %), 1 % bajo {4:N0} → {5:N0} ({6:+0;-0} %)' -f ([datetime]$Previous.Date).ToString('d'), $Previous.AvgFps, $Result.AvgFps, $d, $Previous.Low1, $Result.Low1, $dl) 'Sólo vale si mediste la misma escena con los mismos ajustes del juego; menos de un 3 % es ruido.'
+        $out += New-JuicerFinding $area $sev ('Respecto al {0}: media {1:N0} → {2:N0} FPS ({3:+0;-0} %), 1 % bajo {4:N0} → {5:N0} ({6:+0;-0} %)' -f ([datetime]$Previous.Date).ToString('d'), $Previous.AvgFps, $Result.AvgFps, $d, $Previous.Low1, $Result.Low1, $dl) ($(if ($Previous.Latency -and $Result.Latency) { 'Latencia hasta pantalla: {0} → {1} ms. ' -f $Previous.Latency, $Result.Latency } else { '' }) + 'Sólo vale si mediste la misma escena con los mismos ajustes del juego; menos de un 3 % es ruido.')
     }
 
     # Pacing: how far the slow frames are from the average.
@@ -356,6 +357,16 @@ function Invoke-JuicerFrameCapture {
         Save-JuicerFrameResult $result
         Write-JuicerLog ('FPS {0}: media {1}, 1 % {2}, 0,1 % {3}' -f $result.Application, $result.AvgFps, $result.Low1, $result.Low01)
         Get-JuicerFrameFindings $result $previous $refresh $hogs $gpu
+        try {
+            $cap = Get-JuicerRecommendedFps $result.Application
+            if ($cap) {
+                $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq ([string]$result.Application).ToLowerInvariant() })
+                $state = if ($now.Count -gt 0 -and $now[0].Fps) { " Ahora está limitado a $($now[0].Fps)." } else { ' Añádelo en Juegos > Limitador de FPS y se aplicará solo cada vez que lo abras.' }
+                New-JuicerFinding "Juego: $($result.Application)" 'Info' "Límite recomendado para este juego: $($cap.Fps) FPS" ($cap.Why + $state)
+            }
+        } catch {
+            Write-JuicerLog "Sin límite recomendado: $_"
+        }
     } finally {
         Remove-Item -LiteralPath $csv, $smiOut -Force -ErrorAction SilentlyContinue
     }

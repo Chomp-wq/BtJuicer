@@ -502,3 +502,164 @@ Describe 'FPS y frametimes' {
         ConvertFrom-JuicerGpuSamples @('basura') | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Monitor' {
+    BeforeAll {
+        # An EDID like a real one: base block plus a CTA-861 extension.
+        function New-TestEdid {
+            param([string]$Vendor = 'AUS', [string]$Name = 'VG27AQ', [int]$RangeMin = 48, [int]$RangeMax = 165,
+                [int[]]$AmdVsdb = @(48, 165), [int[]]$HdmiVrr = @(), [int]$HdrLum = 0, [switch]$NoCta)
+            $e = [byte[]]::new($(if ($NoCta) { 128 } else { 256 }))
+            1..6 | ForEach-Object { $e[$_] = 0xFF }
+            $w = (([int][char]$Vendor[0] - 64) -shl 10) -bor (([int][char]$Vendor[1] - 64) -shl 5) -bor ([int][char]$Vendor[2] - 64)
+            $e[8] = $w -shr 8; $e[9] = $w -band 0xFF
+            # Preferred timing 2560×1440.
+            $e[54] = 0x56; $e[55] = 0x5E; $e[56] = 0x00; $e[58] = 0xA0; $e[59] = 0xA0; $e[61] = 0x50
+            # Range limits, then the name.
+            $e[75] = 0xFD; $e[77] = $RangeMin; $e[78] = $RangeMax
+            $e[93] = 0xFC
+            $bytes = [Text.Encoding]::ASCII.GetBytes($Name + "`n")
+            for ($i = 0; $i -lt $bytes.Count -and $i -lt 13; $i++) { $e[95 + $i] = $bytes[$i] }
+            if ($NoCta) { return $e }
+            $e[126] = 1
+            $b = 128; $e[$b] = 0x02; $e[$b + 1] = 3
+            $i = $b + 4
+            if ($AmdVsdb.Count -eq 2) {
+                $blk = @(0x1A, 0x00, 0x00, 0x02, 0x00, $AmdVsdb[0], $AmdVsdb[1], 0x00)
+                $e[$i] = (3 -shl 5) -bor $blk.Count; for ($k = 0; $k -lt $blk.Count; $k++) { $e[$i + 1 + $k] = $blk[$k] }; $i += 1 + $blk.Count
+            }
+            if ($HdmiVrr.Count -eq 2) {
+                $blk = @(0xD8, 0x5D, 0xC4, 0x01, 0x78, 0x80, 0x00, 0x30, 0x00, ((($HdmiVrr[1] -shr 8) -shl 6) -bor $HdmiVrr[0]), ($HdmiVrr[1] -band 0xFF))
+                $e[$i] = (3 -shl 5) -bor $blk.Count; for ($k = 0; $k -lt $blk.Count; $k++) { $e[$i + 1 + $k] = $blk[$k] }; $i += 1 + $blk.Count
+            }
+            if ($HdrLum -gt 0) {
+                $blk = @(0x06, 0x05, 0x01, $HdrLum)
+                $e[$i] = (7 -shl 5) -bor $blk.Count; for ($k = 0; $k -lt $blk.Count; $k++) { $e[$i + 1 + $k] = $blk[$k] }; $i += 1 + $blk.Count
+            }
+            $e[$b + 2] = $i - $b
+            $e
+        }
+        function New-TestMonitor {
+            param([byte[]]$Edid, [int]$Hz = 165)
+            $info = ConvertFrom-JuicerEdidInfo $Edid
+            @{ Display = [pscustomobject]@{ Monitor = 'Monitor genérico PnP'; Hz = $Hz; MaxHz = $Hz; Primary = $true }; Info = $info; Vrr = (Get-JuicerVrrRange $info) }
+        }
+    }
+
+    It 'lee marca, modelo, FreeSync, VRR de HDMI y HDR del EDID' {
+        $i = ConvertFrom-JuicerEdidInfo (New-TestEdid -HdrLum 80)
+        $i.Vendor | Should -Be 'AUS'
+        $i.Brand | Should -Be 'ASUS'
+        $i.Name | Should -Be 'VG27AQ'
+        $i.RangeMin | Should -Be 48
+        $i.FreeSync | Should -BeTrue
+        $i.FreeSyncMax | Should -Be 165
+        $i.Hdr10 | Should -BeTrue
+        $i.MaxNits | Should -Be 283
+        $v = Get-JuicerVrrRange $i
+        "$($v.Kind) $($v.Min)-$($v.Max)" | Should -Be 'FreeSync 48-165'
+
+        $h = ConvertFrom-JuicerEdidInfo (New-TestEdid -Vendor 'GSM' -Name 'OLED48C1' -AmdVsdb @() -HdmiVrr @(40, 300))
+        $h.HdmiVrrMin | Should -Be 40
+        $h.HdmiVrrMax | Should -Be 300
+        (Get-JuicerVrrRange $h).Kind | Should -Be 'HDMI 2.1 VRR'
+
+        Get-JuicerVrrRange (ConvertFrom-JuicerEdidInfo (New-TestEdid -NoCta)) | Should -BeNullOrEmpty
+        ConvertFrom-JuicerEdidInfo ([byte[]]::new(128)) | Should -BeNullOrEmpty
+    }
+
+    It 'da los pasos según la gráfica y lo que tiene el monitor' {
+        $m = New-TestMonitor (New-TestEdid -HdrLum 80)
+        (Format-JuicerMonitor $m) | Should -Be 'ASUS VG27AQ: 165 Hz, FreeSync 48–165 Hz con LFC, HDR10 (~283 nits)'
+        $f = @(Get-JuicerMonitorFindings @($m) 'NVIDIA' @(@{ Application = 'cs2.exe'; Low1 = 200; AvgFps = 300 }))
+        $f[0].Detail | Should -BeLike '*G-SYNC*Reflex*157 FPS*'
+        $strobe = @($f | Where-Object { $_.Title -like '*ELMB*' })
+        $strobe.Count | Should -Be 1
+        $strobe[0].Detail | Should -BeLike '*cs2.exe*'
+        @($f | Where-Object { $_.Title -like 'HDR de entrada*' }).Count | Should -Be 1
+        @(Get-JuicerMonitorFindings @($m) 'AMD')[0].Detail | Should -BeLike '*AMD FreeSync*'
+
+        $narrow = New-TestMonitor (New-TestEdid -Vendor 'SAM' -Name 'S24' -RangeMin 48 -RangeMax 75 -AmdVsdb @(48, 75)) 75
+        @(Get-JuicerMonitorFindings @($narrow) 'NVIDIA' | Where-Object { $_.Title -like 'Por debajo de 48 FPS*' }).Count | Should -Be 1
+
+        $plain = New-TestMonitor (New-TestEdid -Vendor 'DEL' -Name 'P2422H' -NoCta) 60
+        $p = @(Get-JuicerMonitorFindings @($plain) 'Intel')
+        $p[0].Detail | Should -BeLike 'No anuncia FreeSync*'
+        @($p | Where-Object { $_.Title -like 'Nitidez*' }).Count | Should -Be 0
+
+        $oled = New-TestMonitor (New-TestEdid -Vendor 'GSM' -Name 'OLED48C1' -AmdVsdb @() -HdmiVrr @(40, 120)) 120
+        @(Get-JuicerMonitorFindings @($oled) 'NVIDIA' | Where-Object { $_.Title -like 'OLED*' }).Count | Should -Be 1
+    }
+}
+
+Describe 'Limitador de FPS' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        $M.Backend.State.FpsBackend = 'nvidia'
+    }
+
+    It 'calcula el límite por frametime: debajo de los Hz con VRR, lo que sostiene si oscila' {
+        (Get-JuicerFpsCap 144 $true).Fps | Should -Be 138
+        (Get-JuicerFpsCap 165 $true).Fps | Should -Be 157
+        (Get-JuicerFpsCap 240 $true).Fps | Should -Be 224
+        (Get-JuicerFpsCap 60 $false).Fps | Should -Be 60
+        $shaky = @{ AvgFps = 140; Low1 = 70; Fps90 = 118.6 }
+        $c = Get-JuicerFpsCap 165 $true $shaky 48
+        $c.Fps | Should -Be 118
+        $c.Why | Should -BeLike '*8?47 ms por fotograma*'
+        (Get-JuicerFpsCap 165 $true @{ AvgFps = 140; Low1 = 120; Fps90 = 130 } 48).Fps | Should -Be 157
+        (Get-JuicerFpsCap 165 $true @{ AvgFps = 60; Low1 = 20; Fps90 = 40 } 48).Fps | Should -Be 157
+        Get-JuicerFpsCap 0 $true | Should -BeNullOrEmpty
+    }
+
+    It 'edita perfiles de RTSS sin tocar el resto' {
+        $lines = @('[OSD]', 'EnableOSD=1', '[Framerate]', 'Limit=0', 'LimitDenominator=1')
+        $new = Set-JuicerIniValue $lines 'Framerate' 'Limit' '157'
+        $new | Should -Be @('[OSD]', 'EnableOSD=1', '[Framerate]', 'Limit=157', 'LimitDenominator=1')
+        Get-JuicerIniValue $new 'Framerate' 'Limit' | Should -Be '157'
+        Set-JuicerIniValue @('[OSD]', 'EnableOSD=1') 'Framerate' 'Limit' '60' | Should -Be @('[OSD]', 'EnableOSD=1', '[Framerate]', 'Limit=60')
+        Set-JuicerIniValue @('[Framerate]', 'LimitDenominator=1', '[OSD]') 'Framerate' 'Limit' '60' | Should -Be @('[Framerate]', 'LimitDenominator=1', 'Limit=60', '[OSD]')
+        Get-JuicerIniValue @('[OSD]', 'Limit=5') 'Framerate' 'Limit' | Should -BeNullOrEmpty
+        ConvertTo-JuicerExeName 'C:\Juegos\CS2\cs2.EXE' | Should -Be 'cs2.exe'
+        ConvertTo-JuicerExeName 'eldenring' | Should -Be 'eldenring.exe'
+    }
+
+    It 'con NVIDIA pone límite y receta de baja latencia, y lo deshace todo' {
+        $vrr = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' } }
+        $r = Add-JuicerFpsLimit 'C:\Juegos\cs2.exe' 0 $vrr
+        $r.Outcome | Should -Be 'Aplicado'
+        $r.Title | Should -BeLike 'Límite de 157 FPS (6?37 ms): cs2.exe'
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
+        $M.Backend.State.NvSettings['cs2.exe|8102046'] | Should -Be 1
+        $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x47814940
+        @(Get-JuicerFpsLimits)[0].Fps | Should -Be 157
+        (Undo-JuicerTweak 'fps:cs2.exe').Outcome | Should -Be 'Deshecho'
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+        $M.Backend.State.NvSettings.Count | Should -Be 0
+    }
+
+    It 'respeta el límite que ya tenías y lo devuelve al deshacer' {
+        $M.Backend.State.FpsLimits['game.exe'] = 100
+        $fixed = @{ Display = [pscustomobject]@{ Hz = 60; MaxHz = 60; Primary = $true }; Info = @{}; Vrr = $null }
+        (Add-JuicerFpsLimit 'game.exe' 0 $fixed).Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.FpsLimits['game.exe'] | Should -Be 60
+        $M.Backend.State.NvSettings.ContainsKey('game.exe|11041231') | Should -BeFalse
+        Undo-JuicerTweak 'fps:game.exe' | Out-Null
+        $M.Backend.State.FpsLimits['game.exe'] | Should -Be 100
+    }
+
+    It 'con RivaTuner sólo pone el límite, y sin limitador lo dice' {
+        $M.Backend.State.FpsBackend = 'rtss'
+        (Add-JuicerFpsLimit 'game.exe' 90).Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.FpsLimits['game.exe'] | Should -Be 90
+        $M.Backend.State.NvSettings.Count | Should -Be 0
+        $M.Backend.State.FpsBackend = ''
+        (Add-JuicerFpsLimit 'otro.exe' 90).Outcome | Should -Be 'NoAplica'
+    }
+
+    It 'desde la línea de órdenes' {
+        @(Start-Juicer -LimitarFps 'a.exe,b.exe' -Fps 120 -Si 6>$null)[-1] | Should -Be 0
+        $M.Backend.State.FpsLimits['b.exe'] | Should -Be 120
+        @(Start-Juicer -LimitarFps 'a.exe' -Fps 5 -Si 6>$null)[-1] | Should -Be 2
+    }
+}

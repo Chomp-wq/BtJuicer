@@ -485,7 +485,8 @@ function Show-JuicerGames {
             @('1', 'Exclusiones de Defender', 'cargas más rápidas en tus bibliotecas (Extremo)'),
             @('2', 'Configurar un juego', 'GPU potente y prioridad alta para un .exe'),
             @('3', 'Juegos configurados', 'ver y deshacer'),
-            @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon')
+            @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon'),
+            @('5', 'Limitador de FPS', 'un límite por juego que se aplica solo, según tu monitor')
         )
         $c = Read-JuicerChoice 'Elige, Intro para volver'
         switch ($c) {
@@ -493,6 +494,46 @@ function Show-JuicerGames {
             '2' { Show-JuicerConfigureGame }
             '3' { Show-JuicerConfiguredGames }
             '4' { Show-JuicerFrameMeasure }
+            '5' { Show-JuicerLimiter }
+            '' { return }
+        }
+    }
+}
+
+function Show-JuicerLimiter {
+    while ($true) {
+        Write-JuicerHeader 'Limitador de FPS'
+        $m = $null
+        try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+        Write-JuicerWrapped ('Limita con: ' + (Format-JuicerFpsBackend (Get-JuicerFpsBackend)) + '.') 2 'Gray'
+        if ($m) {
+            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) ([bool]$m.Vrr)
+            Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + ". Límite recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
+        }
+        $limits = @(Get-JuicerFpsLimits)
+        Write-Host ''
+        $n = 0
+        foreach ($g in $limits) { $n++; Write-Host ('  {0,2}. {1}: {2}' -f $n, $g.Exe, $(if ($g.Fps) { "$($g.Fps) FPS" } else { 'sin límite ahora' })) }
+        if ($n -eq 0) { Write-Host '  Ningún juego limitado todavía.' -ForegroundColor DarkGray }
+        Write-Host ''
+        Write-JuicerMenu @(
+            @('A', 'Añadir un juego', 'por nombre del .exe, con el límite recomendado o el tuyo'),
+            @('M', 'Añadir los juegos medidos', (@(Get-JuicerUnlimitedGames) -join ', ')),
+            @('Q', 'Quitar un límite', 'por número')
+        )
+        switch ((Read-JuicerChoice 'Elige, Intro para volver').ToUpperInvariant()) {
+            'A' {
+                $exe = Read-JuicerChoice 'Nombre del .exe (por ejemplo cs2.exe)'
+                if (-not $exe) { continue }
+                $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'
+                $fps = if ($f -match '^\d+$') { [int]$f } else { 0 }
+                Show-JuicerResults @(Add-JuicerFpsLimit $exe $fps)
+            }
+            'M' { Show-JuicerResults @(foreach ($g in @(Get-JuicerUnlimitedGames)) { Add-JuicerFpsLimit $g }) }
+            'Q' {
+                $q = Read-JuicerChoice 'Número'
+                if ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count) { Show-JuicerResults @(Undo-JuicerTweak $limits[[int]$q - 1].Id) }
+            }
             '' { return }
         }
     }
@@ -1005,6 +1046,8 @@ function Start-Juicer {
         [switch]$NuevaMedida,
         [int]$MedirJuego,
         [string]$Juego,
+        [string[]]$LimitarFps = @(),
+        [int]$Fps,
         [switch]$Lista,
         [switch]$Recomendado,
         [string]$Perfil,
@@ -1028,7 +1071,8 @@ function Start-Juicer {
     $Deshacer = & $split $Deshacer
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $MedirJuego -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $LimitarFps = & $split $LimitarFps
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
@@ -1057,6 +1101,12 @@ function Start-Juicer {
         return 0
     }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
+    if ($LimitarFps.Count -gt 0) {
+        if ($Fps -and ($Fps -lt 20 -or $Fps -gt 1000)) { Write-Host '  -Fps va de 20 a 1000.' -ForegroundColor Yellow; return 2 }
+        $results = @(foreach ($exe in $LimitarFps) { Add-JuicerFpsLimit $exe $Fps })
+        Show-JuicerResults $results
+        return $(if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
+    }
     if ($MedirJuego) {
         if ($MedirJuego -lt 10 -or $MedirJuego -gt 600) { Write-Host '  -MedirJuego va de 10 a 600 segundos.' -ForegroundColor Yellow; return 2 }
         try {

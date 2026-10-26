@@ -268,7 +268,7 @@ function Get-JuicerHardwareProfile {
     if ($script:HardwareProfile -and -not $Refresh) { return $script:HardwareProfile }
     $hw = @{
         Cpu = Get-JuicerCpuInfo; Gpus = @(); RamBytes = [int64]0; Modules = @(); Laptop = $false; OnBattery = $false
-        ModernStandby = (Test-JuicerModernStandby); SystemDisk = $null; Printers = @(); Adapters = @(); RefreshMax = 0
+        ModernStandby = (Test-JuicerModernStandby); SystemDisk = $null; Printers = @(); Adapters = @(); RefreshMax = 0; Monitor = $null
         OneDrive = (Get-JuicerOneDriveState); Edge = (Test-JuicerEdgeInstalled); Home = (Test-JuicerHomeEdition)
         Insider = (Test-JuicerInsider); Build = (Get-JuicerWindowsBuild); Support = (Get-JuicerWindowsSupportInfo)
         Wsl = (Test-JuicerRegKey 'HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss')
@@ -293,6 +293,7 @@ function Get-JuicerHardwareProfile {
         $hw.SystemDisk = Get-JuicerDriveMedia $env:SystemDrive
         $hw.Printers = @(Get-JuicerPhysicalPrinters)
         try { $hw.RefreshMax = [int](@(Get-JuicerDisplays | ForEach-Object { $_.MaxHz }) | Measure-Object -Maximum).Maximum } catch { Write-Verbose "Sin pantallas: $_" }
+        try { $hw.Monitor = Get-JuicerPrimaryMonitor } catch { Write-Verbose "Sin monitor: $_" }
         foreach ($d in [IO.DriveInfo]::GetDrives()) {
             if ($d.DriveType -eq 'Fixed' -and (Test-Path -LiteralPath (Join-Path $d.RootDirectory.FullName 'XboxGames'))) { $hw.GamePass = $true }
         }
@@ -323,6 +324,7 @@ function Format-JuicerHardwareSummary {
         $lines += ('Gráfica: {0} ({1}{2})' -f $g.Name, $(if ($g.Discrete) { 'dedicada' } else { 'integrada' }), $mem)
     }
     if ($Hw.RamBytes -gt 0) { $lines += ('Memoria: {0} en {1} módulo(s)' -f (Format-JuicerBytes $Hw.RamBytes), @($Hw.Modules).Count) }
+    if ($Hw.Monitor) { $lines += 'Monitor: ' + (Format-JuicerMonitor $Hw.Monitor) }
     if ($Hw.SystemDisk) { $lines += ('Disco de Windows: {0} ({1}, {2})' -f $Hw.SystemDisk.Name, $Hw.SystemDisk.Media, $Hw.SystemDisk.Bus) }
     if ($Hw.Support) {
         $state = if ($Hw.Support.End -lt (Get-Date)) { 'sin parches de seguridad desde el' } else { 'con parches de seguridad hasta el' }

@@ -507,5 +507,10 @@ Describe 'Frecuencia variable' {
         (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 165 }))['juegos.vrr'].Verdict | Should -Be 'Recomendado'
         (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 60 }))['juegos.vrr'].Verdict | Should -Be 'NoRecomendado'
         (Get-JuicerAdvice (New-TestHw))['juegos.vrr'].Verdict | Should -Be 'Opcional'
+        # What the monitor's EDID says beats the refresh rate.
+        $m = @{ Vrr = @{ Kind = 'FreeSync'; Min = 48; Max = 75 } }
+        $a = (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 75; Monitor = $m }))['juegos.vrr']
+        $a.Verdict | Should -Be 'Recomendado'
+        $a.Reason | Should -BeLike '*FreeSync*'
     }
 }
