@@ -1,0 +1,44 @@
+# Win Juicer in one line, like WinUtil:
+#   irm https://github.com/Chomp-wq/BtJuicer/releases/download/winjuicer/winjuicer.ps1 | iex
+#
+# Downloads WinJuicer.zip from the same release, checks it is the one
+# published with this file (SHA256) and opens it as administrator. It is
+# downloaded and checked on every run: nothing is kept between runs that
+# someone could change to have it run as administrator next time.
+#
+# ASCII only and no BOM: Windows PowerShell 5.1 reads what irm downloads as
+# Windows-1252, and a UTF-8 dash contains the byte of a quote.
+
+function Start-WinJuicerOneLine {
+    param([string]$Source, [string]$Sha256, [string]$Version, [switch]$NoLaunch)
+    if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Win Juicer solo funciona en Windows.' }
+    $temp = [IO.Path]::GetTempPath()
+    $dir = Join-Path $temp ('WinJuicer-' + $Version + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
+    $zip = "$dir.zip"
+    if (Test-Path -LiteralPath $Source) {
+        Copy-Item -LiteralPath $Source -Destination $zip
+    } else {
+        Write-Host "Descargando Win Juicer $Version..."
+        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $progress = $ProgressPreference
+        # The progress bar makes Invoke-WebRequest many times slower in 5.1.
+        $ProgressPreference = 'SilentlyContinue'
+        try { Invoke-WebRequest -Uri $Source -OutFile $zip -UseBasicParsing } finally { $ProgressPreference = $progress }
+    }
+    $got = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+    if ($got -ne $Sha256) {
+        Remove-Item -LiteralPath $zip -Force
+        throw "La descarga no coincide con la publicada (SHA256 $got). No se ejecuta nada: vuelve a intentarlo en unos minutos."
+    }
+    Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+    Remove-Item -LiteralPath $zip -Force
+    Get-ChildItem -LiteralPath $temp -Directory -Filter 'WinJuicer-*' -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -ne $dir -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    $main = Join-Path $dir 'WinJuicer.ps1'
+    if ($NoLaunch) { return $main }
+    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', "`"$main`"") -Verb RunAs | Out-Null
+}
+
+Start-WinJuicerOneLine -Source 'https://github.com/Chomp-wq/BtJuicer/releases/download/winjuicer/WinJuicer.zip' -Sha256 '__SHA256__' -Version '__VERSION__'
