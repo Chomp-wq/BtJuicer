@@ -6,5 +6,7 @@ local.properties
 .DS_Store
 captures/
 
-# Win Juicer: lo que construye build/Build-Release.ps1
+# Win Juicer: build/ son sus fuentes de la release, no salida de Gradle;
+# lo que construye va a dist/.
+!WinJuicer/build/
 WinJuicer/dist/
