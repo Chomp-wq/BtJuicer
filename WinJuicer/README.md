@@ -66,7 +66,7 @@ para copiar la orden de una línea.
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
-| **Juegos** | Medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), limitador de FPS por juego, GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
+| **Juegos** | La lista de tus juegos, que encuentra solo, para optimizarlos en un clic; medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), limitador de FPS por juego, GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
 | **No hacemos** | Los «trucos» que circulan, y por qué no. |
@@ -110,6 +110,8 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Medir                                  # antes y después: comparado con la medida inicial
 .\WinJuicer.ps1 -MedirJuego 60                          # FPS y frametimes de lo que juegues (empieza en 10 s)
 .\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
+.\WinJuicer.ps1 -Juegos                                 # los juegos instalados y lo que tiene cada uno
+.\WinJuicer.ps1 -OptimizarJuegos                        # límite de FPS para tu monitor (y GPU dedicada) a todos
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # límite recomendado, aplicado solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o el tuyo
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
@@ -286,6 +288,34 @@ planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar»
 Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
 de alto rendimiento y prioridad alta para un `.exe`, y exclusiones de Microsoft
 Defender para las bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
+
+### Tus juegos
+
+La pestaña **Juegos** empieza por la lista de los juegos instalados, que Win
+Juicer encuentra solo:
+- Steam, por sus manifiestos.
+- Epic, por los suyos.
+- GOG, por el registro.
+- Xbox/Game Pass, por su `MicrosoftGame.config`.
+- EA, Ubisoft, Battle.net, Riot, Rockstar, HoYoverse, Bethesda y Wargaming,
+  por sus desinstaladores. Los lanzadores no cuentan como juegos.
+
+Para cada uno busca el `.exe` que se ejecuta de verdad: el que declara la
+tienda o, si no lo dice, el `*-Win64-Shipping.exe` de los juegos Unreal o el
+ejecutable principal con su nombre, nunca un desinstalador, un lanzador o un
+informe de errores. Lo recuerda, y con «Cambiar .exe…» eliges otro.
+
+Cada fila dice lo que tiene el juego (límite de FPS con su frametime, GPU
+dedicada, prioridad alta). Para configurarlos, márcalos y pulsa:
+- **Optimizar los marcados**: el límite de FPS recomendado para tu monitor y su
+  modo, con la receta de baja latencia en NVIDIA, y la GPU dedicada si tienes
+  dos gráficas. Se aplica solo cada vez que abras el juego.
+- **Sólo límite de FPS** (el recomendado o el que escribas), **GPU dedicada**,
+  **Prioridad alta** o **Quitar lo de Win Juicer**.
+
+Los juegos instalados desde la última vez salen como **nuevos**, ya marcados.
+Desde la consola, opción 0 del menú Juegos; desde la línea de órdenes,
+`-Juegos` para listarlos y `-OptimizarJuegos` para optimizarlos todos.
 
 ### Medir FPS y frametimes
 
@@ -657,6 +687,7 @@ WinJuicer/
   src/Apps.ps1            instalar con winget
   src/Config.ps1          exportar e importar la configuración
   src/Measure.ps1         antes y después: medir y comparar
+  src/Library.ps1         los juegos instalados y su .exe, y configurarlos en un paso
   src/Frames.ps1          FPS y frametimes con PresentMon
   src/Monitor.ps1         el monitor: EDID, FreeSync, VRR, HDR y consejos
   src/Limiter.ps1         limitador de FPS por juego

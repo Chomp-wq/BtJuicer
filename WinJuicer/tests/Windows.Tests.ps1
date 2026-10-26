@@ -150,6 +150,21 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         Test-JuicerTuneWatch | Should -BeFalse
     }
 
+    It 'busca los juegos instalados y el .exe de una carpeta de verdad' {
+        $g = @(Get-JuicerGames)
+        foreach ($x in $g) { Write-Host "    $($x.Launcher): $($x.Name) -> $($x.ExeName)" }
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-juego-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $dir 'Binaries\Win64') -Force | Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $dir 'MiJuego.exe'), [byte[]]::new(1KB))
+        [IO.File]::WriteAllBytes((Join-Path $dir 'unins000.exe'), [byte[]]::new(2MB))
+        [IO.File]::WriteAllBytes((Join-Path $dir 'Binaries\Win64\MiJuego-Win64-Shipping.exe'), [byte[]]::new(4MB))
+        try {
+            Find-JuicerGameExe $dir 'Mi Juego' | Should -Be (Join-Path $dir 'Binaries\Win64\MiJuego-Win64-Shipping.exe')
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force
+        }
+    }
+
     It 'mide arranque, procesos, servicios, memoria y espacio' {
         $m = Get-JuicerMetrics
         $m.Processes | Should -BeGreaterThan 10

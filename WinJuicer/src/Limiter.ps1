@@ -195,7 +195,10 @@ function Update-JuicerFpsLimits {
 # Games limited by Win Juicer, with the cap in force now.
 function Get-JuicerFpsLimits {
     $b = Get-JuicerBackend
-    foreach ($e in @(Read-JuicerJournal | Where-Object { ([string]$_.Id) -like 'fps:*' })) {
+    # Assigned first: Read-JuicerJournal hands the list over whole, and piping
+    # the call itself would filter one object, the list.
+    $journal = Read-JuicerJournal
+    foreach ($e in @($journal | Where-Object { ([string]$_.Id) -like 'fps:*' })) {
         $exe = ([string]$e.Id).Substring(4)
         $cur = $null
         try { $cur = & $b.FpsRead $exe } catch { Write-JuicerLog "No se pudo leer el límite de ${exe}: $_" }

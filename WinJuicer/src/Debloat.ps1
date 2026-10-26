@@ -107,7 +107,8 @@ function Get-JuicerDebloatState {
 }
 
 function Get-JuicerRemovedApps {
-    @(Read-JuicerJournal | Where-Object { $_.Id -like 'app:*' })
+    $journal = Read-JuicerJournal
+    @($journal | Where-Object { $_.Id -like 'app:*' })
 }
 
 # --- OneDrive: not a Store app, but the most asked-for removal ---------------
