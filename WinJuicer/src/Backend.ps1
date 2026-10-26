@@ -368,8 +368,31 @@ function Set-WinDns {
 # Reading goes through WMI: «dism /Get-Features» takes up to a minute, and
 # the window asks for every component when it opens. Changing goes through
 # dism, which also brings in what a feature depends on.
-# InstallState: 1 enabled, 2 disabled, 3 not on disk (Windows Update brings it).
+# InstallState: 1 enabled, 2 disabled, 3 not on disk (Windows Update brings
+# it), 4 unknown.
+#
+# WMI keeps reporting the old state of a feature changed with /NoRestart until
+# the reboot; dism answers 3010 then. What was changed is remembered, tied to
+# this boot, so that verifying, undoing and rolling back see the new state.
 $script:FeatureCache = $null
+
+function Get-WinBootId {
+    try { return (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToString('s') } catch { return '' }
+}
+
+function Get-WinPendingFeatures {
+    $path = Join-Path (Get-JuicerHome) 'componentes-pendientes.json'
+    $p = @{ Boot = (Get-WinBootId); Features = @{} }
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $saved = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($path) | ConvertFrom-Json)
+            if ($saved.Boot -eq $p.Boot -and $saved.Features) { $p.Features = $saved.Features }
+        } catch {
+            Write-JuicerLog "Componentes pendientes ilegibles: $_"
+        }
+    }
+    $p
+}
 
 function Read-WinFeature {
     param([string]$Name)
@@ -379,7 +402,9 @@ function Read-WinFeature {
         $script:FeatureCache = $cache
     }
     $state = $script:FeatureCache[$Name]
-    if ($null -eq $state) { return $null }
+    if ($null -eq $state -or $state -notin 1, 2, 3) { return $null }
+    $pending = (Get-WinPendingFeatures).Features
+    if ($pending.ContainsKey($Name)) { return @{ Enabled = [bool]$pending[$Name] } }
     @{ Enabled = ($state -eq 1) }
 }
 
@@ -390,6 +415,9 @@ function Set-WinFeature {
     $r = Invoke-WinNative 'dism.exe' $arguments
     # 3010: done, a restart finishes it.
     if ($r.Code -notin 0, 3010) { throw "dism no pudo cambiar ${Name} ($($r.Code)): $($r.Output)" }
+    $p = Get-WinPendingFeatures
+    if ($r.Code -eq 3010) { $p.Features[$Name] = $Enabled } else { $p.Features.Remove($Name) }
+    [IO.File]::WriteAllText((Join-Path (Get-JuicerHome) 'componentes-pendientes.json'), (ConvertTo-JuicerJson $p), (New-Object Text.UTF8Encoding $false))
 }
 
 function New-JuicerWindowsBackend {

@@ -194,7 +194,7 @@ function ConvertFrom-JuicerNvidiaQuery {
 }
 
 function Get-JuicerGpuTuningFindings {
-    param([object[]]$Nvidia = @(), [object[]]$Rebar = @())
+    param([object[]]$Nvidia = @(), [object[]]$Rebar = @(), [bool]$Laptop = $false)
     $area = 'Gráfica'
     $out = @()
     foreach ($g in $Nvidia) {
@@ -206,7 +206,8 @@ function Get-JuicerGpuTuningFindings {
                 $out += New-JuicerFinding $area 'Info' "Límite de potencia de la $($g.Name) subido al $pct %: overclock de GPU" 'Si ves cuelgues del driver de la gráfica, es lo primero que hay que deshacer.'
             }
         }
-        if ($g.Width -and $g.MaxWidth -and $g.Width -lt $g.MaxWidth) {
+        # Laptop GPUs narrow the link when idle; a desktop card does not.
+        if (-not $Laptop -and $g.Width -and $g.MaxWidth -and $g.Width -lt $g.MaxWidth) {
             $out += New-JuicerFinding $area 'Medio' ('La {0} funciona con x{1} de x{2} líneas PCIe' -f $g.Name, $g.Width, $g.MaxWidth) 'Suele ser porque está en una ranura secundaria, o porque un SSD M.2 comparte líneas con la ranura. El manual de la placa dice cuál es la buena: normalmente la primera ranura larga.'
         }
     }
@@ -215,9 +216,11 @@ function Get-JuicerGpuTuningFindings {
         if ($r.On) {
             $out += New-JuicerFinding $area 'Ok' "Resizable BAR activado en la $($r.Name)"
         } elseif ($r.Arc) {
-            $out += New-JuicerFinding $area 'Alto' "Resizable BAR desactivado con una Intel Arc ($($r.Name))" 'Las Arc pierden muchísimo sin Resizable BAR, hasta un 40 % en algunos juegos: Intel lo considera imprescindible. Actívalo en la BIOS («Above 4G Decoding» y «Re-Size BAR Support») y desactiva CSM.'
+            # Windows does not always list memory mapped above 4 GB, so «no
+            # big window seen» is a strong hint, not proof: say how to confirm.
+            $out += New-JuicerFinding $area 'Medio' "Resizable BAR parece desactivado en tu Intel Arc ($($r.Name))" 'Las Arc pierden muchísimo sin Resizable BAR, hasta un 40 % en algunos juegos: Intel lo considera imprescindible. Confírmalo en Intel Graphics Software o GPU-Z y, si está apagado, actívalo en la BIOS («Above 4G Decoding» y «Re-Size BAR Support») y desactiva CSM.'
         } else {
-            $out += New-JuicerFinding $area 'Medio' "Resizable BAR (Smart Access Memory) desactivado en la $($r.Name)" 'Según el juego, de nada a un 10-15 % más. Actívalo en la BIOS: «Above 4G Decoding» y «Re-Size BAR Support».'
+            $out += New-JuicerFinding $area 'Bajo' "Resizable BAR (Smart Access Memory) parece desactivado en la $($r.Name)" 'Según el juego, de nada a un 10-15 % más. Confírmalo en AMD Software o GPU-Z y, si está apagado, actívalo en la BIOS: «Above 4G Decoding» y «Re-Size BAR Support».'
         }
     }
     $out
@@ -360,7 +363,7 @@ function Get-JuicerGpuTuningAudit {
     $rebar = @(foreach ($g in @($hw.Gpus | Where-Object { $_.Discrete -and $_.Vendor -ne 'NVIDIA' })) {
             @{ Name = $g.Name; Arc = $g.Arc; On = (Test-JuicerRebarRanges (Get-JuicerGpuMemoryRanges $g.PnpId)) }
         })
-    @(Get-JuicerGpuTuningFindings -Nvidia $nv -Rebar $rebar) + @(Get-JuicerDriverAdvice $hw.Gpus)
+    @(Get-JuicerGpuTuningFindings -Nvidia $nv -Rebar $rebar -Laptop $hw.Laptop) + @(Get-JuicerDriverAdvice $hw.Gpus)
 }
 
 function Get-JuicerEventCount {

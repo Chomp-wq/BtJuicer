@@ -5,6 +5,7 @@
 
 $script:SeverityOrder = @{ Alto = 0; Medio = 1; Bajo = 2; Info = 3; Ok = 4 }
 $script:LaptopChassis = @(8, 9, 10, 11, 12, 14, 18, 21, 30, 31, 32)
+$script:DesktopChassis = @(3, 4, 5, 6, 7, 13, 15, 16, 17, 23, 24, 34, 35, 36)
 # Display adapters that are not a graphics card: remote sessions, VMs, capture
 # and streaming drivers.
 $script:VirtualGpuPattern = 'Microsoft (Basic|Remote)|Hyper-V|Virtual|VMware|Parsec|Citrix|Mirage|DisplayLink|Spacedesk'
@@ -128,14 +129,22 @@ function ConvertFrom-JuicerNvidiaSmi {
 
 # --- Sections --------------------------------------------------------------
 
+# The chassis first: a desktop with a UPS on USB has a «battery» too. The
+# battery only decides when the chassis says nothing useful.
 function Test-JuicerLaptop {
     try {
-        if (@(Get-CimInstance Win32_Battery -ErrorAction Stop).Count -gt 0) { return $true }
-        $types = @((Get-CimInstance Win32_SystemEnclosure -ErrorAction Stop).ChassisTypes)
-        return (@($types | Where-Object { $script:LaptopChassis -contains [int]$_ }).Count -gt 0)
+        $types = @((Get-CimInstance Win32_SystemEnclosure -ErrorAction Stop).ChassisTypes | ForEach-Object { [int]$_ })
+        return (Test-JuicerLaptopChassis $types (@(Get-CimInstance Win32_Battery -ErrorAction SilentlyContinue).Count -gt 0))
     } catch {
         return $false
     }
+}
+
+function Test-JuicerLaptopChassis {
+    param([int[]]$Types = @(), [bool]$Battery)
+    if (@($Types | Where-Object { $script:LaptopChassis -contains $_ }).Count -gt 0) { return $true }
+    if (@($Types | Where-Object { $script:DesktopChassis -contains $_ }).Count -gt 0) { return $false }
+    $Battery
 }
 
 function Get-JuicerDriveMedia {

@@ -109,11 +109,25 @@ Describe 'Gráfica' {
         @(Get-JuicerGpuTuningFindings -Nvidia @(ConvertFrom-JuicerNvidiaQuery 'Laptop, [N/A], [N/A], 8, 8')).Count | Should -Be 0
     }
 
-    It 'Resizable BAR apagado en una Arc es grave; en una Radeon, medio' {
+    It 'sin ver Resizable BAR lo dice como sospecha, más fuerte en una Arc' {
         $f = @(Get-JuicerGpuTuningFindings -Rebar @(@{ Name = 'Arc B580'; Arc = $true; On = $false }, @{ Name = 'RX 7800 XT'; Arc = $false; On = $false }, @{ Name = 'X'; On = $null }))
         $f.Count | Should -Be 2
-        $f[0].Severity | Should -Be 'Alto'
-        $f[1].Severity | Should -Be 'Medio'
+        $f[0].Severity | Should -Be 'Medio'
+        $f[1].Severity | Should -Be 'Bajo'
+        foreach ($x in $f) { $x.Detail | Should -BeLike '*Confírmalo*' }
+    }
+
+    It 'en portátiles no confunde el enlace estrecho en reposo con una ranura mala' {
+        $q = @(ConvertFrom-JuicerNvidiaQuery 'RTX 4060 Laptop GPU, 80.00, 80.00, 4, 8')
+        @(Get-JuicerGpuTuningFindings -Nvidia $q -Laptop $true).Count | Should -Be 0
+        @(Get-JuicerGpuTuningFindings -Nvidia $q).Count | Should -Be 1
+    }
+
+    It 'un sobremesa con SAI no es un portátil' {
+        Test-JuicerLaptopChassis @(3) $true | Should -BeFalse
+        Test-JuicerLaptopChassis @(10) $false | Should -BeTrue
+        Test-JuicerLaptopChassis @(2) $true | Should -BeTrue
+        Test-JuicerLaptopChassis @() $false | Should -BeFalse
     }
 }
 

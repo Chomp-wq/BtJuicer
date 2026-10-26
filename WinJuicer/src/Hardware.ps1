@@ -220,7 +220,11 @@ function Get-JuicerGpuVram {
         if ($k -notmatch '^\d{4}$') { continue }
         $desc = Get-JuicerRegString (Read-JuicerReg "$class\$k" 'DriverDesc')
         $q = Read-JuicerReg "$class\$k" 'HardwareInformation.qwMemorySize'
-        if ($desc -and $q) { $vram[$desc] = [uint64](ConvertTo-JuicerRegValue $q.Kind $q.Value) }
+        if (-not $desc -or -not $q) { continue }
+        # QWORD on most drivers, eight raw bytes on some.
+        $v = ConvertTo-JuicerRegValue $q.Kind $q.Value
+        if ($q.Kind -in 'QWord', 'DWord') { $vram[$desc] = [uint64]$v }
+        elseif ($q.Kind -eq 'Binary' -and $v.Count -ge 8) { $vram[$desc] = [BitConverter]::ToUInt64([byte[]]$v, 0) }
     }
     $vram
 }
