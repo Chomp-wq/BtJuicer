@@ -112,6 +112,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # límite recomendado, aplicado solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o el tuyo
+.\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el límite va exacto a los Hz
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
@@ -304,13 +305,28 @@ se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
   NVIDIA (identificadores y estructuras de su `nvapi.h`). No se inyecta nada en
   el juego: los anti-trampas no tienen nada que objetar. Sin NVIDIA, en el
   perfil de ese juego de RivaTuner Statistics Server.
+- **Según tu monitor y cómo lo usas.** El monitor no dice si tienes ELMB,
+  DyAc o similar encendido, así que lo eliges una vez por monitor en «Cómo usas
+  tu monitor» (o con `-ModoMonitor`): Automático, Frecuencia variable,
+  Estroboscopio sin VRR, Estroboscopio con VRR (ELMB Sync, Aim Stabilizer
+  Sync) o Frecuencia fija. «Recalcular los límites» los vuelve a poner con el
+  modo nuevo.
 - **Cuánto**, como objetivo de frametime:
-  - con frecuencia variable, **Hz − Hz²/3600**, la cifra que usa NVIDIA Reflex
-    (138 a 144 Hz, 157 a 165 Hz, 224 a 240 Hz): siempre dentro del rango VRR;
-  - sin VRR, los Hz;
-  - y si mediste el juego y sus frametimes oscilan, **lo que sostiene el 90 %
-    del tiempo**: un ritmo constante se nota más fluido que una media más alta
-    con tirones.
+  - con frecuencia variable (con o sin estroboscopio), **Hz − Hz²/3600**, la
+    cifra que usa NVIDIA Reflex (138 a 144 Hz, 157 a 165 Hz, 171 a 180 Hz, 224
+    a 240 Hz): siempre dentro del rango VRR;
+  - **con estroboscopio sin VRR** (por ejemplo ELMB a 180 Hz), **exactamente
+    los Hz**, con la sincronización vertical forzada: cada destello necesita un
+    fotograma nuevo, los cortes con estrobo se ven el doble, y como el juego no
+    produce más fotogramas de los que la pantalla enseña no se forma cola. Nunca
+    por debajo: repetiría fotogramas, y el estrobo los convierte en saltos. Si
+    tus medidas dicen que un juego no llega a los Hz, te propone la frecuencia
+    más alta de tu monitor que sí sostiene (para usar el estrobo ahí) o VRR
+    para ese juego;
+  - a frecuencia fija, los Hz;
+  - y fuera del estroboscopio sin VRR, si mediste el juego y sus frametimes
+    oscilan, **lo que sostiene el 90 % del tiempo**: un ritmo constante se nota
+    más fluido que una media más alta con tirones.
 - **La latencia**: un límite que el juego alcanza deja la gráfica por debajo
   del 100 %, así que no se forma cola de fotogramas, que es de donde sale la
   latencia. Con NVIDIA el perfil del juego recibe además la receta de baja
@@ -318,7 +334,8 @@ se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
   activado»; en juegos con **Reflex** manda Reflex, y el límite se aplica a
   través de él) y, con G-SYNC, la sincronización vertical forzada, que con el
   límite por debajo de los Hz no llega a actuar más que para tapar un corte en
-  un pico. El modo «Ultra» no tiene un identificador público y no se toca.
+  un pico (con estroboscopio sin VRR, para que cada destello tenga su
+  fotograma). El modo «Ultra» no tiene un identificador público y no se toca.
 - Con RivaTuner, en su Setup: «Front edge sync» da la menor latencia y «Back
   edge sync» los frametimes más planos.
 - Se deshace como todo lo demás, devolviendo el límite que tuviera el juego.
@@ -338,7 +355,10 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
   BenQ, **VRB** en Acer, **Aim Stabilizer** en Gigabyte…) y si te serviría:
   sólo si el juego no baja nunca de los Hz, según tus medidas. Esto no viaja en
   el EDID: Win Juicer no puede saber si tu modelo la tiene ni si está
-  encendida.
+  encendida, por eso le dices cómo usas el monitor. Si usas el estroboscopio,
+  los consejos cambian: el límite exacto a los Hz, que suele funcionar sólo a
+  ciertas frecuencias, el overdrive que va con él, y qué juegos de tus medidas
+  no llegan a los Hz y a qué frecuencia bajar para ellos.
 - El overdrive en su nivel intermedio, y si su HDR merece la pena o es de
   entrada.
 - G-Sync con módulo no se distingue desde Windows; en NVIDIA un monitor

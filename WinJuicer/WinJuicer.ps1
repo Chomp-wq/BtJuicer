@@ -41,6 +41,11 @@
 .PARAMETER Fps
     Con -LimitarFps, el límite (de 20 a 1000).
 
+.PARAMETER ModoMonitor
+    Cómo usas tu monitor, que su EDID no dice y decide el límite de FPS:
+    Automatico, VRR, Estrobo (ELMB, DyAc… sin VRR), EstroboSync (ELMB Sync…)
+    o Fijo. Se guarda para ese monitor; con -LimitarFps, se usa ya.
+
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
 
@@ -113,6 +118,7 @@ param(
     [string]$Juego,
     [string[]]$LimitarFps = @(),
     [int]$Fps,
+    [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
     [switch]$Lista,
     [switch]$Recomendado,
     [ValidateSet('Seguro', 'Rendimiento', 'Extremo')][string]$Perfil,

@@ -309,6 +309,11 @@ $script:GuiXaml = @'
             <StackPanel x:Name="FramePanel"/>
             <TextBlock Text="Limitador de FPS" Style="{StaticResource Head}"/>
             <TextBlock x:Name="LimitNote" Style="{StaticResource Note}" Text="Un límite por juego que se aplica solo cada vez que lo abres, sin inyectar nada en el juego (los anti-trampas no tienen nada que objetar)."/>
+            <WrapPanel>
+              <TextBlock Text="Cómo usas tu monitor:" VerticalAlignment="Center" Margin="4,0,6,0" Foreground="#9A9AA5"/>
+              <ComboBox x:Name="MonitorMode" Width="430" Margin="3" ToolTip="El monitor no dice si tienes ELMB, DyAc o similar encendido: dilo aquí y el límite se ajusta"/>
+              <Button x:Name="BtnLimitRecalc" Content="Recalcular los límites"/>
+            </WrapPanel>
             <StackPanel x:Name="LimitPanel"/>
             <WrapPanel>
               <Button x:Name="BtnLimitExe" Content="Añadir un juego (.exe)…" Style="{StaticResource Accent}"/>
@@ -531,9 +536,16 @@ $script:GuiWork = @{
     }
     Limiter    = {
         $r = @()
+        if ($A.Recalc) { $Sync.Status = 'Recalculando los límites…'; $r += @(Update-JuicerFpsLimits) }
         foreach ($exe in @($A.Add)) { $Sync.Status = "Limitando $exe…"; $r += Add-JuicerFpsLimit $exe ([int]$A.Fps) }
         foreach ($id in @($A.Remove)) { $Sync.Status = "Quitando $id…"; $r += Undo-JuicerTweak $id }
         @{ Limiter = (Get-JuicerGuiLimiter); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
+    }
+    MonitorMode = {
+        $m = Get-JuicerPrimaryMonitor
+        if (-not $m) { throw 'No se pudo leer el monitor.' }
+        [void](Set-JuicerMonitorMode $m $A.Mode)
+        @{ Limiter = (Get-JuicerGuiLimiter) }
     }
     Installed  = {
         $Sync.Status = 'Preguntando a winget qué está instalado…'
@@ -1026,9 +1038,10 @@ function Start-JuicerGuiGames {
 function Get-JuicerGuiLimiter {
     $m = $null
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
-    $cap = if ($m) { Get-JuicerFpsCap ([int]$m.Display.Hz) ([bool]$m.Vrr) } else { $null }
+    $cap = if ($m) { Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) } else { $null }
     @{
         Backend = (Get-JuicerFpsBackend); Monitor = $(if ($m) { Format-JuicerMonitor $m } else { '' }); Cap = $cap
+        Mode = $(if ($m) { $m.Mode } else { '' })
         Limits = @(Get-JuicerFpsLimits); Unlimited = @(Get-JuicerUnlimitedGames)
     }
 }
@@ -1042,6 +1055,19 @@ function Show-JuicerGuiLimiter {
     if ($L.Monitor) { $lines += "Tu pantalla: $($L.Monitor)." }
     if ($L.Cap) { $lines += "Límite recomendado: $($L.Cap.Fps) FPS. $($L.Cap.Why) Si mediste un juego y sus frametimes oscilan, a ese juego le pone el que sostiene." }
     $c.LimitNote.Text = $lines -join ' '
+    # Filling the list or choosing the saved mode is not the user changing it.
+    $script:Gui.SettingMode = $true
+    try {
+        if ($c.MonitorMode.Items.Count -eq 0) {
+            $modes = Get-JuicerMonitorModes
+            foreach ($k in $modes.Keys) { [void]$c.MonitorMode.Items.Add((New-JuicerUi ComboBoxItem @{ Content = $modes[$k]; Tag = $k })) }
+        }
+        $c.MonitorMode.IsEnabled = [bool]$L.Mode
+        foreach ($it in $c.MonitorMode.Items) { if ([string]$it.Tag -eq [string]$L.Mode) { $c.MonitorMode.SelectedItem = $it } }
+    } finally {
+        $script:Gui.SettingMode = $false
+    }
+    $c.BtnLimitRecalc.IsEnabled = @($L.Limits).Count -gt 0
     $c.LimitPanel.Children.Clear()
     foreach ($g in @($L.Limits)) {
         $txt = if ($g.Fps) { '{0}: {1} FPS' -f $g.Exe, $g.Fps } else { '{0}: sin límite ahora (lo cambiaron fuera de Win Juicer)' -f $g.Exe }
@@ -1055,14 +1081,14 @@ function Show-JuicerGuiLimiter {
 }
 
 function Start-JuicerGuiLimiter {
-    param([string[]]$Add = @(), [string[]]$Remove = @())
+    param([string[]]$Add = @(), [string[]]$Remove = @(), [switch]$Recalc)
     $fps = 0
     $t = ([string]$script:Gui.C.LimitFps.Text).Trim()
-    if ($t) {
+    if ($t -and $Add.Count -gt 0) {
         if ($t -notmatch '^\d+$' -or [int]$t -lt 20 -or [int]$t -gt 1000) { Show-JuicerGuiMessage 'El límite tiene que ser un número de 20 a 1000, o vacío para el recomendado.' | Out-Null; return }
         $fps = [int]$t
     }
-    Start-JuicerGuiTask 'Aplicando el limitador…' 'Limiter' @{ Add = $Add; Remove = $Remove; Fps = $fps } {
+    Start-JuicerGuiTask 'Aplicando el limitador…' 'Limiter' @{ Add = $Add; Remove = $Remove; Fps = $fps; Recalc = [bool]$Recalc } {
         param($r)
         Show-JuicerGuiLimiter $r.Limiter
         $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica' })
@@ -1158,6 +1184,7 @@ function Register-JuicerGuiHandlers {
             if ($d.ShowDialog()) { Start-JuicerGuiLimiter -Add @($d.FileName) }
         }
         BtnLimitMeasured      = { if (@($script:Gui.Unlimited).Count -gt 0) { Start-JuicerGuiLimiter -Add @($script:Gui.Unlimited) } }
+        BtnLimitRecalc        = { Start-JuicerGuiLimiter -Recalc }
         BtnLimitRemove        = {
             $ids = @($script:Gui.C.LimitPanel.Children | Where-Object { $_.IsChecked -and $_.Tag } | ForEach-Object { [string]$_.Tag })
             if ($ids.Count -eq 0) { Show-JuicerGuiMessage 'Marca los juegos a los que quitar el límite.' | Out-Null; return }
@@ -1314,6 +1341,20 @@ function Register-JuicerGuiHandlers {
             })
     }
     $c.SearchBox.Add_TextChanged({ Set-JuicerGuiSearch })
+    $c.MonitorMode.Add_SelectionChanged({
+            if ($script:Gui.SettingMode) { return }
+            $item = $script:Gui.C.MonitorMode.SelectedItem
+            if (-not $item) { return }
+            Start-JuicerGuiTask 'Guardando cómo usas el monitor…' 'MonitorMode' @{ Mode = [string]$item.Tag } {
+                param($r)
+                Show-JuicerGuiLimiter $r.Limiter
+                if (@($r.Limiter.Limits).Count -gt 0 -and (Confirm-JuicerGui '¿Recalcular con este modo los límites de los juegos que ya tienes limitados?')) {
+                    Start-JuicerGuiLimiter -Recalc
+                } else {
+                    Set-JuicerGuiStatus 'Guardado. Los juegos que limites a partir de ahora usarán este modo.'
+                }
+            }
+        })
     $c.Tabs.Add_SelectionChanged({
             # $_ is the event: the ComboBox inside a tab raises it too.
             if ($_.OriginalSource -ne $script:Gui.C.Tabs -or -not $script:Gui.Ready) { return }

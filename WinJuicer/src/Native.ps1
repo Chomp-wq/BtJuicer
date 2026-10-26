@@ -24,6 +24,7 @@ namespace WinJuicer {
         public bool Primary;
         public string MonitorId;
         public string[] Resolutions;
+        public int[] RefreshRates;
         public int NativeWidth;
         public int NativeHeight;
     }
@@ -89,12 +90,14 @@ namespace WinJuicer {
                 if (!EnumDisplaySettings(dd.DeviceName, -1, ref cur)) continue;
                 int max = cur.dmDisplayFrequency;
                 var sizes = new List<string>();
+                var rates = new List<int>();
                 for (int m = 0; ; m++) {
                     var dm = new DEVMODE();
                     dm.dmSize = (short)Marshal.SizeOf(dm);
                     if (!EnumDisplaySettings(dd.DeviceName, m, ref dm)) break;
-                    if (dm.dmPelsWidth == cur.dmPelsWidth && dm.dmPelsHeight == cur.dmPelsHeight && dm.dmDisplayFrequency > max) {
-                        max = dm.dmDisplayFrequency;
+                    if (dm.dmPelsWidth == cur.dmPelsWidth && dm.dmPelsHeight == cur.dmPelsHeight) {
+                        if (dm.dmDisplayFrequency > max) max = dm.dmDisplayFrequency;
+                        if (dm.dmDisplayFrequency > 1 && !rates.Contains(dm.dmDisplayFrequency)) rates.Add(dm.dmDisplayFrequency);
                     }
                     string size = dm.dmPelsWidth + "x" + dm.dmPelsHeight;
                     if (!sizes.Contains(size)) sizes.Add(size);
@@ -111,6 +114,9 @@ namespace WinJuicer {
                 d.Monitor = hasMon ? mon.DeviceString : "";
                 d.MonitorId = hasMon ? mon.DeviceID : "";
                 d.Resolutions = sizes.ToArray();
+                if (!rates.Contains(cur.dmDisplayFrequency)) rates.Add(cur.dmDisplayFrequency);
+                rates.Sort();
+                d.RefreshRates = rates.ToArray();
                 d.Width = cur.dmPelsWidth;
                 d.Height = cur.dmPelsHeight;
                 d.Hz = cur.dmDisplayFrequency;
