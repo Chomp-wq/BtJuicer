@@ -313,6 +313,21 @@ dedicada, prioridad alta). Para configurarlos, márcalos y pulsa:
 - **Sólo límite de FPS** (el recomendado o el que escribas), **GPU dedicada**,
   **Prioridad alta** o **Quitar lo de Win Juicer**.
 
+**Consejos**, en cada fila: lo que hay que poner dentro del juego, que Win
+Juicer no puede cambiar desde fuera, para tu gráfica, tu monitor y cómo lo usas:
+- **Latencia:** NVIDIA Reflex («Activado + Boost» si tu medida dice que limita
+  el procesador), AMD Anti-Lag 2 en los juegos que lo traen (CS2, Ghost of
+  Tsushima) o Radeon Anti-Lag del panel en los demás.
+- **Sincronización vertical y limitador del juego:** qué hacer según uses VRR,
+  ELMB u otro estroboscopio, o frecuencia fija, para no sumar dos colas ni dos
+  limitadores.
+- **Si lo mediste**, qué bajar: lo que carga el procesador (distancia de
+  visión, multitudes, físicas) o la gráfica (DLSS/FSR/XeSS, sombras, reflejos).
+- **Juegos conocidos:** sabe cuáles de los más jugados tienen Reflex o Anti-Lag
+  2 (CS2, VALORANT, Fortnite, Apex, Overwatch 2, Call of Duty, Rainbow Six
+  Siege, Marvel Rivals, THE FINALS, PUBG, Cyberpunk 2077…) y lo particular de
+  algunos, como que Elden Ring no pasa de 60 FPS. A los demás les da lo general.
+
 Los juegos instalados desde la última vez salen como **nuevos**, ya marcados.
 Desde la consola, opción 0 del menú Juegos; desde la línea de órdenes,
 `-Juegos` para listarlos y `-OptimizarJuegos` para optimizarlos todos.
@@ -688,6 +703,7 @@ WinJuicer/
   src/Config.ps1          exportar e importar la configuración
   src/Measure.ps1         antes y después: medir y comparar
   src/Library.ps1         los juegos instalados y su .exe, y configurarlos en un paso
+  src/GameTips.ps1        qué poner dentro de cada juego según tu gráfica y tu monitor
   src/Frames.ps1          FPS y frametimes con PresentMon
   src/Monitor.ps1         el monitor: EDID, FreeSync, VRR, HDR y consejos
   src/Limiter.ps1         limitador de FPS por juego

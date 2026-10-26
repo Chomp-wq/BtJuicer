@@ -570,9 +570,16 @@ function Show-JuicerGameList {
             @('O', 'Optimizar', 'límite de FPS recomendado y GPU dedicada si hay dos'),
             @('F', 'Sólo límite de FPS', 'el recomendado o el que digas'),
             @('P', 'Prioridad alta', ''),
-            @('Q', 'Quitar lo de Win Juicer', 'límite, GPU y prioridad')
+            @('Q', 'Quitar lo de Win Juicer', 'límite, GPU y prioridad'),
+            @('C', 'Consejos', 'qué poner dentro de cada juego para tu gráfica y tu monitor')
         )
-        $what = @{ O = 'Recomendado'; F = 'Fps'; P = 'Prioridad'; Q = 'Quitar' }[(Read-JuicerChoice).ToUpperInvariant()]
+        $key = (Read-JuicerChoice).ToUpperInvariant()
+        if ($key -eq 'C') {
+            foreach ($g in $sel) { Write-Host ''; Write-JuicerFindings @(Get-JuicerGameTipsHere $g) }
+            Wait-JuicerKey
+            continue
+        }
+        $what = @{ O = 'Recomendado'; F = 'Fps'; P = 'Prioridad'; Q = 'Quitar' }[$key]
         if (-not $what) { continue }
         $fps = 0
         if ($what -eq 'Fps') { $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'; if ($f -match '^\d+$') { $fps = [int]$f } }

@@ -867,3 +867,36 @@ Describe 'Diario con varias entradas' {
         $a[0].Id | Should -Be 'app:Microsoft.BingNews'
     }
 }
+
+Describe 'Consejos por juego' {
+    It 'CS2 con NVIDIA, VRR y el procesador limitando: Reflex con Boost y qué bajar' {
+        $f = @(Get-JuicerGameTips -ExeName 'cs2.exe' -GpuVendor 'NVIDIA' -Use 'VRR' -Measured @{ GpuBound = 30; AvgFps = 300; Low1 = 200 } -Hz 165)
+        $f[0].Area | Should -Be 'Consejos: Counter-Strike 2'
+        @($f | Where-Object { $_.Title -eq 'NVIDIA Reflex: actívalo' })[0].Detail | Should -BeLike '*Activado + Boost*procesador limita*'
+        @($f | Where-Object { $_.Title -like 'Sincronización vertical del juego: desactivada' })[0].Detail | Should -BeLike '*perfil de NVIDIA*'
+        @($f | Where-Object { $_.Title -like 'El limitador de FPS del juego: desactivado' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like '*el procesador limita*' })[0].Severity | Should -Be 'Medio'
+    }
+
+    It 'CS2 con AMD: Anti-Lag 2 del propio juego; otro juego: el del panel' {
+        @(Get-JuicerGameTips -ExeName 'cs2.exe' -GpuVendor 'AMD' | Where-Object { $_.Title -like 'AMD Anti-Lag 2*' }).Count | Should -Be 1
+        @(Get-JuicerGameTips -ExeName 'r5apex.exe' -GpuVendor 'AMD' | Where-Object { $_.Title -like 'Radeon Anti-Lag*' }).Count | Should -Be 1
+    }
+
+    It 'con ELMB, VSync del driver y aviso si el juego no sostiene los Hz' {
+        $f = @(Get-JuicerGameTips -ExeName 'valorant-win64-shipping.exe' -GpuVendor 'NVIDIA' -Use 'Estrobo' -Measured @{ GpuBound = 90; AvgFps = 190; Low1 = 150 } -Hz 180)
+        @($f | Where-Object { $_.Title -like 'Sincronización vertical: la del driver*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like 'Con el estroboscopio no sostiene 180 FPS*' })[0].Severity | Should -Be 'Medio'
+        @($f | Where-Object { $_.Title -like '*la gráfica limita*' }).Count | Should -Be 1
+    }
+
+    It 'conoce lo particular de algunos juegos y da lo general a los demás' {
+        @(Get-JuicerGameTips -ExeName 'eldenring.exe' -GpuVendor 'NVIDIA' | Where-Object { $_.Title -like '*limitado a 60 FPS' }).Count | Should -Be 1
+        $u = @(Get-JuicerGameTips -ExeName 'otro.exe' -Title 'Otro juego' -GpuVendor 'NVIDIA' -Use 'Fijo')
+        $u[0].Area | Should -Be 'Consejos: Otro juego'
+        @($u | Where-Object { $_.Title -eq 'Si tiene NVIDIA Reflex, actívalo' }).Count | Should -Be 1
+        @($u | Where-Object { $_.Title -like 'Mídelo*' }).Count | Should -Be 1
+        (Find-JuicerGameTip 'FortniteClient-Win64-Shipping.exe').Name | Should -Be 'Fortnite'
+        Find-JuicerGameTip 'notepad.exe' | Should -BeNullOrEmpty
+    }
+}

@@ -314,6 +314,7 @@ $script:GuiXaml = @'
               <Button x:Name="BtnGamesRefresh" Content="Volver a buscar"/>
             </WrapPanel>
             <StackPanel x:Name="GamesPanel" Margin="0,4,0,0"/>
+            <StackPanel x:Name="GameTipsPanel" Margin="0,6,0,0"/>
             <TextBlock Text="Limitador de FPS" Style="{StaticResource Head}"/>
             <TextBlock x:Name="LimitNote" Style="{StaticResource Note}" Text="Un límite por juego que se aplica solo cada vez que lo abres, sin inyectar nada en el juego (los anti-trampas no tienen nada que objetar)."/>
             <WrapPanel>
@@ -581,6 +582,9 @@ $script:GuiWork = @{
         $lim = Get-JuicerGuiLimiter
         $Sync.Status = 'Buscando tus juegos…'
         @{ Libraries = $libs; Limiter = $lim; Games = @(Get-JuicerGuiGameList) }
+    }
+    GameTips   = {
+        @{ Tips = @(Get-JuicerGameTipsHere $A.Game) }
     }
     GameSetup  = {
         $r = @()
@@ -1149,7 +1153,7 @@ function Show-JuicerGuiGameList {
     }
     foreach ($g in @($Games)) {
         $row = New-JuicerUi Grid @{ Margin = '0,1' }
-        foreach ($w in 360, 150, 230, '*', 120) {
+        foreach ($w in 360, 150, 230, '*', 100, 120) {
             $col = New-Object System.Windows.Controls.ColumnDefinition
             $col.Width = if ($w -eq '*') { New-Object System.Windows.GridLength 1, ([System.Windows.GridUnitType]::Star) } else { New-Object System.Windows.GridLength $w }
             $row.ColumnDefinitions.Add($col)
@@ -1162,12 +1166,26 @@ function Show-JuicerGuiGameList {
         $exe = New-JuicerUi TextBlock @{ Text = $g.ExeName; Foreground = '#6E6E78'; ToolTip = $g.Exe; TextTrimming = 'CharacterEllipsis'; VerticalAlignment = 'Center' }
         $configured = [bool]($g.Fps -or $g.Gpu -or $g.Priority)
         $status = New-JuicerUi TextBlock @{ Text = (Format-JuicerGameStatus $g); Foreground = $(if ($configured) { '#4CC38A' } else { '#9A9AA5' }); VerticalAlignment = 'Center'; TextTrimming = 'CharacterEllipsis' }
+        $tips = New-JuicerUi Button @{ Content = 'Consejos'; Tag = $g; Margin = '2,1'; ToolTip = 'Qué poner dentro del juego para tu gráfica y tu monitor' }
+        $tips.Add_Click({ Start-JuicerGuiGameTips $this.Tag })
         $btn = New-JuicerUi Button @{ Content = 'Cambiar .exe…'; Tag = $g.Id; IsEnabled = [bool]$g.Dir; Margin = '2,1' }
         $btn.Add_Click({ Select-JuicerGuiGameExe ([string]$this.Tag) })
         $i = 0
-        foreach ($e in $cb, $launcher, $exe, $status, $btn) { [System.Windows.Controls.Grid]::SetColumn($e, $i); [void]$row.Children.Add($e); $i++ }
+        foreach ($e in $cb, $launcher, $exe, $status, $tips, $btn) { [System.Windows.Controls.Grid]::SetColumn($e, $i); [void]$row.Children.Add($e); $i++ }
         [void]$c.GamesPanel.Children.Add($row)
     }
+}
+
+function Start-JuicerGuiGameTips {
+    param([hashtable]$Game)
+    Start-JuicerGuiTask "Consejos para $($Game.Name)…" 'GameTips' @{ Game = $Game } {
+        param($r)
+        $p = $script:Gui.C.GameTipsPanel
+        $p.Children.Clear()
+        foreach ($f in @($r.Tips)) { [void]$p.Children.Add((New-JuicerFindingCard $f)) }
+        $p.BringIntoView()
+        Set-JuicerGuiStatus 'Consejos debajo de la lista de juegos.'
+    } -First
 }
 
 function Get-JuicerGuiCheckedGames {
