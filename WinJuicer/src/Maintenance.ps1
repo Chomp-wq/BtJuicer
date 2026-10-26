@@ -120,14 +120,16 @@ function Invoke-JuicerDriveOptimize {
     $results
 }
 
+# DISM and SFC print their own progress: straight to the screen, so it is not
+# swallowed as the function's output.
 function Invoke-JuicerComponentCleanup {
-    & dism.exe /Online /Cleanup-Image /StartComponentCleanup
-    $LASTEXITCODE
+    & dism.exe /Online /Cleanup-Image /StartComponentCleanup | Out-Host
+    @{ Dism = $LASTEXITCODE }
 }
 
 function Invoke-JuicerSystemRepair {
-    & dism.exe /Online /Cleanup-Image /RestoreHealth
+    & dism.exe /Online /Cleanup-Image /RestoreHealth | Out-Host
     $dism = $LASTEXITCODE
-    & sfc.exe /scannow
+    & sfc.exe /scannow | Out-Host
     @{ Dism = $dism; Sfc = $LASTEXITCODE }
 }

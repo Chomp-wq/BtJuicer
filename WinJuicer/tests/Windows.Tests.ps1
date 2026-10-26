@@ -102,6 +102,74 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         { Test-JuicerModernStandby } | Should -Not -Throw
     }
 
+    It 'lee el hardware y hace la revisión de overclock, BIOS y estabilidad' {
+        $hw = Get-JuicerHardwareProfile -Refresh
+        foreach ($l in (Format-JuicerHardwareSummary $hw)) { Write-Host "    $l" }
+        $hw.Cpu.Name | Should -Not -BeNullOrEmpty
+        $hw.Cpu.Threads | Should -BeGreaterThan 0
+        $f = @(Get-JuicerTuningAudit) + @(Get-JuicerStabilityAudit) + @(Get-JuicerGpuTuningAudit) + @(Get-JuicerNetworkAudit) + @(Get-JuicerSoftwareAudit)
+        foreach ($x in $f) { Write-Host ('    {0,-6} {1,-17} {2}' -f $x.Severity, $x.Area, $x.Title) }
+        @($f | Where-Object { $_.Title -like 'No se pudo leer el registro*' }) | Should -BeNullOrEmpty
+        $a = Get-JuicerAdvice $hw
+        @(Get-JuicerCatalog | Where-Object { -not $a[$_.Id] }) | Should -BeNullOrEmpty
+    }
+
+    It 'lista las apps de la Tienda y las características de Windows' {
+        { @(Get-JuicerDebloatState (Get-JuicerHardwareProfile)) } | Should -Not -Throw
+        $b = Get-JuicerBackend
+        { & $b.FeatRead 'NetFx3' } | Should -Not -Throw
+        { Get-JuicerCurrentDns } | Should -Not -Throw
+    }
+
+    It 'la ventana se construye y dibuja cada pestaña' {
+        # WPF needs a single-threaded apartment, whatever the test host uses.
+        $rs = [runspacefactory]::CreateRunspace()
+        $rs.ApartmentState = 'STA'
+        $rs.Open()
+        $ps = [powershell]::Create()
+        $ps.Runspace = $rs
+        $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
+        [void]$ps.AddScript(@"
+Import-Module '$psm' -Force
+& (Get-Module WinJuicer) {
+    `$null = Show-JuicerGui -NoShow
+    `$hw = Get-JuicerHardwareProfile
+    `$script:Gui.Hw = `$hw
+    `$script:Gui.Advice = Get-JuicerAdvice `$hw
+    `$script:Gui.Snapshot = Get-JuicerGuiSnapshot
+    Show-JuicerGuiTweaks
+    Show-JuicerGuiApps
+    Show-JuicerGuiUndo
+    Show-JuicerGuiAudit @(Get-JuicerAudit)
+    Show-JuicerGuiDebloat @(Get-JuicerDebloatState `$hw)
+    Show-JuicerGuiStartup @(Get-JuicerStartupItems)
+    Select-JuicerGuiTweaks 'Recomendado'
+    `$script:Gui.C.SearchBox.Text = 'steam'
+    `$r = @{
+        Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
+        Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
+        Visible = @(`$script:Gui.InstallChecks.Values | Where-Object { `$_.Check.Visibility -eq 'Visible' }).Count
+    }
+    `$script:Gui.Window.Close()
+    `$r
+}
+"@)
+        try {
+            $out = @($ps.Invoke())
+            foreach ($e in $ps.Streams.Error) { Write-Host "    $e" }
+            $ps.Streams.Error.Count | Should -Be 0
+            $r = $out[-1]
+            $r.Missing | Should -BeNullOrEmpty
+            $r.Checks | Should -BeGreaterThan 30
+            $r.Apps | Should -BeGreaterThan 40
+            $r.Cards | Should -BeGreaterThan 5
+            $r.Visible | Should -Be 1
+        } finally {
+            $ps.Dispose()
+            $rs.Dispose()
+        }
+    }
+
     It 'añade y quita una exclusión de Defender' {
         $dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-def-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $dir | Out-Null
@@ -126,5 +194,9 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         $LASTEXITCODE | Should -Be 0
         & $ps -NoProfile -ExecutionPolicy Bypass -File $script -Aplicar 'no.existe' -Si | Out-Host
         $LASTEXITCODE | Should -Be 2
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $script -Equipo | Out-Host
+        $LASTEXITCODE | Should -Be 0
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $script -Recomendado -Simular -Si | Out-Host
+        $LASTEXITCODE | Should -Be 0
     }
 }

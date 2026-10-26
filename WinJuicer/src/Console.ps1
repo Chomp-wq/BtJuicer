@@ -14,6 +14,8 @@ $script:StateMarks = @{
     Error     = @('[!]', 'Red')
 }
 $script:SeverityColors = @{ Alto = 'Red'; Medio = 'Yellow'; Bajo = 'Cyan'; Info = 'Gray'; Ok = 'Green' }
+$script:LevelColors = @{ 0 = 'Cyan'; 1 = 'Green'; 2 = 'Yellow'; 3 = 'Red' }
+$script:VerdictMarks = @{ Recomendado = @('+', 'Green'); Opcional = @(' ', 'DarkGray'); NoRecomendado = @('-', 'DarkGray') }
 $script:RebootLabels = @{
     Reinicio   = 'Reinicia el equipo para completar'
     Sesion     = 'Cierra sesión y vuelve a entrar para completar'
@@ -114,27 +116,46 @@ function Get-JuicerNumbers {
 
 # --- Tweaks and results ----------------------------------------------------
 
+# Verdicts for this machine. Reading the hardware takes a few seconds, so it
+# happens once, the first time a screen needs it.
+$script:ConsoleAdvice = $null
+
+function Get-JuicerConsoleAdvice {
+    if ($null -eq $script:ConsoleAdvice) {
+        try {
+            $script:ConsoleAdvice = Get-JuicerAdvice (Get-JuicerHardwareProfile)
+        } catch {
+            Write-JuicerLog "No se pudo leer el hardware para recomendar: $_"
+            $script:ConsoleAdvice = @{}
+        }
+    }
+    $script:ConsoleAdvice
+}
+
 function Write-JuicerTweakLine {
-    param([int]$Number, [hashtable]$Tweak, [hashtable]$State)
+    param([int]$Number, [hashtable]$Tweak, [hashtable]$State, [hashtable]$Advice)
     $mark = $script:StateMarks[$State.State]
     Write-Host ('  {0} ' -f $mark[0]) -ForegroundColor $mark[1] -NoNewline
+    $v = if ($Advice -and $Advice[$Tweak.Id]) { $script:VerdictMarks[$Advice[$Tweak.Id].Verdict] } else { @(' ', 'DarkGray') }
+    Write-Host $v[0] -ForegroundColor $v[1] -NoNewline
     Write-Host ('{0,3}  ' -f $Number) -ForegroundColor Yellow -NoNewline
     $title = $Tweak.Title
-    $w = (Get-JuicerConsoleWidth) - 36
+    $w = (Get-JuicerConsoleWidth) - 37
     if ($title.Length -gt $w) { $title = $title.Substring(0, $w - 1) + '…' }
     Write-Host ("{0,-$w}" -f $title) -NoNewline
-    $levelColor = @{ 1 = 'Green'; 2 = 'Yellow'; 3 = 'Red' }[[int]$Tweak.Level]
-    Write-Host (' {0,-12} ' -f $script:LevelNames[[int]$Tweak.Level]) -ForegroundColor $levelColor -NoNewline
+    Write-Host (' {0,-12} ' -f $script:LevelNames[[int]$Tweak.Level]) -ForegroundColor $script:LevelColors[[int]$Tweak.Level] -NoNewline
     Write-Host ('impacto {0}' -f $Tweak.Impact.ToLowerInvariant()) -ForegroundColor DarkGray
 }
 
 function Write-JuicerLegend {
+    param([switch]$Advice)
     Write-Host ''
     Write-Host '  [x] aplicado  [~] a medias  [ ] sin aplicar  [-] no aplica aquí  [!] no se pudo leer' -ForegroundColor DarkGray
+    if ($Advice) { Write-Host '  +  recomendado para este equipo    -  no recomendado aquí' -ForegroundColor DarkGray }
 }
 
 function Show-JuicerTweakDetail {
-    param([hashtable]$Tweak, [hashtable]$State)
+    param([hashtable]$Tweak, [hashtable]$State, [hashtable]$Advice)
     Write-Host "  $($Tweak.Title)" -ForegroundColor White
     $rb = @{ No = 'efecto inmediato'; Explorador = 'reinicia el Explorador'; Sesion = 'al volver a iniciar sesión'; Reinicio = 'tras reiniciar' }[$Tweak.Reboot]
     Write-Host ('  {0} · impacto {1} · {2}' -f $script:LevelNames[[int]$Tweak.Level], $Tweak.Impact.ToLowerInvariant(), $rb) -ForegroundColor DarkGray
@@ -146,6 +167,12 @@ function Show-JuicerTweakDetail {
     $label = @{ Aplicado = 'Aplicado'; Parcial = 'Aplicado a medias'; Pendiente = 'Sin aplicar'; NoAplica = 'No aplica'; Error = 'Error al leer el estado' }[$State.State]
     Write-Host "  Estado: $label" -ForegroundColor $script:StateMarks[$State.State][1]
     if ($State.Reason) { Write-JuicerWrapped $State.Reason 4 'DarkGray' }
+    if ($Advice -and $Advice[$Tweak.Id]) {
+        $a = $Advice[$Tweak.Id]
+        $label = @{ Recomendado = 'Recomendado'; Opcional = 'Opcional'; NoRecomendado = 'No recomendado' }[$a.Verdict]
+        Write-Host "  Para este equipo: $label" -ForegroundColor $(if ($a.Verdict -eq 'Recomendado') { 'Green' } else { 'Gray' })
+        Write-JuicerWrapped $a.Reason 4 'DarkGray'
+    }
     if ($State.Pending.Count -gt 0 -and $State.State -ne 'NoAplica') {
         Write-Host '  Cambiaría:' -ForegroundColor DarkGray
         foreach ($a in $State.Pending) { Write-JuicerWrapped ('· ' + (Format-JuicerAction $a)) 6 'DarkGray' }
@@ -231,6 +258,8 @@ function Show-JuicerAudit {
     if ($script:Screen) { Write-Host '  Revisando el equipo…' -ForegroundColor DarkGray }
     $findings = @(Get-JuicerAudit)
     if ($script:Screen) { Write-JuicerHeader 'Diagnóstico — no cambia nada' }
+    Write-Host '  Este equipo' -ForegroundColor White
+    foreach ($l in (Format-JuicerHardwareSummary (Get-JuicerHardwareProfile))) { Write-JuicerWrapped $l 5 'Gray' }
     $area = ''
     foreach ($f in $findings) {
         if ($f.Area -ne $area) { $area = $f.Area; Write-Host ''; Write-Host "  $area" -ForegroundColor White }
@@ -253,7 +282,10 @@ function Show-JuicerAudit {
             Write-Host $f.Title
         }
         if (@($top | Where-Object { $_.Area -eq 'Reparación' }).Count -gt 0) {
-            Write-JuicerWrapped 'Las reparaciones están en el perfil Seguro.' 2 'DarkGray'
+            Write-JuicerWrapped 'Las reparaciones están en el perfil Seguro y en «Recomendado».' 2 'DarkGray'
+        }
+        if (@($top | Where-Object { $_.Area -in 'Overclock y BIOS', 'Estabilidad', 'Memoria', 'Gráfica', 'Pantalla' }).Count -gt 0) {
+            Write-JuicerWrapped 'Lo de BIOS, overclock, memoria y pantalla no lo puede cambiar ningún programa: cada aviso dice dónde se arregla.' 2 'DarkGray'
         }
     }
     Wait-JuicerKey
@@ -297,8 +329,7 @@ function Show-JuicerProfiles {
         }
         Write-Host '  Se aplicará:' -ForegroundColor White
         foreach ($t in $todo) {
-            $color = @{ 1 = 'Green'; 2 = 'Yellow'; 3 = 'Red' }[[int]$t.Level]
-            Write-Host '  · ' -ForegroundColor $color -NoNewline
+            Write-Host '  · ' -ForegroundColor $script:LevelColors[[int]$t.Level] -NoNewline
             Write-Host $t.Title -NoNewline
             Write-Host "  (impacto $($t.Impact.ToLowerInvariant()))" -ForegroundColor DarkGray
             if ($t.Level -ge 2) { Write-JuicerWrapped "Cuesta: $($t.Cost)" 6 'DarkGray' }
@@ -315,11 +346,11 @@ function Show-JuicerProfiles {
 }
 
 function Show-JuicerTweakList {
+    $advice = Get-JuicerConsoleAdvice
     while ($true) {
         Write-JuicerHeader 'Ajustes uno a uno'
         $journal = Read-JuicerJournal
         $catalog = @(Get-JuicerCatalog)
-        $states = @{}
         $n = 0
         $numbered = @()
         foreach ($cat in $script:CategoryOrder) {
@@ -329,34 +360,47 @@ function Show-JuicerTweakList {
             foreach ($t in $inCat) {
                 $n++
                 $numbered += $t
-                $states[$t.Id] = Get-JuicerTweakState $t $journal
-                Write-JuicerTweakLine $n $t $states[$t.Id]
+                Write-JuicerTweakLine $n $t (Get-JuicerTweakState $t $journal) $advice
             }
         }
-        Write-JuicerLegend
+        Write-JuicerLegend -Advice
         $c = Read-JuicerChoice 'Número para ver un ajuste, Intro para volver'
         if ($c -eq '') { return }
         $pick = Get-JuicerNumbers $c $numbered.Count
         if ($pick.Count -ne 1) { continue }
-        $t = $numbered[$pick[0] - 1]
-        while ($true) {
-            Write-JuicerHeader $t.Category
-            $s = Get-JuicerTweakState $t
-            Show-JuicerTweakDetail $t $s
-            $opts = @()
-            if ($s.State -in 'Pendiente', 'Parcial') { $opts += 'A aplicar' }
-            if ($s.Undoable) { $opts += 'D deshacer' }
-            $c2 = Read-JuicerChoice (($opts + 'Intro volver') -join ' · ')
-            if ($c2 -match '^[aA]$' -and $s.State -in 'Pendiente', 'Parcial') {
-                if ($t.Level -ge 3 -and -not (Confirm-JuicerRisk $t)) { continue }
-                Show-JuicerResults @(Invoke-JuicerTweak $t)
-                Wait-JuicerKey
-            } elseif ($c2 -match '^[dD]$' -and $s.Undoable) {
-                Show-JuicerResults @(Undo-JuicerTweak $t.Id)
-                Wait-JuicerKey
-            } else {
-                break
-            }
+        Show-JuicerTweakScreen $numbered[$pick[0] - 1] $advice
+    }
+}
+
+# One tweak: what it does, its state, and what can be done with it from here.
+# Toggles (preferences, components) can also be switched the other way.
+function Show-JuicerTweakScreen {
+    param([hashtable]$Tweak, [hashtable]$Advice)
+    $t = $Tweak
+    while ($true) {
+        Write-JuicerHeader $t.Category
+        $s = Get-JuicerTweakState $t
+        Show-JuicerTweakDetail $t $s $Advice
+        $inverse = $null
+        if ($t.Off) { $inverse = Get-JuicerTweakState (Get-JuicerInverseTweak $t) }
+        $opts = @()
+        if ($s.State -in 'Pendiente', 'Parcial') { $opts += 'A aplicar' }
+        if ($s.Undoable) { $opts += 'D deshacer' }
+        if ($inverse -and $inverse.State -in 'Pendiente', 'Parcial') { $opts += 'X poner lo contrario' }
+        $c2 = Read-JuicerChoice (($opts + 'Intro volver') -join ' · ')
+        if ($c2 -match '^[aA]$' -and $s.State -in 'Pendiente', 'Parcial') {
+            if ($t.Level -ge 3 -and -not (Confirm-JuicerRisk $t)) { continue }
+            $r = if ($t.Off) { @(Set-JuicerToggle $t $true) } else { @(Invoke-JuicerTweak $t) }
+            Show-JuicerResults $r
+            Wait-JuicerKey
+        } elseif ($c2 -match '^[dD]$' -and $s.Undoable) {
+            Show-JuicerResults @(Undo-JuicerTweak $t.Id)
+            Wait-JuicerKey
+        } elseif ($c2 -match '^[xX]$' -and $inverse -and $inverse.State -in 'Pendiente', 'Parcial') {
+            Show-JuicerResults @(Set-JuicerToggle $t $false)
+            Wait-JuicerKey
+        } else {
+            return
         }
     }
 }
@@ -492,7 +536,9 @@ function Show-JuicerMaintenance {
             @('1', 'Limpieza', 'temporales, informes de errores, descargas de Windows Update'),
             @('2', 'Optimizar unidades', 'TRIM en SSD, desfragmentar en disco duro'),
             @('3', 'Limpiar componentes', 'versiones antiguas de Windows (WinSxS); tarda'),
-            @('4', 'Reparar Windows', 'DISM y SFC; tarda bastante')
+            @('4', 'Reparar Windows', 'DISM y SFC; tarda bastante'),
+            @('5', 'Restablecer la red', 'Winsock y TCP/IP: «conectado, sin internet»; pide reiniciar'),
+            @('6', 'Restablecer Windows Update', 'cuando se atasca descargando o falla siempre igual')
         )
         Write-Host ''
         Write-JuicerWrapped 'Nada de esto se puede deshacer, por eso sólo borra lo que Windows regenera o ya no usa. La caché de shaders y Prefetch no se tocan: vaciarlas hace que la próxima partida tenga tirones.' 2 'DarkGray'
@@ -521,6 +567,20 @@ function Show-JuicerMaintenance {
             }
             '3' { Write-JuicerHeader 'Limpiar componentes'; [void](Invoke-JuicerComponentCleanup); Wait-JuicerKey }
             '4' { Write-JuicerHeader 'Reparar Windows'; [void](Invoke-JuicerSystemRepair); Wait-JuicerKey }
+            '5' {
+                Write-JuicerHeader 'Restablecer la red'
+                if (Confirm-JuicerAction 'Se perderán las configuraciones de Winsock de VPN y cortafuegos antiguos. ¿Seguir') {
+                    foreach ($r in (Invoke-JuicerNetworkReset)) { Write-Host ('  {0} {1}' -f $(if ($r.Ok) { '[ok]' } else { '[!!]' }), $r.Step) -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' }) }
+                    Write-JuicerWrapped 'Reinicia el equipo para completar.' 2 'Yellow'
+                }
+                Wait-JuicerKey
+            }
+            '6' {
+                Write-JuicerHeader 'Restablecer Windows Update'
+                foreach ($r in (Invoke-JuicerUpdateReset)) { Write-Host ('  {0} {1}' -f $(if ($r.Ok) { '[ok]' } else { '[!!]' }), $r.Step) -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' }) }
+                Write-JuicerWrapped 'Las carpetas antiguas quedan renombradas como .old: bórralas cuando Windows Update vuelva a funcionar.' 2 'DarkGray'
+                Wait-JuicerKey
+            }
             '' { return }
         }
     }
@@ -557,6 +617,205 @@ function Show-JuicerUndo {
     }
 }
 
+function Show-JuicerRecommended {
+    Write-JuicerHeader 'Recomendado para este equipo'
+    Write-Host '  Leyendo el hardware…' -ForegroundColor DarkGray
+    $hw = Get-JuicerHardwareProfile
+    $advice = Get-JuicerConsoleAdvice
+    Write-JuicerHeader 'Recomendado para este equipo'
+    foreach ($l in (Format-JuicerHardwareSummary $hw)) { Write-JuicerWrapped $l 2 'Gray' }
+    Write-Host ''
+    $journal = Read-JuicerJournal
+    $todo = @(Get-JuicerRecommendedTweaks $hw | Where-Object { (Get-JuicerTweakState $_ $journal).State -in 'Pendiente', 'Parcial' })
+    $skipped = @(Get-JuicerCatalog | Where-Object { $_.Level -ge 1 -and $advice[$_.Id].Verdict -eq 'NoRecomendado' })
+    if ($skipped.Count -gt 0) {
+        Write-Host '  No conviene en este equipo:' -ForegroundColor White
+        foreach ($t in $skipped) {
+            Write-Host "  - $($t.Title)" -ForegroundColor DarkGray
+            Write-JuicerWrapped $advice[$t.Id].Reason 6 'DarkGray'
+        }
+        Write-Host ''
+    }
+    if ($todo.Count -eq 0) {
+        Write-Host '  Ya tienes aplicado todo lo recomendado para este equipo.' -ForegroundColor Green
+        Wait-JuicerKey
+        return
+    }
+    Write-Host '  Se aplicará:' -ForegroundColor White
+    foreach ($t in $todo) {
+        Write-Host '  + ' -ForegroundColor $script:LevelColors[[int]$t.Level] -NoNewline
+        Write-Host $t.Title -NoNewline
+        Write-Host "  (impacto $($t.Impact.ToLowerInvariant()))" -ForegroundColor DarkGray
+        Write-JuicerWrapped $advice[$t.Id].Reason 6 'DarkGray'
+    }
+    $c = Read-JuicerChoice "¿Aplicar $($todo.Count) ajustes? S para aplicar, V para simular, Intro para volver"
+    if ($c -match '^[vV]$') { Show-JuicerResults (Invoke-JuicerTweakSet $todo -Simulate) }
+    elseif ($c -match '^(s|si|sí|y|yes)$') { Show-JuicerResults (Invoke-JuicerTweakSet $todo) }
+    else { return }
+    Wait-JuicerKey
+}
+
+function Show-JuicerDebloat {
+    $headers = @{ Seguro = 'Seguras de quitar'; Opcional = 'Opcionales: léelas antes'; Cuidado = 'Con cuidado: algo depende de ellas' }
+    while ($true) {
+        Write-JuicerHeader 'Debloat: apps que vienen con Windows'
+        Write-Host '  Leyendo las apps instaladas…' -ForegroundColor DarkGray
+        $hw = Get-JuicerHardwareProfile
+        try {
+            $apps = @(Get-JuicerDebloatState $hw)
+        } catch {
+            Write-Host "  No se pudieron leer las apps instaladas: $_" -ForegroundColor Red
+            Wait-JuicerKey
+            return
+        }
+        $journal = Read-JuicerJournal
+        $extras = @(Get-JuicerCatalog | Where-Object { $_.Category -eq 'Apps' -and (Get-JuicerTweakState $_ $journal).State -in 'Pendiente', 'Parcial' })
+        Write-JuicerHeader 'Debloat: apps que vienen con Windows'
+        $n = 0
+        $numbered = @()
+        foreach ($class in 'Seguro', 'Opcional', 'Cuidado') {
+            $in = @($apps | Where-Object { $_.Class -eq $class })
+            if ($in.Count -eq 0) { continue }
+            Write-Host "  $($headers[$class])" -ForegroundColor White
+            foreach ($a in $in) {
+                $n++
+                $numbered += , @{ App = $a }
+                $mark = if ($a.Need) { @('!', 'Yellow') } elseif ($a.Recommended) { @('+', 'Green') } else { @(' ', 'Gray') }
+                Write-Host ('  {0}{1,3}  ' -f $mark[0], $n) -ForegroundColor $mark[1] -NoNewline
+                Write-Host $a.Title
+                Write-JuicerWrapped $a.What 8 'DarkGray'
+                if ($a.Need) { Write-JuicerWrapped "Necesaria aquí: $($a.Need)" 8 'Yellow' }
+            }
+        }
+        foreach ($t in $extras) {
+            $n++
+            $numbered += , @{ Tweak = $t }
+            Write-Host ('   {0,3}  ' -f $n) -ForegroundColor Yellow -NoNewline
+            Write-Host $t.Title
+            Write-JuicerWrapped $t.What 8 'DarkGray'
+        }
+        if ($n -eq 0) { Write-Host '  No queda instalada ninguna de las apps que Win Juicer sabe quitar.' -ForegroundColor Green }
+        Write-Host ''
+        Write-JuicerWrapped 'Quitar una app la desinstala para todos los usuarios. Deshacer la reinstala desde Microsoft Store con winget. Una app cerrada no cuesta FPS: esto es espacio, actualizaciones de fondo y un Inicio más limpio.' 2 'DarkGray'
+        $c = Read-JuicerChoice 'Números a quitar (ej. 1,3-5), T todas las «+», R reinstalar, Intro volver'
+        if ($c -eq '') { return }
+        if ($c -match '^[rR]$') { Show-JuicerReinstallApps; continue }
+        $picked = if ($c -match '^[tT]$') { @($numbered | Where-Object { $_.App -and $_.App.Recommended }) } else { @(Get-JuicerNumbers $c $n | ForEach-Object { $numbered[$_ - 1] }) }
+        if ($picked.Count -eq 0) { continue }
+        $tweaks = @(foreach ($p in $picked) { if ($p.App) { New-JuicerAppxTweak (Find-JuicerDebloatApp $p.App.Name) } else { $p.Tweak } })
+        Write-Host ''
+        foreach ($p in $picked) {
+            if ($p.App -and $p.App.Need) { Write-JuicerWrapped "Atención: $($p.App.Title). $($p.App.Need)" 2 'Yellow' }
+        }
+        if (-not (Confirm-JuicerAction "¿Quitar $($tweaks.Count) apps?")) { continue }
+        Show-JuicerResults (Invoke-JuicerTweakSet $tweaks)
+        Wait-JuicerKey
+    }
+}
+
+function Show-JuicerReinstallApps {
+    Write-JuicerHeader 'Reinstalar apps quitadas'
+    $removed = @(Get-JuicerRemovedApps) + @(Read-JuicerJournal | Where-Object { $_.Id -eq 'apps.onedrive' })
+    if ($removed.Count -eq 0) { Write-Host '  Win Juicer no ha quitado ninguna app.' -ForegroundColor DarkGray; Wait-JuicerKey; return }
+    $n = 0
+    foreach ($e in $removed) { $n++; Write-Host ('  {0,3}  {1}' -f $n, ($e.Title -replace '^Quitar ', '')) }
+    $c = Read-JuicerChoice 'Números a reinstalar, Intro para volver'
+    if ($c -eq '') { return }
+    Show-JuicerResults @(Get-JuicerNumbers $c $removed.Count | ForEach-Object { Undo-JuicerTweak $removed[$_ - 1].Id })
+    Wait-JuicerKey
+}
+
+function Show-JuicerDns {
+    while ($true) {
+        Write-JuicerHeader 'Red: servidores DNS'
+        $current = @(Get-JuicerCurrentDns)
+        $providers = Get-JuicerDnsProviders
+        if ($current.Count -eq 0) {
+            Write-Host '  No hay ningún adaptador de red físico conectado.' -ForegroundColor Yellow
+            Wait-JuicerKey
+            return
+        }
+        foreach ($c in $current) {
+            $what = if ($c.Provider -ne 'Otro') { $providers[$c.Provider].Title } else { (@($c.V4) + @($c.V6)) -join ', ' }
+            Write-Host "  $($c.Adapter): " -NoNewline
+            Write-Host $what -ForegroundColor Cyan
+        }
+        Write-Host ''
+        $keys = @($providers.Keys)
+        for ($i = 0; $i -lt $keys.Count; $i++) {
+            $p = $providers[$keys[$i]]
+            Write-Host ('  {0,2}  ' -f ($i + 1)) -ForegroundColor Yellow -NoNewline
+            Write-Host ('{0,-40} ' -f $p.Title) -NoNewline
+            Write-Host $p.What -ForegroundColor DarkGray
+        }
+        Write-Host ''
+        Write-JuicerWrapped 'El DNS no baja el ping: sólo se consulta al conectar. Sirve para privacidad, para filtrar malware o anuncios, o porque el de tu operador falle.' 2 'DarkGray'
+        $undo = $null -ne (Get-JuicerJournalEntry (Read-JuicerJournal) 'red.dns')
+        $c = Read-JuicerChoice $(if ($undo) { 'Número para cambiar, D para volver al que tenías, Intro para volver' } else { 'Número para cambiar, Intro para volver' })
+        if ($c -eq '') { return }
+        if ($c -match '^[dD]$' -and $undo) { Show-JuicerResults @(Undo-JuicerTweak 'red.dns'); Wait-JuicerKey; continue }
+        $pick = @(Get-JuicerNumbers $c $keys.Count)
+        if ($pick.Count -ne 1) { continue }
+        Show-JuicerResults @(Invoke-JuicerTweak (New-JuicerDnsTweak $keys[$pick[0] - 1]))
+        Wait-JuicerKey
+    }
+}
+
+function Show-JuicerInstall {
+    if (-not (Test-JuicerWinget)) {
+        Write-JuicerHeader 'Instalar programas'
+        Write-JuicerWrapped 'winget no está disponible. Instálalo o actualízalo desde Microsoft Store: «Instalador de aplicación».' 2 'Yellow'
+        Wait-JuicerKey
+        return
+    }
+    while ($true) {
+        Write-JuicerHeader 'Instalar programas (winget)'
+        Write-Host '  Leyendo lo que ya está instalado…' -ForegroundColor DarkGray
+        $installed = Get-JuicerWingetInstalled
+        $suggest = Get-JuicerAppSuggestions (Get-JuicerHardwareProfile)
+        Write-JuicerHeader 'Instalar programas (winget)'
+        $apps = @(Get-JuicerWingetApps)
+        $n = 0
+        $numbered = @()
+        foreach ($cat in $script:WingetCategories) {
+            $in = @($apps | Where-Object { $_.Category -eq $cat })
+            if ($in.Count -eq 0) { continue }
+            Write-Host "  $cat" -ForegroundColor White
+            foreach ($a in $in) {
+                $n++
+                $numbered += $a
+                $has = $installed.ContainsKey($a.Id.ToLowerInvariant())
+                $mark = if ($has) { @('[x]', 'Green') } else { @('[ ]', 'Gray') }
+                $sug = if ($suggest.Contains($a.Id) -and -not $has) { '+' } else { ' ' }
+                Write-Host ('  {0}' -f $mark[0]) -ForegroundColor $mark[1] -NoNewline
+                Write-Host $sug -ForegroundColor Green -NoNewline
+                Write-Host ('{0,3}  ' -f $n) -ForegroundColor Yellow -NoNewline
+                Write-Host ('{0,-30} ' -f $a.Name) -NoNewline
+                Write-Host $(if ($sug -eq '+') { $suggest[$a.Id] } else { $a.What }) -ForegroundColor DarkGray
+            }
+        }
+        Write-Host ''
+        Write-Host '  [x] instalado   + sugerido para este equipo' -ForegroundColor DarkGray
+        $c = Read-JuicerChoice 'Números a instalar; Q y números para desinstalar (Q 3,5); A para actualizar todo; Intro volver'
+        if ($c -eq '') { return }
+        try {
+            if ($c -match '^[aA]$') {
+                Start-JuicerWinget 'upgrade'
+            } elseif ($c -match '^[qQ]\s*(.+)$') {
+                $ids = @(Get-JuicerNumbers $Matches[1] $n | ForEach-Object { $numbered[$_ - 1].Id })
+                if ($ids.Count -gt 0) { Start-JuicerWinget 'uninstall' $ids }
+            } else {
+                $ids = @(Get-JuicerNumbers $c $n | ForEach-Object { $numbered[$_ - 1].Id })
+                if ($ids.Count -gt 0) { Start-JuicerWinget 'install' $ids }
+            }
+            Write-JuicerWrapped 'Se ha abierto una ventana con winget: ahí verás el progreso.' 2 'Green'
+        } catch {
+            Write-JuicerWrapped "$_" 2 'Red'
+        }
+        Wait-JuicerKey
+    }
+}
+
 function Show-JuicerMyths {
     Write-JuicerHeader 'Lo que Win Juicer no hace, y por qué'
     foreach ($m in (Get-JuicerMyths)) {
@@ -571,26 +830,34 @@ function Show-JuicerMainMenu {
     while ($true) {
         Write-JuicerHeader
         Write-JuicerMenu @(
-            @('1', 'Diagnóstico', 'qué frena a este equipo (no cambia nada)'),
-            @('2', 'Perfiles', 'Seguro · Rendimiento · Extremo'),
-            @('3', 'Ajustes uno a uno', 'estado, ganancia y coste de cada uno'),
-            @('4', 'Programas de inicio', 'lo que arranca solo con Windows'),
-            @('5', 'Juegos', 'GPU, prioridad y exclusiones de Defender'),
-            @('6', 'Mantenimiento', 'limpieza, TRIM y reparación de Windows'),
-            @('7', 'Deshacer', 'todo, o cambio a cambio'),
-            @('8', 'Lo que no hacemos', 'los «trucos» que circulan, y por qué no'),
+            @('1', 'Diagnóstico', 'hardware, overclock y BIOS: qué frena a este equipo'),
+            @('2', 'Recomendado', 'lo que conviene a este equipo, según su hardware'),
+            @('3', 'Perfiles', 'Seguro · Rendimiento · Extremo'),
+            @('4', 'Ajustes uno a uno', 'estado, ganancia y coste; preferencias y componentes'),
+            @('5', 'Debloat', 'las apps que vienen con Windows, una a una'),
+            @('6', 'Programas de inicio', 'lo que arranca solo con Windows'),
+            @('7', 'Juegos', 'GPU, prioridad y exclusiones de Defender'),
+            @('8', 'Red y DNS', 'elegir servidor DNS'),
+            @('9', 'Instalar programas', 'con winget: lanzadores, navegadores, herramientas'),
+            @('10', 'Mantenimiento', 'limpieza, TRIM, reparar Windows, la red y Windows Update'),
+            @('11', 'Deshacer', 'todo, o cambio a cambio'),
+            @('12', 'Lo que no hacemos', 'los «trucos» que circulan, y por qué no'),
             @('0', 'Salir', '')
         )
         $c = Read-JuicerChoice
         switch ($c) {
             '1' { Show-JuicerAudit }
-            '2' { Show-JuicerProfiles }
-            '3' { Show-JuicerTweakList }
-            '4' { Show-JuicerStartup }
-            '5' { Show-JuicerGames }
-            '6' { Show-JuicerMaintenance }
-            '7' { Show-JuicerUndo }
-            '8' { Show-JuicerMyths }
+            '2' { Show-JuicerRecommended }
+            '3' { Show-JuicerProfiles }
+            '4' { Show-JuicerTweakList }
+            '5' { Show-JuicerDebloat }
+            '6' { Show-JuicerStartup }
+            '7' { Show-JuicerGames }
+            '8' { Show-JuicerDns }
+            '9' { Show-JuicerInstall }
+            '10' { Show-JuicerMaintenance }
+            '11' { Show-JuicerUndo }
+            '12' { Show-JuicerMyths }
             '0' { return }
         }
     }
@@ -619,30 +886,84 @@ function Show-JuicerList {
     Write-JuicerLegend
 }
 
+function Show-JuicerEquipo {
+    $hw = Get-JuicerHardwareProfile
+    Write-Host ''
+    foreach ($l in (Format-JuicerHardwareSummary $hw)) { Write-Host "  $l" }
+    $advice = Get-JuicerAdvice $hw
+    $labels = @{ Recomendado = 'recomendado'; Opcional = 'opcional'; NoRecomendado = 'no recomendado' }
+    foreach ($cat in $script:CategoryOrder) {
+        $inCat = @(Get-JuicerCatalog | Where-Object { $_.Category -eq $cat })
+        if ($inCat.Count -eq 0) { continue }
+        Write-Host ''
+        Write-Host "  $cat" -ForegroundColor White
+        foreach ($t in $inCat) {
+            $a = $advice[$t.Id]
+            $m = $script:VerdictMarks[$a.Verdict]
+            Write-Host ('  {0} ' -f $m[0]) -ForegroundColor $m[1] -NoNewline
+            Write-Host ('{0,-22} ' -f $t.Id) -ForegroundColor Yellow -NoNewline
+            Write-Host ('{0,-15} ' -f $labels[$a.Verdict]) -ForegroundColor $(if ($a.Verdict -eq 'Recomendado') { 'Green' } else { 'DarkGray' }) -NoNewline
+            Write-Host $a.Reason -ForegroundColor Gray
+        }
+    }
+}
+
+# -QuitarApps takes package names (Microsoft.BingNews), what comes after
+# «app:» in the journal, or a catalog id from Apps (apps.onedrive).
+function Resolve-JuicerAppTweak {
+    param([string]$Name)
+    $n = $Name -replace '^app:', ''
+    $app = Find-JuicerDebloatApp $n
+    if ($app) { return (New-JuicerAppxTweak $app) }
+    $t = Find-JuicerTweak $n
+    if ($t -and $t.Category -eq 'Apps') { return $t }
+    $null
+}
+
 # What WinJuicer.ps1 runs once elevated. Returns the process exit code: 0 when
 # everything went through, 1 if anything failed, 2 for a bad argument.
 function Start-Juicer {
     [CmdletBinding()]
     param(
         [switch]$Diagnostico,
+        [switch]$Equipo,
         [switch]$Lista,
+        [switch]$Recomendado,
         [string]$Perfil,
         [string[]]$Aplicar = @(),
+        [string[]]$QuitarApps = @(),
+        [string]$Dns,
+        [string[]]$Instalar = @(),
         [string[]]$Deshacer = @(),
         [switch]$DeshacerTodo,
         [switch]$Simular,
         [switch]$Si,
         [switch]$AceptoRiesgos,
-        [switch]$SinPuntoDeRestauracion
+        [switch]$SinPuntoDeRestauracion,
+        [switch]$Consola
     )
     # -File hands "a,b" over as a single string.
-    $Aplicar = @($Aplicar | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $Deshacer = @($Deshacer | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-    $cli = $Diagnostico -or $Lista -or $Perfil -or $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $DeshacerTodo
+    $split = { param($v) @($v | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
+    $Aplicar = & $split $Aplicar
+    $Deshacer = & $split $Deshacer
+    $QuitarApps = & $split $QuitarApps
+    $Instalar = & $split $Instalar
+    $cli = $Diagnostico -or $Equipo -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
         $script:Screen = $true
         $script:Interactive = $true
+        if (-not $Consola) {
+            try {
+                Show-JuicerGui
+                return 0
+            } catch {
+                Write-JuicerLog "La ventana no pudo abrirse: $_"
+                Write-Host "  No se pudo abrir la ventana ($_). Sigo en modo consola." -ForegroundColor Yellow
+                Start-Sleep -Seconds 2
+            }
+        }
         Show-JuicerMainMenu
         return 0
     }
@@ -650,21 +971,44 @@ function Start-Juicer {
     $script:Interactive = -not $Si
     if ($Lista) { Show-JuicerList; return 0 }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
+    if ($Equipo) { Show-JuicerEquipo; return 0 }
+    if ($Instalar.Count -gt 0) {
+        foreach ($id in $Instalar) { if (-not (Test-JuicerWingetId $id)) { Write-Host "  Identificador de winget no válido: $id" -ForegroundColor Red; return 2 } }
+        try { Start-JuicerWinget 'install' $Instalar } catch { Write-Host "  $_" -ForegroundColor Red; return 1 }
+        Write-Host '  winget sigue en su propia ventana.'
+        return 0
+    }
 
     $results = @()
     if ($DeshacerTodo) { $results += @(Undo-JuicerAll) }
     foreach ($id in $Deshacer) { $results += Undo-JuicerTweak $id }
 
     $tweaks = New-Object System.Collections.ArrayList
+    $add = { param($t) if (-not ($tweaks | Where-Object { $_.Id -eq $t.Id })) { [void]$tweaks.Add($t) } }
     if ($Perfil) {
         $lvl = @{ Seguro = 1; Rendimiento = 2; Extremo = 3 }[$Perfil]
         if (-not $lvl) { Write-Host "  Perfil desconocido: $Perfil. Usa Seguro, Rendimiento o Extremo." -ForegroundColor Red; return 2 }
-        foreach ($t in (Get-JuicerProfile $lvl)) { [void]$tweaks.Add($t) }
+        foreach ($t in (Get-JuicerProfile $lvl)) { & $add $t }
+    }
+    if ($Recomendado) {
+        foreach ($t in (Get-JuicerRecommendedTweaks (Get-JuicerHardwareProfile))) { & $add $t }
     }
     foreach ($id in $Aplicar) {
         $t = Find-JuicerTweak $id
         if (-not $t) { Write-Host "  No existe el ajuste «$id». Usa -Lista para ver los nombres." -ForegroundColor Red; return 2 }
-        if (-not ($tweaks | Where-Object { $_.Id -eq $id })) { [void]$tweaks.Add($t) }
+        & $add $t
+    }
+    foreach ($name in $QuitarApps) {
+        $t = Resolve-JuicerAppTweak $name
+        if (-not $t) { Write-Host "  No sé quitar «$name». Los nombres están en el menú Debloat." -ForegroundColor Red; return 2 }
+        & $add $t
+    }
+    if ($Dns) {
+        if (-not (Get-JuicerDnsProviders).Contains($Dns)) {
+            Write-Host "  DNS desconocido: $Dns. Usa: $(@((Get-JuicerDnsProviders).Keys) -join ', ')." -ForegroundColor Red
+            return 2
+        }
+        & $add (New-JuicerDnsTweak $Dns)
     }
     if ($tweaks.Count -gt 0) {
         $journal = Read-JuicerJournal

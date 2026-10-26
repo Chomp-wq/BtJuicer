@@ -135,6 +135,35 @@ namespace WinJuicer {
             uint r = PowerSetActiveOverlayScheme(new Guid(scheme));
             if (r != 0) throw new Win32Exception((int)r);
         }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetSystemCpuSetInformation(IntPtr info, uint length, out uint returned, IntPtr process, uint flags);
+
+        // EfficiencyClass of every logical processor: on hybrid CPUs the
+        // performance cores have a higher class than the efficient ones.
+        // SYSTEM_CPU_SET_INFORMATION: Size, Type, then Id (4), Group (2),
+        // LogicalProcessorIndex, CoreIndex, LastLevelCacheIndex,
+        // NumaNodeIndex and EfficiencyClass (1 each): byte 18.
+        public static int[] GetEfficiencyClasses() {
+            uint len;
+            GetSystemCpuSetInformation(IntPtr.Zero, 0, out len, IntPtr.Zero, 0);
+            if (len == 0) return new int[0];
+            IntPtr buf = Marshal.AllocHGlobal((int)len);
+            try {
+                if (!GetSystemCpuSetInformation(buf, len, out len, IntPtr.Zero, 0)) return new int[0];
+                var list = new List<int>();
+                int offset = 0;
+                while (offset + 19 <= len) {
+                    int size = Marshal.ReadInt32(buf, offset);
+                    if (Marshal.ReadInt32(buf, offset + 4) == 0) list.Add(Marshal.ReadByte(buf, offset + 18));
+                    if (size <= 0) break;
+                    offset += size;
+                }
+                return list.ToArray();
+            } finally {
+                Marshal.FreeHGlobal(buf);
+            }
+        }
     }
 }
 '@

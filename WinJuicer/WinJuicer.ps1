@@ -3,21 +3,38 @@
     Win Juicer: exprime Windows 11 para juegos y cargas rápidas, sin humo y con vuelta atrás.
 
 .DESCRIPTION
-    Sin parámetros abre el menú. Cada cambio queda en un diario
-    (%ProgramData%\WinJuicer\diario.json) con el estado anterior, de modo que
-    cualquier ajuste se puede deshacer, uno a uno o todos a la vez.
+    Sin parámetros abre la ventana (con -Consola, el menú de texto). Cada cambio
+    queda en un diario (%ProgramData%\WinJuicer\diario.json) con el estado
+    anterior, de modo que cualquier ajuste se puede deshacer, uno a uno o todos
+    a la vez.
 
 .PARAMETER Diagnostico
-    Revisa el equipo y dice qué lo frena. No cambia nada.
+    Revisa el equipo, BIOS y overclock incluidos, y dice qué lo frena. No cambia nada.
+
+.PARAMETER Equipo
+    Muestra el hardware detectado y, para cada ajuste, si conviene a este equipo y por qué.
 
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
+
+.PARAMETER Recomendado
+    Aplica lo recomendado para este equipo según su hardware.
 
 .PARAMETER Perfil
     Seguro, Rendimiento o Extremo. Cada nivel incluye los anteriores.
 
 .PARAMETER Aplicar
     Nombres cortos de ajustes concretos, separados por comas (ver -Lista).
+
+.PARAMETER QuitarApps
+    Apps que quitar (debloat), por nombre de paquete: Microsoft.BingNews,Clipchamp.Clipchamp.
+
+.PARAMETER Dns
+    Servidor DNS para los adaptadores conectados: Automatico, Cloudflare,
+    CloudflareMalware, CloudflareFamilia, Google, Quad9, AdGuard, AdGuardFamilia, OpenDNS.
+
+.PARAMETER Instalar
+    Programas que instalar con winget, por identificador: Valve.Steam,Discord.Discord.
 
 .PARAMETER Deshacer
     Nombres de ajustes a devolver a su estado anterior.
@@ -37,6 +54,9 @@
 .PARAMETER SinPuntoDeRestauracion
     No intenta crear un punto de restauración antes de aplicar.
 
+.PARAMETER Consola
+    Sin otros parámetros: el menú de texto en lugar de la ventana.
+
 .EXAMPLE
     .\WinJuicer.ps1 -Diagnostico
 
@@ -44,20 +64,29 @@
     .\WinJuicer.ps1 -Perfil Rendimiento -Simular
 
 .EXAMPLE
+    .\WinJuicer.ps1 -Recomendado -Simular
+
+.EXAMPLE
     .\WinJuicer.ps1 -Aplicar juegos.ventana,ui.menu -Si
 #>
 [CmdletBinding()]
 param(
     [switch]$Diagnostico,
+    [switch]$Equipo,
     [switch]$Lista,
+    [switch]$Recomendado,
     [ValidateSet('Seguro', 'Rendimiento', 'Extremo')][string]$Perfil,
     [string[]]$Aplicar = @(),
+    [string[]]$QuitarApps = @(),
+    [string]$Dns,
+    [string[]]$Instalar = @(),
     [string[]]$Deshacer = @(),
     [switch]$DeshacerTodo,
     [switch]$Simular,
     [switch]$Si,
     [switch]$AceptoRiesgos,
-    [switch]$SinPuntoDeRestauracion
+    [switch]$SinPuntoDeRestauracion,
+    [switch]$Consola
 )
 
 $ErrorActionPreference = 'Stop'
@@ -67,11 +96,15 @@ if ([Environment]::OSVersion.Platform -ne 'Win32NT') {
     exit 1
 }
 
+# The window is WPF, which only runs on a single-threaded apartment.
+$window = -not $Consola -and @($PSBoundParameters.Keys | Where-Object { $_ -notin 'Consola', 'Verbose', 'Debug' }).Count -eq 0
+$sta = [Threading.Thread]::CurrentThread.GetApartmentState() -eq [Threading.ApartmentState]::STA
 $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
-if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $admin -or ($window -and -not $sta)) {
     # Relaunch elevated with the same arguments and the same PowerShell.
-    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass')
-    if ($PSBoundParameters.Count -gt 0) { $arguments += '-NoExit' }
+    $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA')
+    if ($PSBoundParameters.Count -gt 0 -and -not $window) { $arguments += '-NoExit' }
     $arguments += @('-File', "`"$PSCommandPath`"")
     foreach ($kv in $PSBoundParameters.GetEnumerator()) {
         if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
@@ -82,7 +115,11 @@ if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administra
         }
     }
     try {
-        Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments -Verb RunAs | Out-Null
+        if ($admin) {
+            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments | Out-Null
+        } else {
+            Start-Process -FilePath (Get-Process -Id $PID).Path -ArgumentList $arguments -Verb RunAs | Out-Null
+        }
         exit 0
     } catch {
         Write-Host 'Win Juicer necesita permisos de administrador para cambiar la configuración del sistema.' -ForegroundColor Red

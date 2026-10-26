@@ -232,6 +232,27 @@ function ConvertTo-JuicerExclusionPath {
     $Path.Trim().TrimEnd('\').ToLowerInvariant()
 }
 
+# Static DNS servers of an interface, as Windows keeps them: a comma (older
+# builds: space) separated list in NameServer, empty when they come from DHCP.
+function Get-JuicerDnsServers {
+    param([Parameter(Mandatory)][string]$Interface)
+    $out = @{}
+    foreach ($family in @(@('V4', 'Tcpip'), @('V6', 'Tcpip6'))) {
+        $v = Read-JuicerReg "HKLM\SYSTEM\CurrentControlSet\Services\$($family[1])\Parameters\Interfaces\$Interface" 'NameServer'
+        $out[$family[0]] = [string[]]@((Get-JuicerRegString $v) -split '[,\s]+' | Where-Object { $_ })
+    }
+    $out
+}
+
+function Test-JuicerListEqual {
+    param($A, $B)
+    $x = @($A | Where-Object { $_ })
+    $y = @($B | Where-Object { $_ })
+    if ($x.Count -ne $y.Count) { return $false }
+    for ($i = 0; $i -lt $x.Count; $i++) { if ([string]$x[$i] -ne [string]$y[$i]) { return $false } }
+    $true
+}
+
 function Get-JuicerActionId {
     param([Parameter(Mandatory)]$Action, [string]$TweakId)
     switch ($Action.Type) {
@@ -241,6 +262,9 @@ function Get-JuicerActionId {
         'Spi' { return ('Spi|{0}' -f [uint32]$Action.Set) }
         'Task' { return ('Task|{0}|{1}' -f $Action.Path, $Action.Name).ToLowerInvariant() }
         'DefenderExclusion' { return 'Def|' + (ConvertTo-JuicerExclusionPath $Action.Path) }
+        'Appx' { return ('Appx|{0}' -f $Action.Name).ToLowerInvariant() }
+        'Dns' { return ('Dns|{0}' -f $Action.Interface).ToLowerInvariant() }
+        'Feature' { return ('Feat|{0}' -f $Action.Name).ToLowerInvariant() }
         'Custom' { return ('Custom|{0}|{1}' -f $TweakId, $Action.Key) }
     }
     throw "Tipo de acción desconocido: $($Action.Type)"
@@ -272,6 +296,13 @@ function Format-JuicerAction {
         'Spi' { return 'SystemParametersInfo 0x{0:X}: {1}' -f [uint32]$Action.Set, $Action.Value }
         'Task' { return 'Tarea programada {0}{1}: {2}' -f $Action.Path, $Action.Name, $(if ($Action.Enabled) { 'habilitada' } else { 'deshabilitada' }) }
         'DefenderExclusion' { return "Exclusión de Microsoft Defender: $($Action.Path)" }
+        'Appx' { return "Quitar la app $($Action.Name)" }
+        'Dns' {
+            $all = @(@($Action.V4) + @($Action.V6) | Where-Object { $_ })
+            $what = if ($all.Count -eq 0) { 'automático (DHCP)' } else { $all -join ', ' }
+            return "DNS de $($Action.Adapter): $what"
+        }
+        'Feature' { return 'Característica de Windows {0}: {1}' -f $Action.Name, $(if ($Action.Enabled) { 'activada' } else { 'desactivada' }) }
     }
     "$($Action.Type) $($Action.Key)"
 }
@@ -306,6 +337,16 @@ function Test-JuicerAction {
             $want = ConvertTo-JuicerExclusionPath $Action.Path
             foreach ($p in (& $b.DefList)) { if ((ConvertTo-JuicerExclusionPath $p) -eq $want) { return $true } }
             return $false
+        }
+        'Appx' { return ($null -eq (& $b.AppxRead $Action.Name)) }
+        'Dns' {
+            $cur = Get-JuicerDnsServers $Action.Interface
+            return ((Test-JuicerListEqual $cur.V4 $Action.V4) -and (Test-JuicerListEqual $cur.V6 $Action.V6))
+        }
+        'Feature' {
+            $f = & $b.FeatRead $Action.Name
+            if ($null -eq $f) { return $true }
+            return ([bool]$f.Enabled -eq [bool]$Action.Enabled)
         }
         'Custom' { return [bool](& $Action.Test) }
     }
@@ -347,6 +388,21 @@ function Save-JuicerActionState {
             $c.Path = $Action.Path
             $c.Existed = Test-JuicerAction $Action
         }
+        'Appx' {
+            $a = & $b.AppxRead $Action.Name
+            $c.Name = $Action.Name; $c.StoreId = [string]$Action.StoreId; $c.Exists = ($null -ne $a)
+            if ($a) { $c.Installed = [bool]$a.Installed; $c.Provisioned = [bool]$a.Provisioned }
+        }
+        'Dns' {
+            $cur = Get-JuicerDnsServers $Action.Interface
+            $c.Interface = $Action.Interface; $c.Adapter = $Action.Adapter
+            $c.V4 = $cur.V4; $c.V6 = $cur.V6
+        }
+        'Feature' {
+            $f = & $b.FeatRead $Action.Name
+            $c.Name = $Action.Name; $c.Exists = ($null -ne $f)
+            if ($f) { $c.Enabled = [bool]$f.Enabled }
+        }
         'Custom' {
             $c.TweakId = $TweakId; $c.CustomKey = $Action.Key
             $c.State = & $Action.Capture
@@ -380,6 +436,9 @@ function Invoke-JuicerAction {
         'Spi' { & $b.SpiSet $Action.Set ([bool]$Action.Value) }
         'Task' { if ($Capture.Exists) { & $b.TaskWrite $Action.Path $Action.Name ([bool]$Action.Enabled) } }
         'DefenderExclusion' { & $b.DefAdd $Action.Path }
+        'Appx' { if ($Capture.Exists) { & $b.AppxRemove $Action.Name } }
+        'Dns' { & $b.DnsSet $Action.Interface ([string[]]@($Action.V4)) ([string[]]@($Action.V6)) }
+        'Feature' { if ($Capture.Exists) { & $b.FeatSet $Action.Name ([bool]$Action.Enabled) } }
         'Custom' { & $Action.Apply $Capture.State }
     }
 }
@@ -417,6 +476,13 @@ function Restore-JuicerActionState {
         'Spi' { & $b.SpiSet $c.Set ([bool]$c.Old) }
         'Task' { if ($c.Exists) { & $b.TaskWrite $c.Path $c.Name ([bool]$c.Enabled) } }
         'DefenderExclusion' { if (-not $c.Existed) { & $b.DefRemove $c.Path } }
+        'Appx' { if ($c.Exists -and $null -eq (& $b.AppxRead $c.Name)) { & $b.AppxAdd $c.Name $c.StoreId } }
+        'Dns' { & $b.DnsSet $c.Interface ([string[]]@($c.V4 | Where-Object { $_ })) ([string[]]@($c.V6 | Where-Object { $_ })) }
+        'Feature' {
+            if (-not $c.Exists) { return }
+            $f = & $b.FeatRead $c.Name
+            if ($f -and [bool]$f.Enabled -ne [bool]$c.Enabled) { & $b.FeatSet $c.Name ([bool]$c.Enabled) }
+        }
         'Custom' {
             $tweak = Find-JuicerTweak $c.TweakId
             $action = $null
@@ -502,6 +568,10 @@ function Invoke-JuicerTweak {
             AppliedAt = (Get-Date).ToString('s'); Actions = (New-Object System.Collections.ArrayList)
         }
         [void]$journal.Add($entry)
+    } else {
+        # One id can take different values (the DNS provider): the title says
+        # the latest, the captures keep the original.
+        $entry.Title = $Tweak.Title
     }
     $added = @()
     foreach ($c in $captures) {
@@ -572,6 +642,36 @@ function Undo-JuicerAll {
     $ids = @($journal | ForEach-Object { $_.Id })
     [array]::Reverse($ids)
     foreach ($id in $ids) { Undo-JuicerTweak $id }
+}
+
+# --- Toggles -----------------------------------------------------------------
+#
+# Preferences (dark theme, file extensions…) go both ways, and the way back
+# is not always «as it was»: someone who already had dark mode and wants it
+# off needs the opposite values written. Each toggle carries those in Off; the
+# inverse tweak is «<id>!» and journals like any other.
+
+function Get-JuicerInverseTweak {
+    param([Parameter(Mandatory)][hashtable]$Tweak)
+    if (-not $Tweak.Off) { throw "$($Tweak.Id) no se puede invertir." }
+    @{
+        Id = "$($Tweak.Id)!"; Title = "$($Tweak.Title): no"; Category = $Tweak.Category; Level = 0
+        Impact = $Tweak.Impact; Reboot = $Tweak.Reboot; What = $Tweak.What; Gain = $Tweak.Gain; Cost = $Tweak.Cost
+        Actions = $Tweak.Off
+    }
+}
+
+# Like a startup entry: turning a toggle back undoes Win Juicer's own change
+# first, so the journal only ever holds what differs from the original.
+function Set-JuicerToggle {
+    param([Parameter(Mandatory)][hashtable]$Tweak, [Parameter(Mandatory)][bool]$On)
+    $target = if ($On) { $Tweak } else { Get-JuicerInverseTweak $Tweak }
+    $opposite = if ($On) { "$($Tweak.Id)!" } else { $Tweak.Id }
+    $results = @()
+    if (Get-JuicerJournalEntry (Read-JuicerJournal) $opposite) { $results += Undo-JuicerTweak $opposite }
+    $r = Invoke-JuicerTweak $target
+    if ($r.Outcome -ne 'YaEstaba' -or $results.Count -eq 0) { $results += $r }
+    $results
 }
 
 # --- Machine-level helpers -------------------------------------------------

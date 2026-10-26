@@ -4,12 +4,15 @@
 # Level 1 (Seguro)       costs nothing anyone would miss.
 # Level 2 (Rendimiento)  costs battery, looks, or a feature some people use.
 # Level 3 (Extremo)      weakens security or breaks features; asked one by one.
+# Level 0 (A la carta)   tastes and optional parts of Windows: in no profile,
+#                        only applied when picked. Those with Off go both ways.
 #
 # Impact is about performance only and errs low: «Bajo» means small, not zero.
 # Reboot: No, Explorador (restart Explorer), Sesion (sign out), Reinicio.
 
-$script:LevelNames = @{ 1 = 'Seguro'; 2 = 'Rendimiento'; 3 = 'Extremo' }
-$script:CategoryOrder = @('Reparación', 'Energía', 'Juegos', 'Interfaz', 'Segundo plano', 'Disco', 'Red', 'Seguridad')
+$script:LevelNames = @{ 0 = 'A la carta'; 1 = 'Seguro'; 2 = 'Rendimiento'; 3 = 'Extremo' }
+$script:CategoryOrder = @('Reparación', 'Energía', 'Juegos', 'Interfaz', 'Privacidad', 'Segundo plano', 'Disco', 'Red',
+    'Actualizaciones', 'Seguridad', 'Preferencias', 'Componentes', 'Apps')
 
 # --- Power plans ---------------------------------------------------------
 
@@ -144,7 +147,31 @@ function Find-JuicerTweak {
 
 function Get-JuicerProfile {
     param([ValidateRange(1, 3)][int]$Level)
-    @(Get-JuicerCatalog | Where-Object { $_.Level -le $Level })
+    @(Get-JuicerCatalog | Where-Object { $_.Level -ge 1 -and $_.Level -le $Level })
+}
+
+function Test-JuicerEdgeInstalled {
+    foreach ($view in 'SOFTWARE', 'SOFTWARE\WOW6432Node') {
+        if (Test-JuicerRegKey "HKLM\$view\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe") { return $true }
+    }
+    $false
+}
+
+# Home ignores the Windows Update for Business policies.
+function Test-JuicerHomeEdition {
+    $e = Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'EditionID'
+    $e -and ([string]$e.Value) -like 'Core*'
+}
+
+function Test-JuicerInsider {
+    $b = Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\WindowsSelfHost\Applicability' 'BranchName'
+    $null -ne $b -and [string]$b.Value -ne ''
+}
+
+function Get-JuicerFeatureSkip {
+    param([string]$Name, [string]$Why = 'No está disponible en esta edición de Windows.')
+    if ($null -eq (& (Get-JuicerBackend).FeatRead $Name)) { return $Why }
+    $null
 }
 
 function New-JuicerCatalog {
@@ -266,7 +293,10 @@ function New-JuicerCatalog {
         What = 'Crea un plan basado en «Máximo rendimiento» de Windows, con el procesador al 100 % como mínimo, sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco, y lo activa.'
         Gain = 'Elimina las micropausas de despertar núcleos y enlaces dormidos: mejora sobre todo los mínimos de FPS (el 1 % más lento) y la latencia. En FPS medios, poco.'
         Cost = 'Más consumo y temperatura en reposo. En un portátil con batería, bastante menos autonomía.'
-        Skip = { if (Test-JuicerModernStandby) { 'Este equipo usa Modern Standby y Windows sólo admite ahí el plan Equilibrado; usa «Modo de energía» en su lugar.' } }
+        Skip = {
+            if (Test-JuicerModernStandby) { return 'Este equipo usa Modern Standby y Windows sólo admite ahí el plan Equilibrado; usa «Modo de energía» en su lugar.' }
+            if ((Get-JuicerCpuInfo).DualCcdX3D) { return 'Tu Ryzen X3D de dos CCD lleva los juegos al CCD con 3D V-Cache aparcando el otro, y eso sólo funciona con el plan Equilibrado. Un plan sin aparcar núcleos te haría perder rendimiento.' }
+        }
         Actions = @(
             @{
                 Type = 'Custom'; Key = 'plan'; Label = 'Plan de energía activo: Win Juicer'
@@ -510,6 +540,87 @@ function New-JuicerCatalog {
         )
     }
 
+    # --- Privacidad --------------------------------------------------------
+    #
+    # Little performance here, and said so. What they buy is fewer things
+    # running and phoning home on their own.
+
+    @{
+        Id = 'privacidad.actividad'; Category = 'Privacidad'; Level = 1; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Sin historial de actividad'
+        What = 'Impide que Windows registre y suba a tu cuenta qué programas y documentos abres.'
+        Gain = 'Un registro menos que se escribe y se sincroniza de fondo.'
+        Cost = 'Ninguno: Windows 11 ya no tiene la Línea de tiempo que lo usaba. El historial del portapapeles sigue funcionando.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'PublishUserActivities'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'UploadUserActivities'; Value = 0 }
+        )
+    }
+    @{
+        Id = 'privacidad.publicidad'; Category = 'Privacidad'; Level = 1; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Sin identificador de publicidad ni encuestas'
+        What = 'Apaga el identificador de publicidad, las «experiencias personalizadas» a partir de los datos de diagnóstico y las ventanas que piden tu opinión.'
+        Gain = 'Las apps dejan de poder seguirte con un identificador común, y no te interrumpe ninguna encuesta.'
+        Cost = 'Ninguno: verás anuncios igual, sólo que no personalizados.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Windows\CurrentVersion\AdvertisingInfo'; Name = 'Enabled'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Privacy'; Name = 'TailoredExperiencesWithDiagnosticDataEnabled'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Siuf\Rules'; Name = 'NumberOfSIUFInPeriod'; Value = 0 }
+        )
+    }
+    @{
+        Id = 'privacidad.telemetria'; Category = 'Privacidad'; Level = 2; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Telemetría al mínimo y sin sus tareas programadas'
+        What = 'Pone por directiva los datos de diagnóstico al mínimo y desactiva las tareas que los recogen: el evaluador de compatibilidad (CompatTelRunner), el programa de mejora de la experiencia y el recolector de diagnóstico de disco.'
+        Gain = 'CompatTelRunner.exe es el que, de vez en cuando, se come el disco y la CPU durante minutos. Sin él, se acabaron esos picos.'
+        Cost = 'Configuración dirá «Tu organización administra algunas opciones». En Home y Pro Windows sube el mínimo a «Obligatorio». Windows Update usa ese evaluador para avisar de incompatibilidades antes de una actualización grande.'
+        Skip = { if (Test-JuicerInsider) { 'Estás en Windows Insider, que necesita los datos de diagnóstico.' } }
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection'; Name = 'AllowTelemetry'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\DataCollection'; Name = 'DoNotShowFeedbackNotifications'; Value = 1 }
+            @{ Type = 'Task'; Path = '\Microsoft\Windows\Application Experience\'; Name = 'Microsoft Compatibility Appraiser'; Enabled = $false }
+            @{ Type = 'Task'; Path = '\Microsoft\Windows\Application Experience\'; Name = 'ProgramDataUpdater'; Enabled = $false }
+            @{ Type = 'Task'; Path = '\Microsoft\Windows\Customer Experience Improvement Program\'; Name = 'Consolidator'; Enabled = $false }
+            @{ Type = 'Task'; Path = '\Microsoft\Windows\Customer Experience Improvement Program\'; Name = 'UsbCeip'; Enabled = $false }
+            @{ Type = 'Task'; Path = '\Microsoft\Windows\DiskDiagnostic\'; Name = 'Microsoft-Windows-DiskDiagnosticDataCollector'; Enabled = $false }
+        )
+    }
+    @{
+        Id = 'privacidad.consumidor'; Category = 'Privacidad'; Level = 2; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Sin apps de fabricantes al conectar dispositivos'
+        What = 'Impide que Windows descargue por su cuenta las apps «de acompañamiento» de lo que conectas (monitores, ratones, auriculares) y desactiva las «experiencias del consumidor».'
+        Gain = 'Se acabó que enchufar un ratón instale un programa del fabricante que luego arranca con Windows.'
+        Cost = 'Si quieres la app del fabricante, la instalas tú desde su web. «Experiencias del consumidor» sólo se respeta del todo en Enterprise y Education; en Home y Pro lo cubre «Sin apps promocionadas».'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Device Metadata'; Name = 'PreventDeviceMetadataFromNetwork'; Value = 1 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\CloudContent'; Name = 'DisableWindowsConsumerFeatures'; Value = 1 }
+        )
+    }
+    @{
+        Id = 'privacidad.ubicacion'; Category = 'Privacidad'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Desactivar la ubicación'
+        What = 'Deniega el acceso a la ubicación a todo el equipo y apaga la actualización automática de mapas.'
+        Gain = 'Ninguna app puede saber dónde estás, y nada consulta la ubicación de fondo.'
+        Cost = 'Dejan de funcionar «Buscar mi dispositivo», el tiempo local y la zona horaria automática por ubicación. En un portátil quizá lo quieras.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\location'; Name = 'Value'; Kind = 'String'; Value = 'Deny' }
+            @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\Maps'; Name = 'AutoUpdateEnabled'; Value = 0 }
+        )
+    }
+    @{
+        Id = 'privacidad.copilot'; Category = 'Privacidad'; Level = 2; Impact = 'Bajo'; Reboot = 'Sesion'
+        Title = 'Desactivar Copilot de Windows'
+        What = 'Apaga Copilot por directiva y quita su botón de la barra de tareas. La app de Copilot, si la tienes, se quita aparte en Debloat.'
+        Gain = 'Un panel web menos esperando en memoria y un atajo menos que se abre sin querer.'
+        Cost = 'Sin Copilot integrado; sigue disponible en la web.'
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 22621) { 'Copilot sólo existe en Windows 11 22H2 o posterior.' } }
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1 }
+            @{ Type = 'Registry'; Path = $adv; Name = 'ShowCopilotButton'; Value = 0 }
+        )
+    }
+
     # --- Segundo plano ---------------------------------------------------
 
     @{
@@ -554,6 +665,47 @@ function New-JuicerCatalog {
             @{ Type = 'Service'; Name = 'WSearch'; Start = 'Disabled' }
         )
     }
+    @{
+        Id = 'fondo.servicios'; Category = 'Segundo plano'; Level = 2; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Servicios que casi nadie usa, a manual'
+        What = 'Pasa a inicio manual el gestor de mapas descargados y el cliente de seguimiento de vínculos distribuidos, que arrancan siempre. En manual, Windows los inicia si algo los pide.'
+        Gain = 'Dos procesos menos desde el arranque. Pequeño, y sin romper nada: no es la lista de cincuenta servicios desactivados que circula.'
+        Cost = 'Los mapas sin conexión no se actualizan solos; los accesos directos a carpetas de red movidas no se reparan solos.'
+        Actions = @(
+            @{ Type = 'Service'; Name = 'MapsBroker'; Start = 'Manual'; Ok = { param($c) $c.Start -in 'Manual', 'Disabled' } }
+            @{ Type = 'Service'; Name = 'TrkWks'; Start = 'Manual'; Ok = { param($c) $c.Start -in 'Manual', 'Disabled' } }
+        )
+    }
+    @{
+        Id = 'fondo.impresion'; Category = 'Segundo plano'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Desactivar la cola de impresión'
+        What = 'Deshabilita el servicio de cola de impresión (Spooler). Sólo se ofrece si no hay ninguna impresora física instalada.'
+        Gain = 'Un servicio menos en memoria, y cerrada la puerta de los fallos de seguridad de la cola de impresión (PrintNightmare).'
+        Cost = 'No se puede imprimir, ni siquiera a PDF con «Microsoft Print to PDF», hasta deshacerlo. Si compras una impresora, deshazlo antes de conectarla.'
+        Skip = {
+            $p = @(Get-JuicerPhysicalPrinters)
+            if ($p.Count -gt 0) { "Tienes impresora: $($p -join ', ')." }
+        }
+        Actions = @(
+            @{ Type = 'Service'; Name = 'Spooler'; Start = 'Disabled' }
+        )
+    }
+    @{
+        Id = 'fondo.edge'; Category = 'Segundo plano'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Edge sin procesos de fondo ni promociones'
+        What = 'Desactiva el «Impulso de inicio» y el modo en segundo plano de Microsoft Edge, y sus promociones: compras, recompensas, recomendaciones y la bienvenida.'
+        Gain = 'Edge deja de tener procesos cargados aunque no lo uses: entre 100 y 300 MB de RAM y algo de CPU al arrancar Windows.'
+        Cost = 'Edge tarda algo más en abrirse la primera vez, y sus extensiones no funcionan con la ventana cerrada. En edge://management dirá que lo administra tu organización: son estas directivas.'
+        Skip = { if (-not (Test-JuicerEdgeInstalled)) { 'Microsoft Edge no está instalado.' } }
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'; Name = 'StartupBoostEnabled'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'; Name = 'BackgroundModeEnabled'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'; Name = 'HideFirstRunExperience'; Value = 1 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'; Name = 'ShowRecommendationsEnabled'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'; Name = 'EdgeShoppingAssistantEnabled'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Edge'; Name = 'ShowMicrosoftRewards'; Value = 0 }
+        )
+    }
 
     # --- Disco -----------------------------------------------------------
 
@@ -592,6 +744,56 @@ function New-JuicerCatalog {
                 @{ Type = 'Registry'; Path = $p; Name = 'TCPNoDelay'; Value = 1 }
             }
         }
+    }
+
+    # --- Actualizaciones ---------------------------------------------------
+    #
+    # Updates stay on: what changes is what comes through them and when.
+
+    $wu = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
+    @{
+        Id = 'update.drivers'; Category = 'Actualizaciones'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Windows Update no instala drivers'
+        What = 'Excluye los drivers de las actualizaciones de Windows.'
+        Gain = 'Windows Update deja de sustituir el driver de tu gráfica por otro más viejo o por el del fabricante del portátil, causa clásica de tirones y fallos después de una actualización.'
+        Cost = 'Los drivers (gráfica, chipset, wifi) los actualizas tú, desde la web del fabricante. En Windows Home puede no respetarse.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = $wu; Name = 'ExcludeWUDriversInQualityUpdate'; Value = 1 }
+        )
+    }
+    @{
+        Id = 'update.reinicio'; Category = 'Actualizaciones'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Sin reinicios automáticos con la sesión abierta'
+        What = 'Windows Update no reinicia el equipo por su cuenta mientras haya alguien con la sesión iniciada.'
+        Gain = 'Ninguna partida, descarga o render a medias perdido por un reinicio de madrugada.'
+        Cost = 'Las actualizaciones que necesitan reinicio esperan a que reinicies tú: no lo dejes semanas.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = "$wu\AU"; Name = 'NoAutoRebootWithLoggedOnUsers'; Value = 1 }
+        )
+    }
+    @{
+        Id = 'update.diferir'; Category = 'Actualizaciones'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Versiones nuevas de Windows con un año de retraso'
+        What = 'Retrasa 365 días las actualizaciones de función (24H2, 25H2…) y 4 días las de calidad. Es la configuración «sólo seguridad» de WinUtil.'
+        Gain = 'Las versiones nuevas llegan cuando ya se han corregido sus fallos de lanzamiento, que a veces rompen juegos y anti-trampas durante meses.'
+        Cost = 'Las novedades de Windows tardan un año. Los parches de seguridad siguen llegando, con cuatro días de margen.'
+        Skip = { if (Test-JuicerHomeEdition) { 'Windows Home ignora estas directivas: sólo funcionan en Pro, Enterprise y Education.' } }
+        Actions = @(
+            @{ Type = 'Registry'; Path = $wu; Name = 'DeferFeatureUpdates'; Value = 1 }
+            @{ Type = 'Registry'; Path = $wu; Name = 'DeferFeatureUpdatesPeriodInDays'; Value = 365 }
+            @{ Type = 'Registry'; Path = $wu; Name = 'DeferQualityUpdates'; Value = 1 }
+            @{ Type = 'Registry'; Path = $wu; Name = 'DeferQualityUpdatesPeriodInDays'; Value = 4 }
+        )
+    }
+    @{
+        Id = 'update.entrega'; Category = 'Actualizaciones'; Level = 1; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'No compartir actualizaciones con otros equipos'
+        What = 'Optimización de distribución descarga sólo de Microsoft, sin intercambiar trozos de actualizaciones con otros PC.'
+        Gain = 'Tu conexión no sube datos de actualizaciones a otros equipos mientras juegas.'
+        Cost = 'Si hay varios PC en casa, cada uno descarga sus actualizaciones entero.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\DeliveryOptimization'; Name = 'DODownloadMode'; Value = 0 }
+        )
     }
 
     # --- Seguridad: real gains, real costs --------------------------------
@@ -634,6 +836,174 @@ function New-JuicerCatalog {
             }
         )
     }
+
+    # --- Preferencias: tastes, both ways -----------------------------------
+
+    $theme = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'
+    @{
+        Id = 'pref.oscuro'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Tema oscuro'
+        What = 'Windows y las aplicaciones en modo oscuro.'
+        Gain = 'Cuestión de gusto. En pantallas OLED gasta algo menos.'
+        Cost = 'Ninguno.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = $theme; Name = 'AppsUseLightTheme'; Value = 0 }
+            @{ Type = 'Registry'; Path = $theme; Name = 'SystemUsesLightTheme'; Value = 0 }
+        )
+        Off = @(
+            @{ Type = 'Registry'; Path = $theme; Name = 'AppsUseLightTheme'; Value = 1 }
+            @{ Type = 'Registry'; Path = $theme; Name = 'SystemUsesLightTheme'; Value = 1 }
+        )
+    }
+    @{
+        Id = 'pref.extensiones'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'Explorador'
+        Title = 'Mostrar las extensiones de archivo'
+        What = 'El Explorador enseña la extensión de cada archivo (.exe, .pdf, .zip).'
+        Gain = 'Ves que «factura.pdf» es en realidad «factura.pdf.exe»: protege de un engaño muy común.'
+        Cost = 'Ninguno.'
+        Actions = @(@{ Type = 'Registry'; Path = $adv; Name = 'HideFileExt'; Value = 0 })
+        Off = @(@{ Type = 'Registry'; Path = $adv; Name = 'HideFileExt'; Value = 1 })
+    }
+    @{
+        Id = 'pref.ocultos'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'Explorador'
+        Title = 'Mostrar archivos ocultos'
+        What = 'El Explorador enseña archivos y carpetas ocultos, como AppData.'
+        Gain = 'Llegas a partidas guardadas, configuraciones de juegos y mods sin escribir rutas.'
+        Cost = 'Más archivos a la vista que conviene no tocar.'
+        Actions = @(@{ Type = 'Registry'; Path = $adv; Name = 'Hidden'; Value = 1 })
+        Off = @(@{ Type = 'Registry'; Path = $adv; Name = 'Hidden'; Value = 2 })
+    }
+    @{
+        Id = 'pref.numlock'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'Sesion'
+        Title = 'Bloq Num activado al iniciar'
+        What = 'El teclado numérico funciona desde la pantalla de inicio de sesión.'
+        Gain = 'Escribes un PIN numérico sin pulsar antes Bloq Num.'
+        Cost = 'Ninguno. En portátiles sin teclado numérico separado, algunas letras escriben números: no lo actives ahí.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKU\.DEFAULT\Control Panel\Keyboard'; Name = 'InitialKeyboardIndicators'; Kind = 'String'; Value = '2' }
+            @{ Type = 'Registry'; Path = 'HKCU\Control Panel\Keyboard'; Name = 'InitialKeyboardIndicators'; Kind = 'String'; Value = '2' }
+        )
+        Off = @(
+            @{ Type = 'Registry'; Path = 'HKU\.DEFAULT\Control Panel\Keyboard'; Name = 'InitialKeyboardIndicators'; Kind = 'String'; Value = '0' }
+            @{ Type = 'Registry'; Path = 'HKCU\Control Panel\Keyboard'; Name = 'InitialKeyboardIndicators'; Kind = 'String'; Value = '0' }
+        )
+    }
+    @{
+        Id = 'pref.finalizar'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = '«Finalizar tarea» en la barra de tareas'
+        What = 'Añade «Finalizar tarea» al clic derecho de cada programa en la barra de tareas.'
+        Gain = 'Cierras un juego colgado al momento, sin abrir el Administrador de tareas.'
+        Cost = 'Ninguno.'
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 22631) { 'Necesita Windows 11 23H2 o posterior.' } }
+        Actions = @(@{ Type = 'Registry'; Path = "$adv\TaskbarDeveloperSettings"; Name = 'TaskbarEndTask'; Value = 1 })
+        Off = @(@{ Type = 'Registry'; Path = "$adv\TaskbarDeveloperSettings"; Name = 'TaskbarEndTask'; Value = 0 })
+    }
+    @{
+        Id = 'pref.barra'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'Explorador'
+        Title = 'Barra de tareas alineada a la izquierda'
+        What = 'Inicio y los iconos de la barra de tareas a la izquierda, como en Windows 10.'
+        Gain = 'Cuestión de gusto: Inicio siempre en la esquina.'
+        Cost = 'Ninguno.'
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 22000) { 'Sólo en Windows 11.' } }
+        Actions = @(@{ Type = 'Registry'; Path = $adv; Name = 'TaskbarAl'; Value = 0 })
+        Off = @(@{ Type = 'Registry'; Path = $adv; Name = 'TaskbarAl'; Value = 1 })
+    }
+    @{
+        Id = 'pref.pantallazo'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Pantallazo azul con detalles'
+        What = 'El pantallazo azul enseña el código de error con sus parámetros, en lugar de la cara triste.'
+        Gain = 'Con overclock, undervolt o XMP, saber si fue WHEA_UNCORRECTABLE_ERROR, CLOCK_WATCHDOG_TIMEOUT o MEMORY_MANAGEMENT dice qué ajuste falla.'
+        Cost = 'Ninguno.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\CrashControl'; Name = 'DisplayParameters'; Value = 1 }
+            @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\CrashControl'; Name = 'DisableEmoticon'; Value = 1 }
+        )
+        Off = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\CrashControl'; Name = 'DisplayParameters'; Value = 0 }
+            @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\CrashControl'; Name = 'DisableEmoticon'; Value = 0 }
+        )
+    }
+    @{
+        Id = 'pref.detallado'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Mensajes detallados al arrancar y apagar'
+        What = 'En lugar de «Espere», Windows dice qué está haciendo al iniciar y cerrar sesión, arrancar y apagar.'
+        Gain = 'Si un arranque o un apagado se eterniza, ves qué lo retiene.'
+        Cost = 'Ninguno.'
+        Actions = @(@{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'VerboseStatus'; Value = 1 })
+        Off = @(@{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System'; Name = 'VerboseStatus'; Value = 0 })
+    }
+    @{
+        Id = 'pref.rutaslargas'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Rutas de archivo largas'
+        What = 'Permite a los programas que lo admiten usar rutas de más de 260 caracteres.'
+        Gain = 'Se acaban los errores al descomprimir o mover mods y proyectos con carpetas muy anidadas.'
+        Cost = 'Ninguno. Los programas antiguos siguen con su límite.'
+        Actions = @(@{ Type = 'Registry'; Path = $fs; Name = 'LongPathsEnabled'; Value = 1 })
+        Off = @(@{ Type = 'Registry'; Path = $fs; Name = 'LongPathsEnabled'; Value = 0 })
+    }
+
+    # --- Componentes: optional parts of Windows ----------------------------
+
+    @{
+        Id = 'comp.netfx3'; Category = 'Componentes'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = '.NET Framework 3.5'
+        What = 'Instala .NET Framework 3.5 (incluye 2.0 y 3.0). Lo descarga Windows Update.'
+        Gain = 'Juegos y programas antiguos, y algunos lanzadores, no arrancan sin él.'
+        Cost = 'Unos 200 MB de disco.'
+        Skip = { Get-JuicerFeatureSkip 'NetFx3' }
+        Actions = @(@{ Type = 'Feature'; Name = 'NetFx3'; Enabled = $true })
+        Off = @(@{ Type = 'Feature'; Name = 'NetFx3'; Enabled = $false })
+    }
+    @{
+        Id = 'comp.directplay'; Category = 'Componentes'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'DirectPlay (juegos antiguos)'
+        What = 'Activa el componente heredado DirectPlay.'
+        Gain = 'Juegos de antes de 2008 con multijugador por red (Age of Empires, Command & Conquer, Diablo II original…) lo necesitan para arrancar.'
+        Cost = 'Ninguno.'
+        Skip = { Get-JuicerFeatureSkip 'DirectPlay' }
+        Actions = @(@{ Type = 'Feature'; Name = 'DirectPlay'; Enabled = $true })
+        Off = @(@{ Type = 'Feature'; Name = 'DirectPlay'; Enabled = $false })
+    }
+    @{
+        Id = 'comp.wsl'; Category = 'Componentes'; Level = 0; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Subsistema de Windows para Linux (WSL)'
+        What = 'Activa WSL y la plataforma de máquina virtual que necesita WSL 2.'
+        Gain = 'Linux dentro de Windows, para programar o usar herramientas de Linux.'
+        Cost = 'WSL 2 arranca el hipervisor de Windows: si lo habías apagado por rendimiento (Extremo), vuelve su coste en juegos.'
+        Skip = { Get-JuicerFeatureSkip 'Microsoft-Windows-Subsystem-Linux' }
+        Actions = @(
+            @{ Type = 'Feature'; Name = 'Microsoft-Windows-Subsystem-Linux'; Enabled = $true }
+            @{ Type = 'Feature'; Name = 'VirtualMachinePlatform'; Enabled = $true }
+        )
+        Off = @(
+            @{ Type = 'Feature'; Name = 'Microsoft-Windows-Subsystem-Linux'; Enabled = $false }
+            @{ Type = 'Feature'; Name = 'VirtualMachinePlatform'; Enabled = $false }
+        )
+    }
+    @{
+        Id = 'comp.sandbox'; Category = 'Componentes'; Level = 0; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Espacio aislado de Windows (Sandbox)'
+        What = 'Un Windows desechable en una ventana, para probar programas sospechosos sin riesgo.'
+        Gain = 'Abres ese instalador dudoso sin que toque tu sistema.'
+        Cost = 'Activa el hipervisor, con su coste en juegos. Sólo en Pro, Enterprise y Education.'
+        Skip = { Get-JuicerFeatureSkip 'Containers-DisposableClientVM' 'Necesita Windows Pro, Enterprise o Education.' }
+        Actions = @(@{ Type = 'Feature'; Name = 'Containers-DisposableClientVM'; Enabled = $true })
+        Off = @(@{ Type = 'Feature'; Name = 'Containers-DisposableClientVM'; Enabled = $false })
+    }
+    @{
+        Id = 'comp.hyperv'; Category = 'Componentes'; Level = 0; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Hyper-V'
+        What = 'Las máquinas virtuales de Microsoft.'
+        Gain = 'Máquinas virtuales completas sin programas de terceros.'
+        Cost = 'El hipervisor queda siempre activo: cuesta algo de rendimiento en juegos y algunos anti-trampas lo rechazan. Sólo en Pro, Enterprise y Education.'
+        Skip = { Get-JuicerFeatureSkip 'Microsoft-Hyper-V-All' 'Necesita Windows Pro, Enterprise o Education.' }
+        Actions = @(@{ Type = 'Feature'; Name = 'Microsoft-Hyper-V-All'; Enabled = $true })
+        Off = @(@{ Type = 'Feature'; Name = 'Microsoft-Hyper-V-All'; Enabled = $false })
+    }
+
+    # --- Apps: the Store apps are in Debloat.ps1, built per machine ----------
+
+    New-JuicerOneDriveTweak
 }
 
 # --- What Win Juicer refuses to do -----------------------------------------
@@ -656,10 +1026,13 @@ function Get-JuicerMyths {
         @{ Title = 'Las claves «Games» de MMCSS (GPU Priority, Scheduling Category)'; Why = 'Sólo afectan a procesos que se registran en esa tarea del planificador multimedia, y casi ningún juego lo hace. Circulan en todas las guías sin una sola medición detrás.' }
         @{ Title = 'Win32PrioritySeparation y valores «mágicos» del planificador'; Why = 'Las cifras que circulan no vienen con mediciones. El planificador de Windows 11, con los procesadores híbridos, ya hace lo que esos valores pretenden.' }
         @{ Title = 'Limpiadores de registro'; Why = 'Un registro con claves de más no es más lento: Windows no lo lee entero. Borrar claves «sobrantes» sí puede romper programas.' }
-        @{ Title = 'Desinstalar en bloque las apps preinstaladas'; Why = 'Si no se abren, no consumen nada. Lo que consume es lo que arranca solo, y eso lo controla Programas de inicio. Lo que sí hacemos es impedir que Windows instale más por su cuenta.' }
-        @{ Title = 'Desactivar servicios en masa'; Why = 'Los servicios en manual no consumen nada hasta que algo los necesita. Desactivarlos en bloque rompe la impresora, el Bluetooth o la Tienda sin ganar nada medible. Sólo tocamos la telemetría y, en Extremo, el indexado.' }
+        @{ Title = 'Quitar todas las apps de la Tienda de golpe'; Why = 'Se lleva la Calculadora, Fotos, la propia Tienda y la pila de Xbox que usan Game Pass y Game Bar; algunas no se pueden reinstalar sin la Tienda. Debloat quita app por app, dice qué es cada una, marca las que tu equipo necesita y las reinstala al deshacer.' }
+        @{ Title = 'Desactivar servicios en masa'; Why = 'Los servicios en manual no consumen nada hasta que algo los necesita. Desactivarlos en bloque rompe la impresora, el Bluetooth, el punto de acceso móvil o la Tienda sin ganar nada medible. Win Juicer sólo toca unos pocos, cada uno con su porqué, y la cola de impresión sólo si no tienes impresora.' }
         @{ Title = 'Apagar la hibernación «para ganar espacio»'; Why = 'Se lleva por delante el inicio rápido. Si la hibernación no se usa, Win Juicer la deja en el modo reducido, que ocupa la mitad.' }
-        @{ Title = 'Cambiar de DNS «para bajar el ping»'; Why = 'El DNS sólo interviene al buscar la dirección del servidor, una vez al conectar. No toca ni un paquete de la partida.' }
+        @{ Title = 'Cambiar de DNS «para bajar el ping»'; Why = 'El DNS sólo interviene al buscar la dirección del servidor, una vez al conectar. No toca ni un paquete de la partida. Win Juicer permite elegir DNS, pero por privacidad, filtrado de malware o anuncios, o porque el de tu operador falle; no por el ping.' }
         @{ Title = 'Desactivar el ahorro de energía de la tarjeta de red o la moderación de interrupciones'; Why = 'Gana microsegundos que no ve nadie y sube el uso de CPU. La latencia que notas está en internet, no en tu adaptador.' }
+        @{ Title = 'Desinstalar Microsoft Edge a la fuerza'; Why = 'Windows Update lo vuelve a instalar, y hay partes de Windows y programas que lo abren igualmente. Lo que cuesta de Edge son sus procesos de fondo, y eso se apaga en Segundo plano. En el Espacio Económico Europeo se puede desinstalar desde Configuración.' }
+        @{ Title = 'Desactivar IPv6 o Teredo'; Why = 'No da rendimiento, y Teredo es lo que usan el chat de grupo y el multijugador de Xbox para atravesar el router: sin él, «NAT estricta».' }
+        @{ Title = 'Reducir los procesos svchost (SvcHostSplitThresholdInKB)'; Why = 'Agrupar servicios en menos procesos baja el número del Administrador de tareas, no el consumo, y hace que un fallo en uno tumbe a los demás.' }
     )
 }

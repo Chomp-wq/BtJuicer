@@ -62,12 +62,32 @@ function Get-JuicerRamFindings {
         }
     }
 
+    $parts = @($Modules | ForEach-Object { ([string]$_.PartNumber).Trim() } | Where-Object { $_ } | Select-Object -Unique)
+    if ($parts.Count -gt 1) {
+        $out += New-JuicerFinding $area 'Medio' "Módulos de RAM distintos: $($parts -join ', ')" 'Kits mezclados no siempre aguantan su XMP/EXPO juntos. Si hay pantallazos o errores WHEA, prueba a bajar la velocidad un escalón, o usa módulos de un mismo kit.'
+    }
+    if ($Modules.Count -ge 4 -and $type -eq 34) {
+        $out += New-JuicerFinding $area 'Bajo' 'Cuatro módulos DDR5' 'Con cuatro módulos, las placas DDR5 rara vez sostienen 6000 MT/s o más: suelen bajar a 5200 o menos. Dos módulos de más capacidad rinden más.'
+    }
+
     if (-not $Laptop) {
-        $jedec = if ($type -eq 26) { 2666 } elseif ($type -eq 34) { 4800 } else { 0 }
-        if ($jedec -and $speed -gt 0 -and $speed -le $jedec) {
-            $xmp = if ($type -eq 34) { 'EXPO o XMP' } else { 'XMP (DOCP en ASUS con AMD)' }
-            $label = if ($type -eq 34) { 'DDR5-6000 o 6400' } else { 'DDR4-3200 o 3600' }
-            $out += New-JuicerFinding $area 'Medio' "La RAM va a $speed MT/s, la velocidad estándar" "Si tu kit es más rápido (mira la etiqueta: $label…), activa $xmp en la BIOS. En juegos limitados por CPU suele ser la mejora gratuita más grande que queda."
+        $xmp = if ($type -eq 34) { 'EXPO o XMP' } else { 'XMP (DOCP en ASUS con AMD)' }
+        $ratings = @($Modules | ForEach-Object { Get-JuicerRamRating $_.PartNumber } | Where-Object { $_ })
+        $rated = if ($ratings.Count -eq $Modules.Count) { ($ratings | ForEach-Object { $_.Speed } | Measure-Object -Minimum).Minimum } else { 0 }
+        $xmpKit = $rated -gt 0 -and @($ratings | Where-Object { -not $_.Xmp }).Count -eq 0
+        $spd = ($Modules | ForEach-Object { $_.Speed } | Where-Object { $_ } | Measure-Object -Minimum).Minimum
+        if ($xmpKit -and $speed -gt 0 -and $speed -lt $rated - 100) {
+            $sev = if ($speed -le 0.85 * $rated) { 'Alto' } else { 'Medio' }
+            $out += New-JuicerFinding $area $sev "La RAM va a $speed MT/s, pero tu kit está certificado a $rated" "Lo dice su referencia ($($ratings[0].Brand) $($ratings[0].PartNumber)). Activa $xmp en la BIOS: en juegos limitados por CPU suele ser la mejora gratuita más grande que queda."
+        } elseif ($rated -eq 0) {
+            $jedec = if ($type -eq 26) { 2666 } elseif ($type -eq 34) { 4800 } else { 0 }
+            if ($jedec -and $speed -gt 0 -and $speed -le $jedec) {
+                $label = if ($type -eq 34) { 'DDR5-6000 o 6400' } else { 'DDR4-3200 o 3600' }
+                $out += New-JuicerFinding $area 'Medio' "La RAM va a $speed MT/s, la velocidad estándar" "Si tu kit es más rápido (mira la etiqueta: $label…), activa $xmp en la BIOS. En juegos limitados por CPU suele ser la mejora gratuita más grande que queda."
+            }
+        }
+        if ($spd -and $speed -gt $spd + 100) {
+            $out += New-JuicerFinding $area 'Info' "XMP/EXPO activo: $speed MT/s (sin él, $spd)" 'Es un overclock de memoria, certificado por el fabricante del kit. Si aparecen errores WHEA o pantallazos MEMORY_MANAGEMENT, es lo primero que hay que revisar.'
         }
     }
     $out
@@ -160,11 +180,13 @@ function Get-JuicerSystemAudit {
 function Get-JuicerHardwareAudit {
     $out = @()
     $laptop = Test-JuicerLaptop
-    try {
-        foreach ($cpu in @(Get-CimInstance Win32_Processor -ErrorAction Stop)) {
-            $out += New-JuicerFinding 'Procesador' 'Info' ('{0} — {1} núcleos, {2} hilos' -f $cpu.Name.Trim(), $cpu.NumberOfCores, $cpu.NumberOfLogicalProcessors)
+    $cpu = Get-JuicerCpuInfo
+    if ($cpu.Name) {
+        $out += New-JuicerFinding 'Procesador' 'Info' ('{0} — {1} núcleos, {2} hilos' -f $cpu.Name, $cpu.Cores, $cpu.Threads)
+        if ($cpu.Hybrid) {
+            $out += New-JuicerFinding 'Procesador' 'Info' 'Procesador híbrido, con núcleos de rendimiento y de eficiencia' 'Windows 11 reparte el trabajo entre ellos según la prioridad y el foco. Por eso aquí cuentan dos ajustes: sin limitación de energía (lo de fondo no acaba en los núcleos lentos) y el modo juego.'
         }
-    } catch {
+    } else {
         $out += New-JuicerFinding 'Procesador' 'Info' 'No se pudo leer el procesador.'
     }
     try {
@@ -286,6 +308,22 @@ function Get-JuicerSecurityAudit {
     } catch {
         Write-Verbose "Sin estado de VBS: $_"
     }
+
+    # Information only: whether to encrypt is a decision about the data, not
+    # about frames.
+    try {
+        $vol = Get-CimInstance -Namespace 'root/cimv2/Security/MicrosoftVolumeEncryption' -ClassName Win32_EncryptableVolume `
+            -Filter "DriveLetter='$env:SystemDrive'" -ErrorAction Stop
+        if ($vol -and (Invoke-CimMethod -InputObject $vol -MethodName GetProtectionStatus).ProtectionStatus -eq 1) {
+            $m = (Invoke-CimMethod -InputObject $vol -MethodName GetEncryptionMethod).EncryptionMethod
+            # 5: the drive encrypts by itself (eDrive), at no cost to the CPU.
+            if ($m -ne 5) {
+                $out += New-JuicerFinding 'Seguridad' 'Info' "BitLocker activo en $env:SystemDrive, cifrando por software" 'Protege tus datos si te roban el equipo. En SSD NVMe muy rápidos cuesta algo en escrituras pequeñas y poco en juegos. Quitarlo es decisión tuya (Configuración > Privacidad y seguridad > Cifrado del dispositivo); Win Juicer no lo toca.'
+            }
+        }
+    } catch {
+        Write-Verbose "Sin estado de BitLocker: $_"
+    }
     $out
 }
 
@@ -339,18 +377,25 @@ function Get-JuicerCatalogAudit {
     $out
 }
 
+# OnSection, if given, is told the name of each part as it starts: the
+# window shows it while the diagnosis runs.
 function Get-JuicerAudit {
+    param([scriptblock]$OnSection)
     $sections = @(
-        ${function:Get-JuicerSystemAudit}, ${function:Get-JuicerHardwareAudit}, ${function:Get-JuicerGraphicsAudit},
-        ${function:Get-JuicerStorageAudit}, ${function:Get-JuicerSecurityAudit}, ${function:Get-JuicerBootAudit},
-        ${function:Get-JuicerCatalogAudit}
+        @('Sistema', ${function:Get-JuicerSystemAudit}), @('Procesador y memoria', ${function:Get-JuicerHardwareAudit}),
+        @('Overclock y BIOS', ${function:Get-JuicerTuningAudit}), @('Estabilidad', ${function:Get-JuicerStabilityAudit}),
+        @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}),
+        @('Discos', ${function:Get-JuicerStorageAudit}), @('Red', ${function:Get-JuicerNetworkAudit}),
+        @('Seguridad', ${function:Get-JuicerSecurityAudit}), @('Arranque', ${function:Get-JuicerBootAudit}),
+        @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajustes', ${function:Get-JuicerCatalogAudit})
     )
     $all = @()
     foreach ($s in $sections) {
+        if ($OnSection) { & $OnSection $s[0] }
         try {
-            $all += @(& $s)
+            $all += @(& $s[1])
         } catch {
-            $all += New-JuicerFinding 'Diagnóstico' 'Info' "Una parte del diagnóstico falló: $_"
+            $all += New-JuicerFinding 'Diagnóstico' 'Info' "Una parte del diagnóstico ($($s[0])) falló: $_"
         }
     }
     $all

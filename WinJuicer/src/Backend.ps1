@@ -271,6 +271,134 @@ function Set-WinTask {
     }
 }
 
+# The Appx cmdlets are a Windows PowerShell module that PowerShell 7 can only
+# reach through a compatibility session, which loses errors on the way.
+# Running the script in powershell.exe and reading JSON back behaves the same
+# from both.
+function Invoke-WinPowerShell {
+    param([Parameter(Mandatory)][string]$Script)
+    $prefix = "`$ProgressPreference = 'SilentlyContinue'; `$ErrorActionPreference = 'Stop'`n"
+    if ($PSVersionTable.PSEdition -ne 'Core') {
+        return , @(& ([scriptblock]::Create($prefix + $Script)) | ForEach-Object { ConvertTo-JuicerHashtable $_ })
+    }
+    $full = $prefix + "@(`n$Script`n) | ConvertTo-Json -Depth 4 -Compress"
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $r = Invoke-WinNative $exe @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($full)))
+    if ($r.Code -ne 0) { throw "Windows PowerShell: $($r.Output)" }
+    $json = @($r.Output -split "`n" | Where-Object { $_ -match '^\s*[\[{]' })[-1]
+    if (-not $json) { return , @() }
+    , @(ConvertTo-JuicerHashtable ($json | ConvertFrom-Json))
+}
+
+function ConvertTo-WinPsLiteral {
+    param([string]$Text)
+    "'" + ($Text -replace "'", "''") + "'"
+}
+
+# Listing every package for every user takes seconds; the engine asks about
+# one package at a time, so the list is read once and dropped after a change.
+$script:AppxCache = $null
+
+function Read-WinAppx {
+    param([string]$Name)
+    if ($null -eq $script:AppxCache) {
+        $list = Invoke-WinPowerShell @'
+$p = @{}
+foreach ($a in @(Get-AppxPackage -AllUsers)) {
+    $p[$a.Name] = [pscustomobject]@{ Name = $a.Name; Installed = $true; Provisioned = $false }
+}
+foreach ($v in @(Get-AppxProvisionedPackage -Online)) {
+    if ($p.ContainsKey($v.DisplayName)) { $p[$v.DisplayName].Provisioned = $true }
+    else { $p[$v.DisplayName] = [pscustomobject]@{ Name = $v.DisplayName; Installed = $false; Provisioned = $true } }
+}
+$p.Values
+'@
+        $script:AppxCache = @{}
+        foreach ($a in $list) { if ($a.Name) { $script:AppxCache[[string]$a.Name] = $a } }
+    }
+    $hit = $script:AppxCache[$Name]
+    if ($null -eq $hit) { return $null }
+    @{ Installed = [bool]$hit.Installed; Provisioned = [bool]$hit.Provisioned }
+}
+
+function Remove-WinAppx {
+    param([string]$Name)
+    $n = ConvertTo-WinPsLiteral $Name
+    $script:AppxCache = $null
+    [void](Invoke-WinPowerShell @"
+Get-AppxPackage -AllUsers -Name $n | Remove-AppxPackage -AllUsers
+Get-AppxProvisionedPackage -Online | Where-Object { `$_.DisplayName -eq $n } | Remove-AppxProvisionedPackage -Online | Out-Null
+"@)
+}
+
+# Store apps come back from the Store itself; winget is how to ask it without
+# opening a window.
+function Add-WinAppx {
+    param([string]$Name, [string]$StoreId)
+    if (-not $StoreId) { throw "$Name no tiene identificador de Microsoft Store: reinstálala desde la Tienda." }
+    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'winget no está disponible: instala «Instalador de aplicación» desde Microsoft Store.' }
+    $script:AppxCache = $null
+    $r = Invoke-WinNative 'winget.exe' @('install', '--id', $StoreId, '--source', 'msstore', '--accept-package-agreements', '--accept-source-agreements', '--silent', '--disable-interactivity')
+    if ($r.Code -ne 0) { throw "winget no pudo reinstalar $Name ($($r.Code)): $($r.Output)" }
+}
+
+# Physical adapters that are connected. Virtual ones (VPN, Hyper-V) keep
+# whatever DNS their software gave them.
+function Get-WinNetAdapters {
+    , @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' } | ForEach-Object {
+            @{
+                Guid = [string]$_.InterfaceGuid; Name = [string]$_.Name; Description = [string]$_.InterfaceDescription
+                Wireless = ([int]$_.NdisPhysicalMedium -eq 9); LinkSpeed = [int64]$_.ReceiveLinkSpeed
+            }
+        })
+}
+
+# Clearing first and then setting is the only way to bring back exactly what
+# was there: Set-DnsClientServerAddress leaves alone a family it is not given.
+function Set-WinDns {
+    param([string]$Interface, [string[]]$V4, [string[]]$V6)
+    $a = Get-NetAdapter -ErrorAction Stop | Where-Object { [string]$_.InterfaceGuid -eq $Interface } | Select-Object -First 1
+    if (-not $a) { throw "No encuentro el adaptador $Interface." }
+    Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ResetServerAddresses -ErrorAction Stop
+    $all = @(@($V4) + @($V6) | Where-Object { $_ })
+    if ($all.Count -gt 0) { Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $all -ErrorAction Stop }
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+}
+
+# dism prints in the system language unless asked; /English makes the state
+# names safe to read.
+$script:FeatureCache = $null
+
+function Read-WinFeature {
+    param([string]$Name)
+    if ($null -eq $script:FeatureCache) {
+        $r = Invoke-WinNative 'dism.exe' @('/Online', '/English', '/Get-Features', '/Format:Table')
+        if ($r.Code -ne 0) { throw "dism no pudo listar las características: $($r.Output)" }
+        $script:FeatureCache = ConvertFrom-JuicerDismTable $r.Output
+    }
+    $state = $script:FeatureCache[$Name]
+    if ($null -eq $state) { return $null }
+    @{ Enabled = ($state -in 'Enabled', 'Enable Pending') }
+}
+
+function ConvertFrom-JuicerDismTable {
+    param([string]$Text)
+    $t = @{}
+    foreach ($line in ($Text -split "`r?`n")) {
+        if ($line -match '^\s*([\w\-\.]+)\s*\|\s*(Enabled|Disabled|Enable Pending|Disable Pending|Disabled with Payload Removed)\s*$') { $t[$Matches[1]] = $Matches[2] }
+    }
+    $t
+}
+
+function Set-WinFeature {
+    param([string]$Name, [bool]$Enabled)
+    $script:FeatureCache = $null
+    $arguments = if ($Enabled) { @('/Online', '/English', '/Enable-Feature', "/FeatureName:$Name", '/All', '/NoRestart') } else { @('/Online', '/English', '/Disable-Feature', "/FeatureName:$Name", '/NoRestart') }
+    $r = Invoke-WinNative 'dism.exe' $arguments
+    # 3010: done, a restart finishes it.
+    if ($r.Code -notin 0, 3010) { throw "dism no pudo cambiar ${Name} ($($r.Code)): $($r.Output)" }
+}
+
 function New-JuicerWindowsBackend {
     @{
         Name         = 'Windows'
@@ -294,6 +422,13 @@ function New-JuicerWindowsBackend {
         DefRemove    = { param([string]$Path) Remove-MpPreference -ExclusionPath $Path -ErrorAction Stop }
         TaskRead     = ${function:Read-WinTask}
         TaskWrite    = ${function:Set-WinTask}
+        AppxRead     = ${function:Read-WinAppx}
+        AppxRemove   = ${function:Remove-WinAppx}
+        AppxAdd      = ${function:Add-WinAppx}
+        NetAdapters  = ${function:Get-WinNetAdapters}
+        DnsSet       = ${function:Set-WinDns}
+        FeatRead     = ${function:Read-WinFeature}
+        FeatSet      = ${function:Set-WinFeature}
     }
 }
 
@@ -315,6 +450,9 @@ function New-JuicerMemoryBackend {
         Spi      = @{}   # action -> bool
         Defender = New-Object System.Collections.ArrayList
         Tasks    = @{}   # 'path|name' -> @{ Enabled }
+        Appx     = @{}   # name -> @{ Installed; Provisioned }
+        Adapters = New-Object System.Collections.ArrayList   # @{ Guid; Name; Description; Wireless; LinkSpeed }
+        Features = @{}   # name -> @{ Enabled }
         Calls    = New-Object System.Collections.ArrayList
         Run      = $Run
     }
@@ -361,6 +499,35 @@ function New-JuicerMemoryBackend {
             @{ Enabled = $t.Enabled }
         }
         TaskWrite   = { param($Path, $Name, $Enabled) $script:Mem.Tasks["$Path|$Name"].Enabled = [bool]$Enabled }
+        AppxRead    = {
+            param($Name)
+            $a = $script:Mem.Appx[$Name]
+            if ($null -eq $a) { return $null }
+            @{ Installed = $a.Installed; Provisioned = $a.Provisioned }
+        }
+        AppxRemove  = { param($Name) $script:Mem.Appx.Remove($Name) }
+        # Like the Store: it comes back for the user, not as a provisioned package.
+        AppxAdd     = {
+            param($Name, $StoreId)
+            if (-not $StoreId) { throw "$Name no tiene identificador de Microsoft Store." }
+            [void]$script:Mem.Calls.Add("winget install --id $StoreId --source msstore")
+            $script:Mem.Appx[$Name] = @{ Installed = $true; Provisioned = $false }
+        }
+        NetAdapters = { , @($script:Mem.Adapters) }
+        # What Windows does: the static servers live in NameServer, empty when
+        # they come from DHCP.
+        DnsSet      = {
+            param($Interface, $V4, $V6)
+            Write-MemRegValue "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$Interface" 'NameServer' 'String' (@($V4) -join ',')
+            Write-MemRegValue "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\$Interface" 'NameServer' 'String' (@($V6) -join ',')
+        }
+        FeatRead    = {
+            param($Name)
+            $f = $script:Mem.Features[$Name]
+            if ($null -eq $f) { return $null }
+            @{ Enabled = $f.Enabled }
+        }
+        FeatSet     = { param($Name, $Enabled) $script:Mem.Features[$Name].Enabled = [bool]$Enabled }
     }
 }
 
