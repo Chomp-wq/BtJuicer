@@ -507,5 +507,226 @@ Describe 'Frecuencia variable' {
         (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 165 }))['juegos.vrr'].Verdict | Should -Be 'Recomendado'
         (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 60 }))['juegos.vrr'].Verdict | Should -Be 'NoRecomendado'
         (Get-JuicerAdvice (New-TestHw))['juegos.vrr'].Verdict | Should -Be 'Opcional'
+        # What the monitor's EDID says beats the refresh rate.
+        $m = @{ Vrr = @{ Kind = 'FreeSync'; Min = 48; Max = 75 } }
+        $a = (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 75; Monitor = $m }))['juegos.vrr']
+        $a.Verdict | Should -Be 'Recomendado'
+        $a.Reason | Should -BeLike '*FreeSync*'
+    }
+}
+
+Describe 'Procesador y memoria juntos' {
+    BeforeAll {
+        function New-Kit {
+            param([string]$Part, [int]$At, [int]$Type = 26, [int]$Jedec = 2133)
+            foreach ($slot in 'DIMM_A2', 'DIMM_B2') {
+                [pscustomobject]@{ Capacity = 16GB; Speed = $Jedec; ConfiguredClockSpeed = $At; SMBIOSMemoryType = $Type; DeviceLocator = $slot; BankLabel = ''; PartNumber = $Part }
+            }
+        }
+        $script:X3d = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD' -Cores 8 -Threads 16
+    }
+
+    It 'un kit de 4000 a 3600 en un Ryzen 5000 está bien elegido, y no pide XMP' {
+        $f = @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 3600) $false $X3d)
+        $ok = @($f | Where-Object { $_.Title -like 'Bien elegido*' })
+        $ok.Count | Should -Be 1
+        $ok[0].Title | Should -BeLike '*kit es de 4000*3600-3800*'
+        $ok[0].Detail | Should -BeLike '*FCLK*3D V-Cache*'
+        @($f | Where-Object { $_.Title -like '*certificado*' -or $_.Severity -in 'Alto', 'Medio' }).Count | Should -Be 0
+    }
+
+    It 'el mismo kit a 4000 en ese Ryzen: que baje a 3600-3800' {
+        $f = @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 4000) $false $X3d)
+        $w = @($f | Where-Object { $_.Title -like 'La RAM va a 4000 MT/s: más de lo que rinde*' })
+        $w.Count | Should -Be 1
+        $w[0].Detail | Should -BeLike '*2:1*3600-3800*'
+    }
+
+    It 'sin XMP en ese Ryzen: 3600 a mano, no el XMP de 4000' {
+        $w = @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 2133) $false $X3d | Where-Object { $_.Severity -eq 'Alto' })
+        $w[0].Title | Should -BeLike '*lo óptimo es 3600-3800*'
+        $w[0].Detail | Should -BeLike '*no actives su XMP tal cual*'
+        # A 3600 kit: then XMP is right.
+        @(Get-JuicerRamFindings @(New-Kit 'F4-3600C16-16GVKC' 2133) $false $X3d | Where-Object { $_.Title -like '*certificado a 3600*' }).Count | Should -Be 1
+    }
+
+    It 'conoce cada plataforma' {
+        $am5 = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD'
+        (Get-JuicerMemoryPlan $am5 'DDR5').Target | Should -Be 6000
+        @(Get-JuicerRamFindings @(New-Kit 'F5-7200J3445G16GX2-TZ5RK' 7200 34 4800) $false $am5 | Where-Object { $_.Title -like '*7200 MT/s: más de lo que rinde*' }).Count | Should -Be 1
+        $apu = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700G with Radeon Graphics' -Vendor 'AuthenticAMD'
+        (Get-JuicerMemoryPlan $apu 'DDR4').Max | Should -Be 4400
+        @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 4000) $false $apu | Where-Object { $_.Severity -in 'Alto', 'Medio' }).Count | Should -Be 0
+        (Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 3600 6-Core Processor' -Vendor 'AuthenticAMD') 'DDR4').Max | Should -Be 3733
+        (Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name '12th Gen Intel(R) Core(TM) i5-12600K' -Vendor 'GenuineIntel') 'DDR4').Why | Should -BeLike '*Gear 1*'
+        Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name '12th Gen Intel(R) Core(TM) i5-12600K' -Vendor 'GenuineIntel') 'DDR5' | Should -BeNullOrEmpty
+        Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7840HS w/ Radeon 780M Graphics' -Vendor 'AuthenticAMD') 'DDR5' | Should -BeNullOrEmpty
+    }
+
+    It 'dice qué ajuste fino admite cada Ryzen' {
+        @(Get-JuicerCpuTuningFindings $X3d)[0].Title | Should -BeLike '*no admite overclock, pero sí Curve Optimizer'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD'))[0].Title | Should -BeLike '*Curve Optimizer, no overclock'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 9800X3D 8-Core Processor' -Vendor 'AuthenticAMD'))[0].Title | Should -BeLike '*PBO completo*'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 7600X 6-Core Processor' -Vendor 'AuthenticAMD'))[0].Title | Should -BeLike '*PBO y Curve Optimizer'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 3600 6-Core Processor' -Vendor 'AuthenticAMD')).Count | Should -Be 0
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name '13th Gen Intel(R) Core(TM) i7-13700K' -Vendor 'GenuineIntel')).Count | Should -Be 0
+    }
+}
+
+Describe 'Combinaciones de hardware' {
+    BeforeAll {
+        function New-Gpu {
+            param([string]$Name, [uint64]$Vram = 8GB)
+            $g = Get-JuicerGpuTraits $Name
+            $g.Vram = $Vram
+            $g
+        }
+        function New-Cpu { param([string]$Name, [int]$Cores = 6) Get-JuicerCpuTraits -Name $Name -Vendor $(if ($Name -match 'Intel') { 'GenuineIntel' } else { 'AuthenticAMD' }) -Cores $Cores -Threads (2 * $Cores) }
+    }
+
+    It 'gráficas de 8 y 4 líneas en PCIe 3.0, por la CPU o por la placa' {
+        Get-JuicerPcieLanes 'NVIDIA GeForce RTX 4060 Ti' | Should -Be 8
+        Get-JuicerPcieLanes 'AMD Radeon RX 6500 XT' | Should -Be 4
+        Get-JuicerPcieLanes 'NVIDIA GeForce RTX 4070' | Should -BeNullOrEmpty
+
+        $apu = New-Cpu 'AMD Ryzen 5 5600G with Radeon Graphics'
+        $f = @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 4060')) $apu 'ASUSTeK COMPUTER INC. TUF GAMING B550-PLUS')
+        $f.Count | Should -Be 1
+        $f[0].Severity | Should -Be 'Medio'
+        $f[0].Title | Should -BeLike '*8 líneas*5600G*da como mucho PCIe 3.0'
+
+        $vermeer = New-Cpu 'AMD Ryzen 7 5700X3D 8-Core Processor' 8
+        @(Get-JuicerPcieFindings @((New-Gpu 'AMD Radeon RX 6500 XT' 4GB)) $vermeer 'Micro-Star International Co., Ltd. B450 TOMAHAWK MAX')[0].Severity | Should -Be 'Alto'
+        # The same processor on a B550 board: PCIe 4.0, nothing to say.
+        @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 4060')) $vermeer 'Micro-Star International Co., Ltd. MAG B550 TOMAHAWK').Count | Should -Be 0
+        # A full x16 card on 3.0 loses next to nothing.
+        @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 3070')) $apu '').Count | Should -Be 0
+        # The 5700 and 5500 are APUs without graphics; the 5600 is not; the 8600G gives 4.0.
+        Get-JuicerPcie3Reason (New-Cpu 'AMD Ryzen 7 5700 8-Core Processor') '' | Should -Not -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu 'AMD Ryzen 5 5600 6-Core Processor') '' | Should -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu 'AMD Ryzen 5 8600G w/ Radeon 760M Graphics') '' | Should -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu 'Intel(R) Core(TM) i5-10400F CPU @ 2.90GHz') '' | Should -Not -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu '11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz') 'ASUSTeK COMPUTER INC. PRIME Z490-P' | Should -BeNullOrEmpty
+        Get-JuicerPcie3Reason (New-Cpu '11th Gen Intel(R) Core(TM) i5-11400F @ 2.60GHz') 'Gigabyte Technology Co., Ltd. H510M H' | Should -Not -BeNullOrEmpty
+        # Laptops wire their own lanes.
+        @(Get-JuicerPcieFindings @((New-Gpu 'NVIDIA GeForce RTX 4060')) $apu '' $true).Count | Should -Be 0
+    }
+
+    It 'la VRAM frente a la resolución del monitor' {
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4060 Ti' 8GB)) 3840 2160)[0].Severity | Should -Be 'Medio'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4060 Ti' 8GB)) 2560 1440)[0].Severity | Should -Be 'Info'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 2060' 6GB)) 2560 1440)[0].Severity | Should -Be 'Medio'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4060 Ti' 8GB)) 1920 1080).Count | Should -Be 0
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce GTX 1650' 4GB)) 1920 1080)[0].Title | Should -Be 'Sólo 4 GB de VRAM'
+        @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4090' 24GB)) 3840 2160).Count | Should -Be 0
+        @(Get-JuicerVramFindings @((New-Gpu 'Intel(R) UHD Graphics 770' 128MB)) 3840 2160).Count | Should -Be 0
+    }
+
+    It 'APU sin gráfica dedicada: la memoria reservada en la BIOS' {
+        $apu = New-Cpu 'AMD Ryzen 7 5700G with Radeon Graphics' 8
+        $f = @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 512MB)) $apu 16GB)
+        $f[0].Severity | Should -Be 'Medio'
+        $f[0].Title | Should -BeLike '*512 MB*'
+        $f[0].Detail | Should -BeLike '*UMA Frame Buffer Size*2 o 4 GB*'
+        @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 4GB)) $apu 32GB)[0].Severity | Should -Be 'Info'
+        @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 512MB), (New-Gpu 'NVIDIA GeForce RTX 3060')) $apu 16GB).Count | Should -Be 0
+        @(Get-JuicerApuFindings @((New-Gpu 'AMD Radeon(TM) Graphics' 512MB)) (New-Cpu 'AMD Ryzen 7 7840HS w/ Radeon 780M Graphics' 8) 16GB).Count | Should -Be 0
+    }
+
+    It 'procesador y gráfica desequilibrados' {
+        $old = New-Cpu 'Intel(R) Core(TM) i7-8700K CPU @ 3.70GHz'
+        $f = @(Get-JuicerBalanceFindings @((New-Gpu 'NVIDIA GeForce RTX 4080 SUPER' 16GB)) $old)
+        $f[0].Severity | Should -Be 'Medio'
+        $f[0].Title | Should -BeLike '*4080 SUPER va sobrada para tu*8700K*'
+        @(Get-JuicerBalanceFindings @((New-Gpu 'NVIDIA GeForce GTX 1650' 4GB)) (New-Cpu 'AMD Ryzen 7 7800X3D 8-Core Processor' 8))[0].Severity | Should -Be 'Info'
+        @(Get-JuicerBalanceFindings @((New-Gpu 'NVIDIA GeForce RTX 4070' 12GB)) (New-Cpu 'AMD Ryzen 5 5600 6-Core Processor')).Count | Should -Be 0
+        Get-JuicerGpuTier 'NVIDIA GeForce RTX 4070 Ti SUPER' | Should -Be 4
+        Get-JuicerGpuTier 'AMD Radeon RX 6600' | Should -Be 2
+        Get-JuicerCpuTier (New-Cpu 'AMD Ryzen 5 2600 Six-Core Processor') | Should -Be 1
+    }
+
+    It 'portátil en modo híbrido: dónde se cambia a sólo la dedicada' {
+        $gpus = @((Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070 Laptop GPU'), (Get-JuicerGpuTraits 'AMD Radeon(TM) 780M'))
+        $hybrid = @([pscustomobject]@{ Adapter = 'AMD Radeon(TM) 780M'; Primary = $true })
+        $f = @(Get-JuicerOptimusFindings $gpus $hybrid $true 'ASUSTeK COMPUTER INC.')
+        $f.Count | Should -Be 1
+        $f[0].Detail | Should -BeLike '*Armoury Crate (Modo GPU: Ultimate)*'
+        @(Get-JuicerOptimusFindings $gpus $hybrid $true 'Alienware')[0].Detail | Should -BeLike '*Alienware Command Center*'
+        @(Get-JuicerOptimusFindings $gpus $hybrid $true 'Micro-Star International Co., Ltd.')[0].Detail | Should -BeLike '*MSI Center*'
+        @(Get-JuicerOptimusFindings $gpus $hybrid $true 'Clevo')[0].Detail | Should -BeLike '*app de control del fabricante*'
+        @(Get-JuicerOptimusFindings $gpus @([pscustomobject]@{ Adapter = 'NVIDIA GeForce RTX 4070 Laptop GPU'; Primary = $true }) $true 'ASUSTeK COMPUTER INC.').Count | Should -Be 0
+        @(Get-JuicerOptimusFindings $gpus $hybrid $false 'ASUSTeK COMPUTER INC.').Count | Should -Be 0
+    }
+}
+
+Describe 'Ajuste fino' {
+    BeforeEach { Remove-JuicerTuneRecord }
+
+    It 'da la receta de undervolt de cada procesador' {
+        $x3d = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD'
+        $g = Get-JuicerCpuTuneGuide $x3d
+        $g.Key | Should -Be 'zen3x3d'
+        $g.Steps | Should -BeLike '*-15*-30*-40 mV*'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen4x3d'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 9800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen5x3d'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 7600X 6-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen3plus'
+        (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 3600 6-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen2older'
+        $rpl = Get-JuicerCpuTraits -Name '13th Gen Intel(R) Core(TM) i7-13700K' -Vendor 'GenuineIntel' -Identifier 'Intel64 Family 6 Model 183 Stepping 1'
+        (Get-JuicerCpuTuneGuide $rpl).Steps | Should -BeLike '*0x12B*AC Load Line*'
+        Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name '13th Gen Intel(R) Core(TM) i5-13400F' -Vendor 'GenuineIntel') | Should -BeNullOrEmpty
+        Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7840HS w/ Radeon 780M Graphics' -Vendor 'AuthenticAMD') | Should -BeNullOrEmpty
+    }
+
+    It 'y la de cada arquitectura de gráfica, con cómo se aplica en cada inicio' {
+        @{ 'NVIDIA GeForce RTX 5070 Ti' = 'blackwell'; 'NVIDIA GeForce RTX 4070 SUPER' = 'ada'; 'NVIDIA GeForce RTX 3080' = 'ampere'
+            'NVIDIA GeForce GTX 1660 SUPER' = 'turing'; 'NVIDIA GeForce GTX 1080 Ti' = 'pascal'; 'AMD Radeon RX 9070 XT' = 'rdna4'
+            'AMD Radeon RX 7800 XT' = 'rdna3'; 'AMD Radeon RX 6700 XT' = 'rdna2'; 'Intel(R) Arc(TM) B580 Graphics' = 'arc' }.GetEnumerator() | ForEach-Object {
+            Get-JuicerGpuArch $_.Key | Should -Be $_.Value -Because $_.Key
+        }
+        Get-JuicerGpuArch 'AMD Radeon(TM) Graphics' | Should -BeNullOrEmpty
+        $a = Get-JuicerGpuTuneGuide 'NVIDIA GeForce RTX 3080'
+        $a.Steps | Should -BeLike '*850-900 mV*GDDR6X*'
+        $a.Persist | Should -BeLike '*Aplicar overclock al iniciar el sistema*'
+        (Get-JuicerGpuTuneGuide 'AMD Radeon RX 7800 XT').Persist | Should -BeLike '*AMD Software*'
+        $f = @(Get-JuicerTuneGuideFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD') @((Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070'), (Get-JuicerGpuTraits 'AMD Radeon(TM) Graphics')) $false)
+        $f.Count | Should -Be 3
+        $f[0].Detail | Should -BeLike '*BIOS lo guarda y lo aplica en cada arranque*'
+        $f[1].Title | Should -BeLike '*RTX 4070 (Ada Lovelace*'
+        # On a laptop the BIOS rarely lets you: no CPU recipe.
+        @(Get-JuicerTuneGuideFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD') @() $true).Count | Should -Be 0
+    }
+
+    It 'recuerda lo aplicado y avisa si la BIOS o la RAM cambian o hay errores' {
+        $r = Save-JuicerTuneRecord -Cpu 'Curve Optimizer -30' -Gpu 'curva 900 mV' -GpuTool 'Afterburner' -Bios 'F15 2024-05-01' -RamSpeed 3600
+        (Read-JuicerTuneRecord).Cpu | Should -Be 'Curve Optimizer -30'
+        $ok = @(Get-JuicerTuneCheckFindings $r 'F15 2024-05-01' 3600 0 0 $true)
+        @($ok | Where-Object { $_.Severity -in 'Alto', 'Medio' }).Count | Should -Be 0
+        @($ok | Where-Object { $_.Severity -eq 'Ok' }).Count | Should -Be 2
+        $bad = @(Get-JuicerTuneCheckFindings $r 'F17 2025-02-10' 2133 3 2 $false)
+        @($bad | Where-Object { $_.Title -like 'La BIOS ha cambiado*' })[0].Detail | Should -BeLike '*Curve Optimizer -30*'
+        @($bad | Where-Object { $_.Title -like 'La RAM va a 2133*' }).Count | Should -Be 1
+        @($bad | Where-Object { $_.Title -like '3 errores*' }).Count | Should -Be 1
+        @($bad | Where-Object { $_.Title -like '*reiniciado 2 veces*' }).Count | Should -Be 1
+        @($bad | Where-Object { $_.Title -like 'MSI Afterburner no arranca*' }).Count | Should -Be 1
+        @(Get-JuicerTuneCheckFindings $null '' 0 0 0 $null).Count | Should -Be 0
+        # Once recorded, the guide stops asking to record it.
+        @(Get-JuicerTuneGuideFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD') @() $false | Where-Object { $_.Title -like 'Apunta*' }).Count | Should -Be 0
+    }
+
+    It 'el script que vigila al iniciar sesión es PowerShell válido' {
+        $text = Get-JuicerTuneWatchScript "C:\ProgramData\WinJuicer\ajuste-fino.json"
+        $errors = $null
+        [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errors)
+        $errors | Should -BeNullOrEmpty
+        $text | Should -BeLike "*'C:\ProgramData\WinJuicer\ajuste-fino.json'*"
+        (Get-JuicerTuneWatchScript "C:\Users\O'Brien\x.json") | Should -BeLike "*'C:\Users\O''Brien\x.json'*"
+    }
+
+    It 'desde la línea de órdenes' {
+        @(Start-Juicer -ApuntarAjuste -Si 6>$null)[-1] | Should -Be 2
+        @(Start-Juicer -ApuntarAjuste -AjusteCpu 'CO -25' -Si 6>$null)[-1] | Should -Be 0
+        (Read-JuicerTuneRecord).Cpu | Should -Be 'CO -25'
+        @(Start-Juicer -OlvidarAjuste -Si 6>$null)[-1] | Should -Be 0
+        Read-JuicerTuneRecord | Should -BeNullOrEmpty
     }
 }

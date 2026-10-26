@@ -34,8 +34,9 @@ function Get-JuicerMemoryChannel {
     $null
 }
 
+# Cpu, when given, decides what speed is best: see Get-JuicerMemoryPlan.
 function Get-JuicerRamFindings {
-    param([object[]]$Modules, [bool]$Laptop)
+    param([object[]]$Modules, [bool]$Laptop, [hashtable]$Cpu)
     $area = 'Memoria'
     $out = @()
     if (-not $Modules -or $Modules.Count -eq 0) { return $out }
@@ -77,14 +78,26 @@ function Get-JuicerRamFindings {
         $rated = if ($ratings.Count -eq $Modules.Count) { ($ratings | ForEach-Object { $_.Speed } | Measure-Object -Minimum).Minimum } else { 0 }
         $xmpKit = $rated -gt 0 -and @($ratings | Where-Object { -not $_.Xmp }).Count -eq 0
         $spd = ($Modules | ForEach-Object { $_.Speed } | Where-Object { $_ } | Measure-Object -Minimum).Minimum
-        if ($xmpKit -and $speed -gt 0 -and $speed -lt $rated - 100) {
-            $sev = if ($speed -le 0.85 * $rated) { 'Alto' } else { 'Medio' }
-            $out += New-JuicerFinding $area $sev "La RAM va a $speed MT/s, pero tu kit está certificado a $rated" "Lo dice su referencia ($($ratings[0].Brand) $($ratings[0].PartNumber)). Activa $xmp en la BIOS: en juegos limitados por CPU suele ser la mejora gratuita más grande que queda."
+        $plan = Get-JuicerMemoryPlan $Cpu $typeName
+        # The speed to aim for: the kit's, unless the platform runs better slower.
+        $best = if ($plan -and $rated -gt 0) { [Math]::Min($rated, $plan.Target) } elseif ($plan) { $plan.Target } else { $rated }
+        $range = if ($plan) { if ($plan.Max -gt $plan.Target) { "$($plan.Target)-$($plan.Max)" } else { "$($plan.Target)" } } else { '' }
+        if ($plan -and -not $plan.Apu -and $speed -gt $plan.Max + 50) {
+            $out += New-JuicerFinding $area 'Medio' "La RAM va a $speed MT/s: más de lo que rinde en un $($plan.Platform)" ("$($plan.Why) Baja a $range MT/s en la BIOS y, con lo que sobra de margen, aprieta los timings: rinde más que la velocidad alta." + $(if ($plan.X3d) { ' Con 3D V-Cache, además, la velocidad de RAM importa poco.' } else { '' }))
+        } elseif ($plan -and $rated -gt $plan.Max -and $speed -ge $plan.Target - 100 -and $speed -le $plan.Max + 50) {
+            $out += New-JuicerFinding $area 'Ok' "Bien elegido: tu kit es de $rated, pero en tu $($plan.Platform) lo que rinde es $range, y está a $speed" ($plan.Why + $(if ($plan.X3d) { ' Con 3D V-Cache la RAM importa todavía menos: no merece la pena forzarla.' } else { '' }))
+        } elseif ($xmpKit -and $speed -gt 0 -and $best -gt 0 -and $speed -lt $best - 100) {
+            $sev = if ($speed -le 0.85 * $best) { 'Alto' } else { 'Medio' }
+            if ($plan -and $rated -gt $plan.Max) {
+                $out += New-JuicerFinding $area $sev "La RAM va a $speed MT/s; en tu $($plan.Platform) lo óptimo es $range" "Tu kit ($($ratings[0].Brand) $($ratings[0].PartNumber)) es de $rated, pero no actives su XMP tal cual: $($plan.Why) Pon $($plan.Target) MT/s a mano en la BIOS, con los timings del XMP o algo más ajustados."
+            } else {
+                $out += New-JuicerFinding $area $sev "La RAM va a $speed MT/s, pero tu kit está certificado a $rated" "Lo dice su referencia ($($ratings[0].Brand) $($ratings[0].PartNumber)). Activa $xmp en la BIOS: en juegos limitados por CPU suele ser la mejora gratuita más grande que queda."
+            }
         } elseif ($rated -eq 0) {
             $jedec = if ($type -eq 26) { 2666 } elseif ($type -eq 34) { 4800 } else { 0 }
             if ($jedec -and $speed -gt 0 -and $speed -le $jedec) {
-                $label = if ($type -eq 34) { 'DDR5-6000 o 6400' } else { 'DDR4-3200 o 3600' }
-                $out += New-JuicerFinding $area 'Medio' "La RAM va a $speed MT/s, la velocidad estándar" "Si tu kit es más rápido (mira la etiqueta: $label…), activa $xmp en la BIOS. En juegos limitados por CPU suele ser la mejora gratuita más grande que queda."
+                $label = if ($plan) { "$typeName-$range" } elseif ($type -eq 34) { 'DDR5-6000 o 6400' } else { 'DDR4-3200 o 3600' }
+                $out += New-JuicerFinding $area 'Medio' "La RAM va a $speed MT/s, la velocidad estándar" ("Si tu kit es más rápido (mira la etiqueta), activa $xmp en la BIOS. En juegos limitados por CPU suele ser la mejora gratuita más grande que queda." + $(if ($plan) { " En tu $($plan.Platform), apunta a $label MT/s aunque el kit dé más: $($plan.Why)" } else { " Lo habitual: $label." }))
             }
         }
         if ($spd -and $speed -gt $spd + 100) {
@@ -289,11 +302,14 @@ function Get-JuicerHardwareAudit {
         if ($cpu.Hybrid) {
             $out += New-JuicerFinding 'Procesador' 'Info' 'Procesador híbrido, con núcleos de rendimiento y de eficiencia' 'Windows 11 reparte el trabajo entre ellos según la prioridad y el foco. Por eso aquí cuentan dos ajustes: sin limitación de energía (lo de fondo no acaba en los núcleos lentos) y el modo juego.'
         }
+        if ($cpu.Hybrid -and $cpu.Vendor -eq 'Intel' -and (Get-JuicerWindowsBuild) -lt 22000) {
+            $out += New-JuicerFinding 'Procesador' 'Alto' 'Procesador híbrido de Intel con Windows 10' 'Windows 10 no entiende Thread Director: puede dejar el juego en los núcleos de eficiencia, con tirones y FPS bajos. Windows 11 es la mejora más grande para este procesador; mientras tanto, desactivar los núcleos E en la BIOS lo evita.'
+        }
     } else {
         $out += New-JuicerFinding 'Procesador' 'Info' 'No se pudo leer el procesador.'
     }
     try {
-        $out += Get-JuicerRamFindings @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop) $laptop
+        $out += Get-JuicerRamFindings @(Get-CimInstance Win32_PhysicalMemory -ErrorAction Stop) $laptop $cpu
     } catch {
         $out += New-JuicerFinding 'Memoria' 'Info' 'No se pudo leer la memoria.'
     }
@@ -335,6 +351,14 @@ function Get-JuicerGraphicsAudit {
         $out += Get-JuicerDisplayFindings (Get-JuicerDisplays) @($real | ForEach-Object { Get-JuicerGpuTraits $_.Name }) (Test-JuicerLaptop)
     } catch {
         $out += New-JuicerFinding 'Pantalla' 'Info' 'No se pudieron leer los modos de pantalla.'
+    }
+
+    try {
+        $traits = @($real | ForEach-Object { Get-JuicerGpuTraits $_.Name })
+        $main = @($traits | Where-Object { $_.Discrete }) + @($traits) | Select-Object -First 1
+        $out += Get-JuicerMonitorFindings @(Get-JuicerMonitors) $(if ($main) { $main.Vendor } else { '' }) @(Read-JuicerFrameHistory)
+    } catch {
+        Write-Verbose "Sin datos del monitor: $_"
     }
 
     $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
@@ -556,15 +580,26 @@ function Save-JuicerAuditReport {
 
 # OnSection, if given, is told the name of each part as it starts: the
 # window shows it while the diagnosis runs.
+# Undervolt and overclock: the recipe for this processor and card, and
+# whether what was applied is still there and stable.
+function Get-JuicerFineTuneAudit {
+    $gpus = @()
+    try { $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | ForEach-Object { Get-JuicerGpuTraits $_.Name }) } catch { Write-Verbose "Sin gráficas: $_" }
+    $out = @(Get-JuicerTuneCheck)
+    $out += Get-JuicerTuneGuideFindings (Get-JuicerCpuInfo) $gpus (Test-JuicerLaptop)
+    $out
+}
+
 function Get-JuicerAudit {
     param([scriptblock]$OnSection)
     $sections = @(
         @('Sistema', ${function:Get-JuicerSystemAudit}), @('Procesador y memoria', ${function:Get-JuicerHardwareAudit}),
         @('Overclock y BIOS', ${function:Get-JuicerTuningAudit}), @('Estabilidad', ${function:Get-JuicerStabilityAudit}),
-        @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}),
+        @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}), @('Combinaciones', ${function:Get-JuicerComboAudit}),
         @('Discos', ${function:Get-JuicerStorageAudit}), @('Red', ${function:Get-JuicerNetworkAudit}),
         @('Seguridad', ${function:Get-JuicerSecurityAudit}), @('Arranque', ${function:Get-JuicerBootAudit}),
-        @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajustes', ${function:Get-JuicerCatalogAudit})
+        @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajuste fino', ${function:Get-JuicerFineTuneAudit}),
+        @('Ajustes', ${function:Get-JuicerCatalogAudit})
     )
     $all = @()
     foreach ($s in $sections) {

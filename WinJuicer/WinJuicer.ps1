@@ -25,6 +25,15 @@
 .PARAMETER NuevaMedida
     Descarta la medida inicial y guarda la de ahora como punto de partida.
 
+.PARAMETER ApuntarAjuste
+    Apunta el undervolt u overclock que has aplicado (-AjusteCpu, -AjusteGpu,
+    -HerramientaGpu) y lo comprueba en cada inicio de sesión: avisa si una
+    actualización de BIOS lo borra, si la RAM cambia de velocidad o si hay
+    errores WHEA o cuelgues del driver de la gráfica desde entonces.
+
+.PARAMETER OlvidarAjuste
+    Borra el ajuste apuntado y deja de comprobarlo.
+
 .PARAMETER MedirJuego
     Mide FPS y frametimes durante esos segundos (de 10 a 600), empezando 10
     segundos después para dar tiempo a volver al juego. Usa PresentMon de Intel.
@@ -32,6 +41,19 @@
 .PARAMETER Juego
     Con -MedirJuego, el .exe que medir (por ejemplo cs2.exe). Sin él, el que
     más fotogramas presente.
+
+.PARAMETER LimitarFps
+    Juegos (.exe, separados por comas) a los que poner un límite de FPS que se
+    aplica solo cada vez que se abren: con NVIDIA, en el driver; si no, con
+    RivaTuner Statistics Server. Sin -Fps, el recomendado para tu monitor.
+
+.PARAMETER Fps
+    Con -LimitarFps, el límite (de 20 a 1000).
+
+.PARAMETER ModoMonitor
+    Cómo usas tu monitor, que su EDID no dice y decide el límite de FPS:
+    Automatico, VRR, Estrobo (ELMB, DyAc… sin VRR), EstroboSync (ELMB Sync…)
+    o Fijo. Se guarda para ese monitor; con -LimitarFps, se usa ya.
 
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
@@ -101,8 +123,16 @@ param(
     [switch]$Equipo,
     [switch]$Medir,
     [switch]$NuevaMedida,
+    [switch]$ApuntarAjuste,
+    [string]$AjusteCpu,
+    [string]$AjusteGpu,
+    [ValidateSet('', 'Afterburner', 'Adrenalin', 'Intel')][string]$HerramientaGpu = '',
+    [switch]$OlvidarAjuste,
     [int]$MedirJuego,
     [string]$Juego,
+    [string[]]$LimitarFps = @(),
+    [int]$Fps,
+    [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
     [switch]$Lista,
     [switch]$Recomendado,
     [ValidateSet('Seguro', 'Rendimiento', 'Extremo')][string]$Perfil,

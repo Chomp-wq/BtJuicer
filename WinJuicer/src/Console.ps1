@@ -299,6 +299,40 @@ function Write-JuicerFindings {
     }
 }
 
+function Show-JuicerFineTune {
+    while ($true) {
+        Write-JuicerHeader 'Ajuste fino'
+        Write-JuicerWrapped 'El undervolt del procesador va en la BIOS (la placa lo aplica en cada arranque, sin programas ni drivers de núcleo); el de la gráfica, en su herramienta. Valores de partida para tus componentes:' 2 'Gray'
+        $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { Get-JuicerGpuTraits $_.Name })
+        Write-JuicerFindings @(Get-JuicerTuneGuideFindings (Get-JuicerCpuInfo) $gpus (Test-JuicerLaptop))
+        Write-Host ''
+        Write-JuicerFindings @(Get-JuicerTuneCheck)
+        Write-Host ''
+        Write-JuicerMenu @(
+            @('A', 'Apuntar lo que he aplicado', 'y comprobarlo en cada inicio de sesión'),
+            @('O', 'Olvidarlo', 'y dejar de comprobarlo')
+        )
+        switch ((Read-JuicerChoice 'Elige, Intro para volver').ToUpperInvariant()) {
+            'A' {
+                $cpu = Read-JuicerChoice 'Procesador (por ejemplo «Curve Optimizer -30»; Intro si nada)'
+                $gpu = Read-JuicerChoice 'Gráfica (por ejemplo «curva 900 mV a 1900 MHz, memoria +500»; Intro si nada)'
+                $tool = ''
+                if ($gpu) {
+                    $t = Read-JuicerChoice 'La aplica: 1 Afterburner, 2 AMD Software, 3 Intel, Intro no lo sé'
+                    $tool = @{ '1' = 'Afterburner'; '2' = 'Adrenalin'; '3' = 'Intel' }[$t]
+                    if (-not $tool) { $tool = '' }
+                }
+                if ($cpu -or $gpu) {
+                    [void](Save-JuicerTuneRecord -Cpu $cpu -Gpu $gpu -GpuTool $tool)
+                    if (Confirm-JuicerAction '¿Comprobarlo cada vez que inicies sesión y avisarte si algo cambia?') { Register-JuicerTuneWatch }
+                }
+            }
+            'O' { Remove-JuicerTuneRecord; Unregister-JuicerTuneWatch }
+            '' { return }
+        }
+    }
+}
+
 function Show-JuicerMeasure {
     while ($true) {
         Write-JuicerHeader 'Antes y después'
@@ -485,7 +519,8 @@ function Show-JuicerGames {
             @('1', 'Exclusiones de Defender', 'cargas más rápidas en tus bibliotecas (Extremo)'),
             @('2', 'Configurar un juego', 'GPU potente y prioridad alta para un .exe'),
             @('3', 'Juegos configurados', 'ver y deshacer'),
-            @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon')
+            @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon'),
+            @('5', 'Limitador de FPS', 'un límite por juego que se aplica solo, según tu monitor')
         )
         $c = Read-JuicerChoice 'Elige, Intro para volver'
         switch ($c) {
@@ -493,6 +528,61 @@ function Show-JuicerGames {
             '2' { Show-JuicerConfigureGame }
             '3' { Show-JuicerConfiguredGames }
             '4' { Show-JuicerFrameMeasure }
+            '5' { Show-JuicerLimiter }
+            '' { return }
+        }
+    }
+}
+
+function Show-JuicerLimiter {
+    while ($true) {
+        Write-JuicerHeader 'Limitador de FPS'
+        $m = $null
+        try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+        Write-JuicerWrapped ('Limita con: ' + (Format-JuicerFpsBackend (Get-JuicerFpsBackend)) + '.') 2 'Gray'
+        if ($m) {
+            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 })
+            Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + '. Cómo la usas: ' + (Get-JuicerMonitorModes)[$m.Mode] + ". Límite recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
+        }
+        $limits = @(Get-JuicerFpsLimits)
+        Write-Host ''
+        $n = 0
+        foreach ($g in $limits) { $n++; Write-Host ('  {0,2}. {1}: {2}' -f $n, $g.Exe, $(if ($g.Fps) { "$($g.Fps) FPS" } else { 'sin límite ahora' })) }
+        if ($n -eq 0) { Write-Host '  Ningún juego limitado todavía.' -ForegroundColor DarkGray }
+        Write-Host ''
+        Write-JuicerMenu @(
+            @('A', 'Añadir un juego', 'por nombre del .exe, con el límite recomendado o el tuyo'),
+            @('M', 'Añadir los juegos medidos', (@(Get-JuicerUnlimitedGames) -join ', ')),
+            @('Q', 'Quitar un límite', 'por número'),
+            @('U', 'Cómo usas tu monitor', 'VRR, ELMB/DyAc u otro estroboscopio, o frecuencia fija'),
+            @('R', 'Recalcular los límites', 'con el modo y la frecuencia de ahora')
+        )
+        switch ((Read-JuicerChoice 'Elige, Intro para volver').ToUpperInvariant()) {
+            'A' {
+                $exe = Read-JuicerChoice 'Nombre del .exe (por ejemplo cs2.exe)'
+                if (-not $exe) { continue }
+                $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'
+                $fps = if ($f -match '^\d+$') { [int]$f } else { 0 }
+                Show-JuicerResults @(Add-JuicerFpsLimit $exe $fps)
+            }
+            'M' { Show-JuicerResults @(foreach ($g in @(Get-JuicerUnlimitedGames)) { Add-JuicerFpsLimit $g }) }
+            'Q' {
+                $q = Read-JuicerChoice 'Número'
+                if ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count) { Show-JuicerResults @(Undo-JuicerTweak $limits[[int]$q - 1].Id) }
+            }
+            'U' {
+                if (-not $m) { Write-JuicerWrapped 'No se pudo leer el monitor.' 2 'Yellow'; Wait-JuicerKey; continue }
+                $modes = Get-JuicerMonitorModes
+                $keys = @($modes.Keys)
+                Write-Host ''
+                for ($i = 0; $i -lt $keys.Count; $i++) { Write-Host ('  {0}. {1}' -f ($i + 1), $modes[$keys[$i]]) }
+                $q = Read-JuicerChoice 'Número'
+                if ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $keys.Count) {
+                    [void](Set-JuicerMonitorMode $m $keys[[int]$q - 1])
+                    if ($limits.Count -gt 0 -and (Confirm-JuicerAction '¿Recalcular con este modo los límites que ya tienes?')) { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
+                }
+            }
+            'R' { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             '' { return }
         }
     }
@@ -910,6 +1000,7 @@ function Show-JuicerMainMenu {
             @('11', 'Deshacer', 'todo, o cambio a cambio'),
             @('12', 'Lo que no hacemos', 'los «trucos» que circulan, y por qué no'),
             @('13', 'Antes y después', 'arranque, procesos y memoria: qué han cambiado los ajustes'),
+            @('14', 'Ajuste fino', 'undervolt de CPU y overclock de GPU para tus componentes, y vigilarlos'),
             @('0', 'Salir', '')
         )
         if ($script:UpdateNotice) {
@@ -931,6 +1022,7 @@ function Show-JuicerMainMenu {
             '11' { Show-JuicerUndo }
             '12' { Show-JuicerMyths }
             '13' { Show-JuicerMeasure }
+            '14' { Show-JuicerFineTune }
             '0' { return }
         }
     }
@@ -1003,8 +1095,16 @@ function Start-Juicer {
         [switch]$Equipo,
         [switch]$Medir,
         [switch]$NuevaMedida,
+        [switch]$ApuntarAjuste,
+        [string]$AjusteCpu,
+        [string]$AjusteGpu,
+        [ValidateSet('', 'Afterburner', 'Adrenalin', 'Intel')][string]$HerramientaGpu = '',
+        [switch]$OlvidarAjuste,
         [int]$MedirJuego,
         [string]$Juego,
+        [string[]]$LimitarFps = @(),
+        [int]$Fps,
+        [string]$ModoMonitor,
         [switch]$Lista,
         [switch]$Recomendado,
         [string]$Perfil,
@@ -1028,7 +1128,8 @@ function Start-Juicer {
     $Deshacer = & $split $Deshacer
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $MedirJuego -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $LimitarFps = & $split $LimitarFps
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
@@ -1057,6 +1158,27 @@ function Start-Juicer {
         return 0
     }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
+    $monitor = $null
+    if ($ModoMonitor) {
+        $mode = @((Get-JuicerMonitorModes).Keys | Where-Object { $_ -eq $ModoMonitor })
+        if ($mode.Count -eq 0) { Write-Host ('  -ModoMonitor admite: ' + (@((Get-JuicerMonitorModes).Keys) -join ', ') + '.') -ForegroundColor Yellow; return 2 }
+        $ModoMonitor = $mode[0]
+        try { $monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+        if ($monitor) {
+            [void](Set-JuicerMonitorMode $monitor $ModoMonitor)
+            Write-Host ('  ' + (Format-JuicerMonitor $monitor))
+        } elseif ($LimitarFps.Count -eq 0) {
+            Write-Host '  No se pudo leer el monitor para guardar cómo lo usas.' -ForegroundColor Yellow
+            return 1
+        }
+        if ($LimitarFps.Count -eq 0) { return 0 }
+    }
+    if ($LimitarFps.Count -gt 0) {
+        if ($Fps -and ($Fps -lt 20 -or $Fps -gt 1000)) { Write-Host '  -Fps va de 20 a 1000.' -ForegroundColor Yellow; return 2 }
+        $results = @(foreach ($exe in $LimitarFps) { Add-JuicerFpsLimit $exe $Fps $monitor $ModoMonitor })
+        Show-JuicerResults $results
+        return $(if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
+    }
     if ($MedirJuego) {
         if ($MedirJuego -lt 10 -or $MedirJuego -gt 600) { Write-Host '  -MedirJuego va de 10 a 600 segundos.' -ForegroundColor Yellow; return 2 }
         try {
@@ -1068,6 +1190,14 @@ function Start-Juicer {
             Write-Host "  No se pudo medir: $_" -ForegroundColor Yellow
             return 1
         }
+    }
+    if ($OlvidarAjuste) { Remove-JuicerTuneRecord; Unregister-JuicerTuneWatch; Write-Host '  Ajuste fino olvidado.'; return 0 }
+    if ($ApuntarAjuste) {
+        if (-not $AjusteCpu -and -not $AjusteGpu) { Write-Host '  Indica -AjusteCpu, -AjusteGpu o los dos.' -ForegroundColor Yellow; return 2 }
+        [void](Save-JuicerTuneRecord -Cpu $AjusteCpu -Gpu $AjusteGpu -GpuTool $HerramientaGpu)
+        Register-JuicerTuneWatch
+        Write-JuicerFindings @(Get-JuicerTuneCheck)
+        return 0
     }
     if ($Medir -or $NuevaMedida) { Write-JuicerFindings (Invoke-JuicerMeasure -Reset:$NuevaMedida); return 0 }
     if ($Exportar) {

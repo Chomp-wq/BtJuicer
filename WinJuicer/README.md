@@ -66,7 +66,7 @@ para copiar la orden de una línea.
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
-| **Juegos** | Medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
+| **Juegos** | Medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), limitador de FPS por juego, GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
 | **No hacemos** | Los «trucos» que circulan, y por qué no. |
@@ -110,6 +110,11 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Medir                                  # antes y después: comparado con la medida inicial
 .\WinJuicer.ps1 -MedirJuego 60                          # FPS y frametimes de lo que juegues (empieza en 10 s)
 .\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
+.\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # límite recomendado, aplicado solo cada vez que los abras
+.\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o el tuyo
+.\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
+.\WinJuicer.ps1 -OlvidarAjuste
+.\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el límite va exacto a los Hz
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
@@ -199,6 +204,25 @@ Windows guarda las pruebas, y Win Juicer las lee:
   10, en octubre de 2025). Si una directiva `TargetReleaseVersion` te ata a una
   versión antigua (algunas herramientas de «debloat» la ponen) o tienes las
   versiones nuevas retrasadas, lo dice, y entonces no recomienda retrasarlas.
+- **Combinaciones**: lo que sólo se ve mirando las piezas juntas.
+  - La **RAM según el procesador**: en un Ryzen 5000 lo que rinde es 3600-3800
+    en 1:1 con el Infinity Fabric, así que un kit de 4000 a 3600 está bien
+    elegido y a 4000 pierde; en AM5, 6000-6400; en Zen 2 y anteriores, menos;
+    las APU aguantan más. Ya no pide el XMP de un kit por encima de eso.
+  - Qué **ajuste fino** admite tu Ryzen: Curve Optimizer en los X3D (los
+    5000X3D y 7000X3D no se pueden subir de frecuencia), PBO completo en los
+    9000X3D.
+  - **Gráficas de 8 o 4 líneas PCIe** (RTX 4060/5060, RX 6600/7600, RX 6500
+    XT, Arc B580…) en un procesador o una placa de PCIe 3.0 (APU de AM4,
+    Ryzen 5500/5700, B450/A520, Intel de 10.ª o anterior, H510).
+  - La **VRAM frente a la resolución** de tu monitor (8 GB a 1440p o 4K).
+  - Una **APU sin gráfica dedicada**: la memoria que la BIOS le reserva (UMA
+    Frame Buffer Size).
+  - **Procesador y gráfica desequilibrados**: qué ajustes dan FPS y cuáles no
+    según cuál de los dos manda.
+  - **Portátil en modo híbrido**: la pantalla la dibuja la integrada; dónde
+    se cambia a sólo la dedicada (MUX) según la marca.
+  - Un **procesador híbrido de Intel en Windows 10**, sin Thread Director.
 
 ## Los tres perfiles
 
@@ -290,6 +314,120 @@ segundos. Al acabar dice:
   de fotogramas y, con NVIDIA, la temperatura y si la gráfica bajó de frecuencia.
 - **Comparado con la medida anterior del mismo juego**: así ves si el último
   cambio dio FPS o sólo lo parecía.
+- **El límite de FPS que le conviene a ese juego**, para el limitador.
+
+### Limitador de FPS
+
+Un límite por juego, pensado para frametimes planos **sin sumar latencia**, que
+se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
+
+- **Dónde**: con NVIDIA, en el limitador del propio driver («Velocidad máxima
+  de fotogramas»), en el perfil de ese `.exe`, por NVAPI, la API oficial de
+  NVIDIA (identificadores y estructuras de su `nvapi.h`). No se inyecta nada en
+  el juego: los anti-trampas no tienen nada que objetar. Sin NVIDIA, en el
+  perfil de ese juego de RivaTuner Statistics Server.
+- **Según tu monitor y cómo lo usas.** El monitor no dice si tienes ELMB,
+  DyAc o similar encendido, así que lo eliges una vez por monitor en «Cómo usas
+  tu monitor» (o con `-ModoMonitor`): Automático, Frecuencia variable,
+  Estroboscopio sin VRR, Estroboscopio con VRR (ELMB Sync, Aim Stabilizer
+  Sync) o Frecuencia fija. «Recalcular los límites» los vuelve a poner con el
+  modo nuevo.
+- **Cuánto**, como objetivo de frametime:
+  - con frecuencia variable (con o sin estroboscopio), **Hz − Hz²/3600**, la
+    cifra que usa NVIDIA Reflex (138 a 144 Hz, 157 a 165 Hz, 171 a 180 Hz, 224
+    a 240 Hz): siempre dentro del rango VRR;
+  - **con estroboscopio sin VRR** (por ejemplo ELMB a 180 Hz), **exactamente
+    los Hz**, con la sincronización vertical forzada: cada destello necesita un
+    fotograma nuevo, los cortes con estrobo se ven el doble, y como el juego no
+    produce más fotogramas de los que la pantalla enseña no se forma cola. Nunca
+    por debajo: repetiría fotogramas, y el estrobo los convierte en saltos. Si
+    tus medidas dicen que un juego no llega a los Hz, te propone la frecuencia
+    más alta de tu monitor que sí sostiene (para usar el estrobo ahí) o VRR
+    para ese juego;
+  - a frecuencia fija, los Hz;
+  - y fuera del estroboscopio sin VRR, si mediste el juego y sus frametimes
+    oscilan, **lo que sostiene el 90 % del tiempo**: un ritmo constante se nota
+    más fluido que una media más alta con tirones.
+- **La latencia**: un límite que el juego alcanza deja la gráfica por debajo
+  del 100 %, así que no se forma cola de fotogramas, que es de donde sale la
+  latencia. Con NVIDIA el perfil del juego recibe además la receta de baja
+  latencia: fotogramas pre-renderizados a 1 («Modo de baja latencia:
+  activado»; en juegos con **Reflex** manda Reflex, y el límite se aplica a
+  través de él) y, con G-SYNC, la sincronización vertical forzada, que con el
+  límite por debajo de los Hz no llega a actuar más que para tapar un corte en
+  un pico (con estroboscopio sin VRR, para que cada destello tenga su
+  fotograma). También el modo de energía «Preferir rendimiento máximo», sólo
+  para ese juego: con el límite la gráfica no va al 100 % y el driver podría
+  bajarle la frecuencia en escenas ligeras, y el siguiente fotograma pesado
+  llegaría tarde. El modo «Ultra» no tiene un identificador público y no se
+  toca.
+- Con RivaTuner, en su Setup: «Front edge sync» da la menor latencia y «Back
+  edge sync» los frametimes más planos.
+- Se deshace como todo lo demás, devolviendo el límite que tuviera el juego.
+  Mide antes y después: la medida compara FPS, 1 % bajo y latencia.
+
+### Ajuste fino: undervolt y overclock
+
+Pestaña **Ajuste fino** (opción 14 de la consola). Para tu procesador y tu
+gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
+
+- **Procesador, en la BIOS.**
+  - Ryzen 5000X3D (5700X3D, 5800X3D…): Curve Optimizer de -15 a -30, o un
+    offset de -0,03 a -0,05 V.
+  - 7000X3D: Curve Optimizer.
+  - 9000X3D: Curve Optimizer más PBO y Boost Override.
+  - Ryzen 5000/7000/9000: Curve Optimizer por núcleo y PBO.
+  - Intel K de 12.ª a 14.ª: AC Load Line u offset, tras el microcódigo 0x12B
+    en 13.ª y 14.ª.
+  - La placa lo guarda y lo aplica en cada arranque, antes de Windows, sin
+    ningún programa. Win Juicer no lo aplica desde Windows: las herramientas que
+    lo hacen necesitan un driver de núcleo (WinRing0 y similares) que Microsoft
+    Defender marca como vulnerable desde 2025 y que los anti-trampas vigilan.
+- **Gráfica, en su herramienta**, con la receta de cada arquitectura:
+  - RTX 50: frecuencia +200-300 y GDDR7.
+  - RTX 40: curva a 0,95-1,00 V.
+  - RTX 30: curva a 850-900 mV; la GDDR6X rinde menos, sin colgarse, si te
+    pasas de memoria.
+  - RTX 20/GTX 16, GTX 10, RX 9000/7000/6000 e Intel Arc: cada una con su
+    receta.
+  - Cómo hacer que se aplique en cada inicio: el perfil de Afterburner con
+    «Aplicar overclock al iniciar el sistema», o AMD Software, que lo conserva
+    salvo tras un cuelgue. La API pública de NVIDIA permite leer frecuencias y
+    voltajes, no fijarlos, así que Win Juicer no escribe un overclock a ciegas.
+- **Lo apuntas y lo vigila.** Escribes lo que aplicaste («Curve Optimizer
+  -30», «curva 900 mV a 1900 MHz»). Win Juicer guarda también la versión de la
+  BIOS y la velocidad de la RAM, y en cada inicio de sesión (una tarea como tu
+  usuario, sin administrador) avisa con una notificación si:
+  - una actualización de BIOS lo ha borrado;
+  - la RAM ha vuelto a otra velocidad;
+  - hay errores WHEA o cuelgues del driver de la gráfica desde entonces;
+  - Afterburner ya no arranca con Windows.
+
+Los valores son puntos de partida: cada chip es distinto. Pruébalos como dice
+cada receta y mide FPS antes y después con Juegos > Medir.
+
+### El monitor
+
+El diagnóstico lee el EDID de cada monitor: marca y modelo, **FreeSync** (y su
+rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
+
+- Los pasos exactos para tu gráfica: G-SYNC en el panel de NVIDIA con la
+  sincronización vertical como se debe y Reflex en los juegos; FreeSync en AMD
+  Software; Adaptive Sync en Intel. Y que lo actives también en el menú del
+  monitor, que a menudo viene apagado.
+- Si su rango no tiene LFC, por debajo de qué FPS vuelven los tirones.
+- La tecnología anti-desenfoque de tu marca (**ELMB** en ASUS, **DyAc** en
+  BenQ, **VRB** en Acer, **Aim Stabilizer** en Gigabyte…) y si te serviría:
+  sólo si el juego no baja nunca de los Hz, según tus medidas. Esto no viaja en
+  el EDID: Win Juicer no puede saber si tu modelo la tiene ni si está
+  encendida, por eso le dices cómo usas el monitor. Si usas el estroboscopio,
+  los consejos cambian: el límite exacto a los Hz, que suele funcionar sólo a
+  ciertas frecuencias, el overdrive que va con él, y qué juegos de tus medidas
+  no llegan a los Hz y a qué frecuencia bajar para ellos.
+- El overdrive en su nivel intermedio, y si su HDR merece la pena o es de
+  entrada.
+- G-Sync con módulo no se distingue desde Windows; en NVIDIA un monitor
+  FreeSync funciona como «G-Sync Compatible» y los pasos son los mismos.
 
 ### Interfaz
 
@@ -520,6 +658,9 @@ WinJuicer/
   src/Config.ps1          exportar e importar la configuración
   src/Measure.ps1         antes y después: medir y comparar
   src/Frames.ps1          FPS y frametimes con PresentMon
+  src/Monitor.ps1         el monitor: EDID, FreeSync, VRR, HDR y consejos
+  src/Limiter.ps1         limitador de FPS por juego
+  src/FineTune.ps1        undervolt de CPU y overclock de GPU: recetas, registro y vigilancia
   src/Version.ps1         aviso de versión nueva
   src/Startup.ps1         programas de inicio
   src/Games.ps1           bibliotecas de juegos y ajustes por ejecutable

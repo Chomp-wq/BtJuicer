@@ -120,6 +120,36 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         Write-Host "    $($f[0].Title)"
     }
 
+    It 'lee los monitores y sabe qué limitador de FPS hay' {
+        $m = @(Get-JuicerMonitors)
+        foreach ($x in $m) { Write-Host "    $(if ($x.Info) { Format-JuicerMonitor $x } else { $x.Display.Monitor + ' (sin EDID)' })" }
+        { Get-JuicerMonitorFindings $m 'NVIDIA' } | Should -Not -Throw
+        Initialize-JuicerNvApi
+        [WinJuicer.NvDrs]::SettingVersion | Should -Be 0x13020
+        [WinJuicer.NvDrs]::ApplicationVersion | Should -Be 0x4500C
+        # The runner has no NVIDIA driver: it must say so, not fail.
+        { Get-JuicerFpsBackend } | Should -Not -Throw
+        Write-Host "    Limitador: '$(Get-JuicerFpsBackend)'"
+    }
+
+    It 'apunta el ajuste fino y crea y quita la tarea que lo vigila' {
+        [void](Save-JuicerTuneRecord -Cpu 'Curve Optimizer -20')
+        (Read-JuicerTuneRecord).Bios | Should -Not -BeNullOrEmpty
+        { Get-JuicerTuneCheck } | Should -Not -Throw
+        Register-JuicerTuneWatch
+        try {
+            Test-JuicerTuneWatch | Should -BeTrue
+            Test-Path (Join-Path (Get-JuicerTuneWatchDir) 'vigilar-ajuste-fino.ps1') | Should -BeTrue
+            # The watcher itself, run once: without changes it says nothing and leaves its state.
+            & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path (Get-JuicerTuneWatchDir) 'vigilar-ajuste-fino.ps1')
+            Test-Path (Join-Path (Get-JuicerTuneWatchDir) 'vigilar-estado.json') | Should -BeTrue
+        } finally {
+            Unregister-JuicerTuneWatch
+            Remove-JuicerTuneRecord
+        }
+        Test-JuicerTuneWatch | Should -BeFalse
+    }
+
     It 'mide arranque, procesos, servicios, memoria y espacio' {
         $m = Get-JuicerMetrics
         $m.Processes | Should -BeGreaterThan 10

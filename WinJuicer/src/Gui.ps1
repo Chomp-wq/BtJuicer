@@ -307,6 +307,21 @@ $script:GuiXaml = @'
               <Button x:Name="BtnFrameMeasure" Content="Medir (empieza en 10 s)" Style="{StaticResource Accent}"/>
             </WrapPanel>
             <StackPanel x:Name="FramePanel"/>
+            <TextBlock Text="Limitador de FPS" Style="{StaticResource Head}"/>
+            <TextBlock x:Name="LimitNote" Style="{StaticResource Note}" Text="Un límite por juego que se aplica solo cada vez que lo abres, sin inyectar nada en el juego (los anti-trampas no tienen nada que objetar)."/>
+            <WrapPanel>
+              <TextBlock Text="Cómo usas tu monitor:" VerticalAlignment="Center" Margin="4,0,6,0" Foreground="#9A9AA5"/>
+              <ComboBox x:Name="MonitorMode" Width="430" Margin="3" ToolTip="El monitor no dice si tienes ELMB, DyAc o similar encendido: dilo aquí y el límite se ajusta"/>
+              <Button x:Name="BtnLimitRecalc" Content="Recalcular los límites"/>
+            </WrapPanel>
+            <StackPanel x:Name="LimitPanel"/>
+            <WrapPanel>
+              <Button x:Name="BtnLimitExe" Content="Añadir un juego (.exe)…" Style="{StaticResource Accent}"/>
+              <TextBox x:Name="LimitFps" Width="60" Margin="3" VerticalContentAlignment="Center" ToolTip="Déjalo vacío para usar el límite recomendado"/>
+              <TextBlock Text="FPS (vacío: el recomendado)" VerticalAlignment="Center" Foreground="#9A9AA5" Margin="0,0,8,0"/>
+              <Button x:Name="BtnLimitMeasured" Content="Añadir los juegos medidos"/>
+              <Button x:Name="BtnLimitRemove" Content="Quitar el límite a los marcados"/>
+            </WrapPanel>
             <TextBlock Text="Configurar un juego" Style="{StaticResource Head}"/>
             <TextBlock Style="{StaticResource Note}" Text="Elige el .exe del juego (el que se ejecuta de verdad, no el lanzador). La GPU de alto rendimiento sólo cambia algo con dos gráficas, como en los portátiles con integrada y dedicada."/>
             <WrapPanel>
@@ -327,6 +342,39 @@ $script:GuiXaml = @'
               <Button x:Name="BtnLibRefresh" Content="Volver a buscar"/>
             </WrapPanel>
             <TextBlock Style="{StaticResource Note}" Margin="4,12,4,4" Text="Lo que configures aquí se deshace en la pestaña Deshacer, como todo lo demás."/>
+          </StackPanel>
+        </ScrollViewer>
+      </TabItem>
+
+      <TabItem Header="Ajuste fino" x:Name="TabAjusteFino">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="14,4,14,10">
+            <TextBlock Text="Undervolt y overclock para tu equipo" Style="{StaticResource Head}"/>
+            <TextBlock Style="{StaticResource Note}" Text="El del procesador va en la BIOS: la placa lo guarda y lo aplica en cada arranque sin ningún programa, y Win Juicer no instala drivers de núcleo para tocarlo desde Windows (Defender los marca como vulnerables y los anti-trampas los vigilan). El de la gráfica, en su herramienta (Afterburner, AMD Software o Intel), que lo aplica al iniciar. Aquí tienes los valores de partida para tus componentes."/>
+            <StackPanel x:Name="FineGuidePanel"/>
+            <TextBlock Text="Lo que has aplicado" Style="{StaticResource Head}"/>
+            <TextBlock Style="{StaticResource Note}" Text="Apúntalo y Win Juicer lo recordará: en cada inicio de sesión comprueba que una actualización de BIOS no lo ha borrado, que la RAM sigue a su velocidad y que no hay errores ni cuelgues desde entonces, y te avisa si algo cambia."/>
+            <Grid Margin="0,4,0,0">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="160"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
+              <TextBlock Grid.Row="0" Text="Procesador (BIOS)" VerticalAlignment="Center" Foreground="#9A9AA5"/>
+              <TextBox Grid.Row="0" Grid.Column="1" x:Name="FineCpu" Margin="3" ToolTip="Por ejemplo: Curve Optimizer -30, o offset -40 mV"/>
+              <TextBlock Grid.Row="1" Text="Gráfica" VerticalAlignment="Center" Foreground="#9A9AA5"/>
+              <TextBox Grid.Row="1" Grid.Column="1" x:Name="FineGpu" Margin="3" ToolTip="Por ejemplo: curva 900 mV a 1900 MHz, memoria +500"/>
+              <TextBlock Grid.Row="2" Text="La aplica" VerticalAlignment="Center" Foreground="#9A9AA5"/>
+              <ComboBox Grid.Row="2" Grid.Column="1" x:Name="FineGpuTool" Margin="3" Width="220" HorizontalAlignment="Left" SelectedIndex="0">
+                <ComboBoxItem Content="Nada / no lo sé" Tag=""/>
+                <ComboBoxItem Content="MSI Afterburner" Tag="Afterburner"/>
+                <ComboBoxItem Content="AMD Software (Adrenalin)" Tag="Adrenalin"/>
+                <ComboBoxItem Content="Intel Graphics Software" Tag="Intel"/>
+              </ComboBox>
+            </Grid>
+            <CheckBox x:Name="FineWatch" Content="Comprobarlo cada vez que inicio sesión y avisarme" IsChecked="True"/>
+            <WrapPanel>
+              <Button x:Name="BtnFineSave" Content="Apuntar mi ajuste" Style="{StaticResource Accent}"/>
+              <Button x:Name="BtnFineForget" Content="Olvidarlo"/>
+            </WrapPanel>
+            <StackPanel x:Name="FineCheckPanel"/>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -456,6 +504,20 @@ $script:GuiWork = @{
     Frames     = {
         @{ Findings = @(Invoke-JuicerFrameCapture -Seconds ([int]$A.Seconds) -Delay 10 -OnStatus { param($t) $Sync.Status = $t }) }
     }
+    FineTune   = {
+        if ($A.Save) {
+            $Sync.Status = 'Apuntando tu ajuste…'
+            [void](Save-JuicerTuneRecord -Cpu $A.Cpu -Gpu $A.Gpu -GpuTool $A.Tool)
+            if ($A.Watch) { Register-JuicerTuneWatch } else { Unregister-JuicerTuneWatch }
+        }
+        if ($A.Forget) { Remove-JuicerTuneRecord; Unregister-JuicerTuneWatch }
+        $Sync.Status = 'Comprobando tu ajuste fino…'
+        $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | ForEach-Object { Get-JuicerGpuTraits $_.Name })
+        @{
+            Guide = @(Get-JuicerTuneGuideFindings (Get-JuicerCpuInfo) $gpus (Test-JuicerLaptop) | Where-Object { $_.Title -notlike 'Apunta en Win Juicer*' })
+            Check = @(Get-JuicerTuneCheck); Record = (Read-JuicerTuneRecord); Watch = (Test-JuicerTuneWatch)
+        }
+    }
     Measure    = {
         $Sync.Status = 'Midiendo arranque, procesos y memoria…'
         @{ Findings = @(Invoke-JuicerMeasure -Reset:([bool]$A.Reset)) }
@@ -516,7 +578,21 @@ $script:GuiWork = @{
         $libs = @(foreach ($l in @(Get-JuicerGameLibraries)) {
                 @{ Path = $l.Path; Launcher = $l.Launcher; State = (Get-JuicerTweakState (New-JuicerDefenderTweak $l.Path $l.Launcher) $journal).State }
             })
-        @{ Libraries = $libs }
+        $Sync.Status = 'Leyendo el monitor y los límites de FPS…'
+        @{ Libraries = $libs; Limiter = (Get-JuicerGuiLimiter) }
+    }
+    Limiter    = {
+        $r = @()
+        if ($A.Recalc) { $Sync.Status = 'Recalculando los límites…'; $r += @(Update-JuicerFpsLimits) }
+        foreach ($exe in @($A.Add)) { $Sync.Status = "Limitando $exe…"; $r += Add-JuicerFpsLimit $exe ([int]$A.Fps) }
+        foreach ($id in @($A.Remove)) { $Sync.Status = "Quitando $id…"; $r += Undo-JuicerTweak $id }
+        @{ Limiter = (Get-JuicerGuiLimiter); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
+    }
+    MonitorMode = {
+        $m = Get-JuicerPrimaryMonitor
+        if (-not $m) { throw 'No se pudo leer el monitor.' }
+        [void](Set-JuicerMonitorMode $m $A.Mode)
+        @{ Limiter = (Get-JuicerGuiLimiter) }
     }
     Installed  = {
         $Sync.Status = 'Preguntando a winget qué está instalado…'
@@ -1001,8 +1077,92 @@ function Start-JuicerGuiInstalled {
     }
 }
 
+function Start-JuicerGuiFineTune {
+    param([hashtable]$Arguments = @{})
+    Start-JuicerGuiTask 'Leyendo tu ajuste fino…' 'FineTune' $Arguments {
+        param($r)
+        $c = $script:Gui.C
+        $c.FineGuidePanel.Children.Clear()
+        foreach ($f in @($r.Guide)) { [void]$c.FineGuidePanel.Children.Add((New-JuicerFindingCard $f)) }
+        if (@($r.Guide).Count -eq 0) { [void]$c.FineGuidePanel.Children.Add((New-JuicerUi TextBlock @{ Text = 'Para tus componentes no hay una receta que merezca la pena (portátil, o procesador sin margen).'; Foreground = '#9A9AA5'; TextWrapping = 'Wrap' })) }
+        $c.FineCheckPanel.Children.Clear()
+        foreach ($f in @($r.Check)) { [void]$c.FineCheckPanel.Children.Add((New-JuicerFindingCard $f)) }
+        if ($r.Record) {
+            $c.FineCpu.Text = [string]$r.Record.Cpu
+            $c.FineGpu.Text = [string]$r.Record.Gpu
+            foreach ($i in $c.FineGpuTool.Items) { if ([string]$i.Tag -eq [string]$r.Record.GpuTool) { $c.FineGpuTool.SelectedItem = $i } }
+            $c.FineWatch.IsChecked = [bool]$r.Watch
+        }
+        Set-JuicerGuiStatus 'Ajuste fino al día.'
+    }
+}
+
 function Start-JuicerGuiGames {
-    Start-JuicerGuiTask 'Buscando bibliotecas de juegos…' 'Games' @{} { param($r) Show-JuicerGuiGames $r.Libraries }
+    Start-JuicerGuiTask 'Buscando bibliotecas de juegos…' 'Games' @{} { param($r) Show-JuicerGuiGames $r.Libraries; Show-JuicerGuiLimiter $r.Limiter }
+}
+
+# What the limiter section shows, read in the background.
+function Get-JuicerGuiLimiter {
+    $m = $null
+    try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+    $cap = if ($m) { Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) } else { $null }
+    @{
+        Backend = (Get-JuicerFpsBackend); Monitor = $(if ($m) { Format-JuicerMonitor $m } else { '' }); Cap = $cap
+        Mode = $(if ($m) { $m.Mode } else { '' })
+        Limits = @(Get-JuicerFpsLimits); Unlimited = @(Get-JuicerUnlimitedGames)
+    }
+}
+
+function Show-JuicerGuiLimiter {
+    param([hashtable]$L)
+    if (-not $L) { return }
+    $c = $script:Gui.C
+    $script:Gui.Unlimited = @($L.Unlimited)
+    $lines = @("Limita con: $(Format-JuicerFpsBackend $L.Backend).")
+    if ($L.Monitor) { $lines += "Tu pantalla: $($L.Monitor)." }
+    if ($L.Cap) { $lines += "Límite recomendado: $($L.Cap.Fps) FPS. $($L.Cap.Why) Si mediste un juego y sus frametimes oscilan, a ese juego le pone el que sostiene." }
+    $c.LimitNote.Text = $lines -join ' '
+    # Filling the list or choosing the saved mode is not the user changing it.
+    $script:Gui.SettingMode = $true
+    try {
+        if ($c.MonitorMode.Items.Count -eq 0) {
+            $modes = Get-JuicerMonitorModes
+            foreach ($k in $modes.Keys) { [void]$c.MonitorMode.Items.Add((New-JuicerUi ComboBoxItem @{ Content = $modes[$k]; Tag = $k })) }
+        }
+        $c.MonitorMode.IsEnabled = [bool]$L.Mode
+        foreach ($it in $c.MonitorMode.Items) { if ([string]$it.Tag -eq [string]$L.Mode) { $c.MonitorMode.SelectedItem = $it } }
+    } finally {
+        $script:Gui.SettingMode = $false
+    }
+    $c.BtnLimitRecalc.IsEnabled = @($L.Limits).Count -gt 0
+    $c.LimitPanel.Children.Clear()
+    foreach ($g in @($L.Limits)) {
+        $txt = if ($g.Fps) { '{0}: {1} FPS' -f $g.Exe, $g.Fps } else { '{0}: sin límite ahora (lo cambiaron fuera de Win Juicer)' -f $g.Exe }
+        [void]$c.LimitPanel.Children.Add((New-JuicerUi CheckBox @{ Content = $txt; Tag = $g.Id }))
+    }
+    if (@($L.Limits).Count -eq 0) {
+        [void]$c.LimitPanel.Children.Add((New-JuicerUi TextBlock @{ Text = 'Ningún juego limitado todavía.'; Foreground = '#9A9AA5'; Margin = '4,2' }))
+    }
+    $c.BtnLimitMeasured.IsEnabled = @($L.Unlimited).Count -gt 0
+    $c.BtnLimitMeasured.ToolTip = if (@($L.Unlimited).Count -gt 0) { 'Medidos sin límite: ' + (@($L.Unlimited) -join ', ') } else { 'Mide un juego primero (arriba)' }
+}
+
+function Start-JuicerGuiLimiter {
+    param([string[]]$Add = @(), [string[]]$Remove = @(), [switch]$Recalc)
+    $fps = 0
+    $t = ([string]$script:Gui.C.LimitFps.Text).Trim()
+    if ($t -and $Add.Count -gt 0) {
+        if ($t -notmatch '^\d+$' -or [int]$t -lt 20 -or [int]$t -gt 1000) { Show-JuicerGuiMessage 'El límite tiene que ser un número de 20 a 1000, o vacío para el recomendado.' | Out-Null; return }
+        $fps = [int]$t
+    }
+    Start-JuicerGuiTask 'Aplicando el limitador…' 'Limiter' @{ Add = $Add; Remove = $Remove; Fps = $fps; Recalc = [bool]$Recalc } {
+        param($r)
+        Show-JuicerGuiLimiter $r.Limiter
+        $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica' })
+        if ($bad.Count -gt 0) { Show-JuicerGuiMessage (($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message }) -join "`n") 'Warning' | Out-Null }
+        Show-JuicerGuiUndo
+        Set-JuicerGuiStatus 'Limitador actualizado: se aplica solo cada vez que abras esos juegos.'
+    }
 }
 
 function Show-JuicerGuiGames {
@@ -1042,6 +1202,17 @@ function Register-JuicerGuiHandlers {
     $h = @{
         BtnAudit              = { Start-JuicerGuiAudit }
         BtnMeasure            = { Start-JuicerGuiMeasure $false }
+        BtnFineSave           = {
+            $c = $script:Gui.C
+            $cpu = ([string]$c.FineCpu.Text).Trim(); $gpu = ([string]$c.FineGpu.Text).Trim()
+            if (-not $cpu -and -not $gpu) { Show-JuicerGuiMessage 'Escribe qué has aplicado al procesador, a la gráfica o a los dos.' | Out-Null; return }
+            $tool = if ($c.FineGpuTool.SelectedItem) { [string]$c.FineGpuTool.SelectedItem.Tag } else { '' }
+            Start-JuicerGuiFineTune @{ Save = $true; Cpu = $cpu; Gpu = $gpu; Tool = $tool; Watch = [bool]$c.FineWatch.IsChecked }
+        }
+        BtnFineForget         = {
+            if (-not (Confirm-JuicerGui '¿Olvidar tu ajuste apuntado y dejar de comprobarlo al iniciar sesión? No cambia nada en la BIOS ni en la gráfica.')) { return }
+            Start-JuicerGuiFineTune @{ Forget = $true }
+        }
         BtnFrameMeasure       = {
             $item = $script:Gui.C.FrameSeconds.SelectedItem
             $secs = if ($item) { [int]$item.Tag } else { 60 }
@@ -1085,6 +1256,18 @@ function Register-JuicerGuiHandlers {
             Start-JuicerGuiTask 'Configurando el juego…' 'Run' @{ Games = $games } { param($r) Complete-JuicerGuiRun $r }
         }
         BtnLibRefresh         = { Start-JuicerGuiGames }
+        BtnLimitExe           = {
+            $d = New-Object Microsoft.Win32.OpenFileDialog
+            $d.Filter = 'Juegos (*.exe)|*.exe'
+            if ($d.ShowDialog()) { Start-JuicerGuiLimiter -Add @($d.FileName) }
+        }
+        BtnLimitMeasured      = { if (@($script:Gui.Unlimited).Count -gt 0) { Start-JuicerGuiLimiter -Add @($script:Gui.Unlimited) } }
+        BtnLimitRecalc        = { Start-JuicerGuiLimiter -Recalc }
+        BtnLimitRemove        = {
+            $ids = @($script:Gui.C.LimitPanel.Children | Where-Object { $_.IsChecked -and $_.Tag } | ForEach-Object { [string]$_.Tag })
+            if ($ids.Count -eq 0) { Show-JuicerGuiMessage 'Marca los juegos a los que quitar el límite.' | Out-Null; return }
+            Start-JuicerGuiLimiter -Remove $ids
+        }
         BtnLibFolder          = {
             Add-Type -AssemblyName System.Windows.Forms
             $d = ('System.Windows.Forms.FolderBrowserDialog' -as [type])::new()
@@ -1236,6 +1419,20 @@ function Register-JuicerGuiHandlers {
             })
     }
     $c.SearchBox.Add_TextChanged({ Set-JuicerGuiSearch })
+    $c.MonitorMode.Add_SelectionChanged({
+            if ($script:Gui.SettingMode) { return }
+            $item = $script:Gui.C.MonitorMode.SelectedItem
+            if (-not $item) { return }
+            Start-JuicerGuiTask 'Guardando cómo usas el monitor…' 'MonitorMode' @{ Mode = [string]$item.Tag } {
+                param($r)
+                Show-JuicerGuiLimiter $r.Limiter
+                if (@($r.Limiter.Limits).Count -gt 0 -and (Confirm-JuicerGui '¿Recalcular con este modo los límites de los juegos que ya tienes limitados?')) {
+                    Start-JuicerGuiLimiter -Recalc
+                } else {
+                    Set-JuicerGuiStatus 'Guardado. Los juegos que limites a partir de ahora usarán este modo.'
+                }
+            }
+        })
     $c.Tabs.Add_SelectionChanged({
             # $_ is the event: the ComboBox inside a tab raises it too.
             if ($_.OriginalSource -ne $script:Gui.C.Tabs -or -not $script:Gui.Ready) { return }
@@ -1244,6 +1441,7 @@ function Register-JuicerGuiHandlers {
             elseif ($tab -eq $script:Gui.C.TabInstalar -and $null -eq $script:Gui.Installed) { Start-JuicerGuiInstalled }
             elseif ($tab -eq $script:Gui.C.TabInicio -and -not $script:Gui.StartupLoaded) { $script:Gui.StartupLoaded = $true; Start-JuicerGuiStartupList }
             elseif ($tab -eq $script:Gui.C.TabJuegos -and -not $script:Gui.GamesLoaded) { $script:Gui.GamesLoaded = $true; Start-JuicerGuiGames }
+            elseif ($tab -eq $script:Gui.C.TabAjusteFino -and -not $script:Gui.FineLoaded) { $script:Gui.FineLoaded = $true; Start-JuicerGuiFineTune }
             elseif ($tab -eq $script:Gui.C.TabDeshacer) { Show-JuicerGuiUndo }
         })
 }
@@ -1304,7 +1502,7 @@ function Show-JuicerGui {
         Window = $win; C = @{}; Sync = [hashtable]::Synchronized(@{ Status = '' }); Task = $null
         Checks = @{}; AppChecks = @{}; InstallChecks = @{}; UndoChecks = @{}
         Hw = @{ Cpu = @{}; Gpus = @() }; Advice = @{}; Snapshot = @{ States = @{}; Dns = @() }
-        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; GameExe = $null; Findings = @(); Measure = @()
+        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; GameExe = $null; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
