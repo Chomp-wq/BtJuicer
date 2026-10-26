@@ -476,14 +476,8 @@ function Get-JuicerSecurityAudit {
 function Get-JuicerBootAudit {
     $out = @()
     try {
-        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-Diagnostics-Performance/Operational'; Id = 100 } -MaxEvents 5 -ErrorAction Stop)
-        $boots = foreach ($e in $events) {
-            $data = @{}
-            foreach ($d in ([xml]$e.ToXml()).Event.EventData.Data) { $data[$d.Name] = $d.'#text' }
-            @{ Total = [int]$data.BootTime; Main = [int]$data.MainPathBootTime; Post = [int]$data.BootPostBootTime; When = $e.TimeCreated }
-        }
-        if ($boots) {
-            $last = @($boots)[0]
+        $last = Get-JuicerLastBoot
+        if ($last) {
             $detail = 'Hasta el escritorio {0:N1} s; después, {1:N1} s más cargando programas de inicio y servicios.' -f ($last.Main / 1000), ($last.Post / 1000)
             $sev = if ($last.Total -gt 90000) { 'Alto' } elseif ($last.Total -gt 45000) { 'Medio' } else { 'Ok' }
             $out += New-JuicerFinding 'Arranque' $sev ('Último arranque completo: {0:N1} s ({1})' -f ($last.Total / 1000), $last.When.ToString('g')) $detail
@@ -502,7 +496,7 @@ function Get-JuicerBootAudit {
         $sev = if ($on.Count -gt 12 -or $junk.Count -ge 4) { 'Medio' } elseif ($on.Count -gt 6 -or $junk.Count -gt 0) { 'Bajo' } else { 'Ok' }
         $detail = 'Desactiva en Programas de inicio los que no necesites nada más encender.'
         if ($junk.Count -gt 0) { $detail = "$($junk.Count) son prescindibles: $(($junk | ForEach-Object { $_.Name }) -join ', '). Funcionan igual abriéndolos cuando los necesites. " + $detail }
-        $out += New-JuicerFinding 'Arranque' $sev "$($on.Count) programas y tareas se abren al iniciar sesión" $detail
+        $out += New-JuicerFinding 'Arranque' $sev "$($on.Count) programas, tareas y servicios arrancan con Windows" $detail
     } catch {
         Write-Verbose "Sin programas de inicio: $_"
     }

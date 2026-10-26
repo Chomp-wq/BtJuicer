@@ -110,6 +110,26 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         { Get-JuicerWindowsSupportInfo } | Should -Not -Throw
     }
 
+    It 'descarga PresentMon con la firma de Intel y hace una captura' {
+        $pm = Get-JuicerPresentMon
+        Test-JuicerIntelSignature $pm | Should -BeTrue
+        Write-Host "    PresentMon: $pm, SHA256 $((Get-FileHash $pm -Algorithm SHA256).Hash)"
+        # Nothing is playing on the runner: the capture must still run and say so.
+        $f = @(Invoke-JuicerFrameCapture -Seconds 5 -Delay 0)
+        $f.Count | Should -BeGreaterThan 0
+        Write-Host "    $($f[0].Title)"
+    }
+
+    It 'mide arranque, procesos, servicios, memoria y espacio' {
+        $m = Get-JuicerMetrics
+        $m.Processes | Should -BeGreaterThan 10
+        $m.Services | Should -BeGreaterThan 10
+        $m.RamUsed | Should -BeGreaterThan 0
+        $m.DiskFree | Should -BeGreaterThan 0
+        $m.Startup | Should -Not -BeNullOrEmpty
+        @(Compare-JuicerMetrics $m $m).Count | Should -BeGreaterThan 3
+    }
+
     It 'lee el hardware y hace la revisión de overclock, BIOS y estabilidad' {
         $hw = Get-JuicerHardwareProfile -Refresh
         foreach ($l in (Format-JuicerHardwareSummary $hw)) { Write-Host "    $l" }

@@ -230,7 +230,12 @@ Describe 'Arranque en una línea' {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $z = [IO.Compression.ZipFile]::OpenRead($r.Zip)
             try { $names = @($z.Entries | ForEach-Object { $_.FullName }) } finally { $z.Dispose() }
-            foreach ($n in 'WinJuicer.cmd', 'WinJuicer.ps1', 'WinJuicer.psm1', 'src/Gui.ps1', 'src/Engine.ps1') { $names | Should -Contain $n }
+            foreach ($n in 'WinJuicer.cmd', 'WinJuicer.ps1', 'WinJuicer.psm1', 'src/Gui.ps1', 'src/Engine.ps1', 'version.txt') { $names | Should -Contain $n }
+            $z = [IO.Compression.ZipFile]::OpenRead($r.Zip)
+            try {
+                $sr = New-Object IO.StreamReader ($z.GetEntry('version.txt').Open())
+                try { $sr.ReadToEnd() | Should -Be 'abc1234' } finally { $sr.Dispose() }
+            } finally { $z.Dispose() }
             @($names | Where-Object { $_ -like 'tests*' -or $_ -like 'build*' -or $_ -match '\\' }).Count | Should -Be 0
             @($names | Where-Object { $_ -like 'src/*' }).Count | Should -Be @(Get-ChildItem (Join-Path $Root 'src') -Filter *.ps1).Count
 
@@ -240,6 +245,7 @@ Describe 'Arranque en una línea' {
             $text = [IO.File]::ReadAllText($r.Launcher)
             $text | Should -BeLike "*-Sha256 '$((Get-FileHash $r.Zip -Algorithm SHA256).Hash)' -Version 'abc1234'*"
             $text | Should -Not -BeLike '*__SHA256__*'
+            ConvertFrom-JuicerLauncherVersion $text | Should -Be 'abc1234'
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errors)
             $errors | Should -BeNullOrEmpty
@@ -313,5 +319,186 @@ Describe 'Ventana (sin pantalla)' {
         Get-JuicerSelection 'Extremo' $t $states $advice | Should -Be @('a', 'b', 'c')
         Get-JuicerSelection 'Recomendado' $t $states $advice | Should -Be @('a', 'c')
         @(Get-JuicerSelection 'Ninguno' $t $states $advice).Count | Should -Be 0
+    }
+}
+
+Describe 'Versión nueva' {
+    It 'avisa sólo si la copia publicada es otra' {
+        Get-JuicerVersion | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local $null -Latest { 'abc1234' } | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local 'dev' -Latest { 'abc1234' } | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local 'abc1234' -Latest { 'abc1234' } | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local 'abc1234' -Latest { $null } | Should -BeNullOrEmpty
+        $n = Get-JuicerUpdateNotice -Local 'abc1234' -Latest { 'def5678' }
+        $n.Latest | Should -Be 'def5678'
+        $n.Command | Should -BeLike 'irm https://github.com/*/winjuicer.ps1 | iex'
+        ConvertFrom-JuicerLauncherVersion 'sin versión' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Servicios que arrancan con Windows' {
+    It 'reconoce los conocidos y deja fuera el resto' {
+        (Get-JuicerKnownService 'AdobeARMservice' 'Adobe Acrobat Update Service').V | Should -Be 'Prescindible'
+        (Get-JuicerKnownService 'SystemUsageReportSvc_QUEENCREEK' 'Intel(R) System Usage Report Service SystemUsageReportSvc_QUEENCREEK').V | Should -Be 'Prescindible'
+        (Get-JuicerKnownService 'NahimicService' 'Nahimic service').V | Should -Be 'Opcional'
+        Get-JuicerKnownService 'NVDisplay.ContainerLocalSystem' 'NVIDIA Display Container LS' | Should -BeNullOrEmpty
+        Get-JuicerKnownService 'edgeupdate' 'Microsoft Edge Update Service (edgeupdate)' | Should -BeNullOrEmpty
+        Get-JuicerKnownService 'Audiosrv' 'Windows Audio' | Should -BeNullOrEmpty
+    }
+
+    It 'lo pasa a manual y lo deja como estaba' {
+        $m = New-NetMachine
+        $m.Backend.State.Services['AdobeARMservice'] = @{ Start = 'Automatic'; Running = $true }
+        $item = New-JuicerServiceItem 'AdobeARMservice' 'Adobe Acrobat Update Service' 'Automatic' (Get-JuicerKnownService 'AdobeARMservice')
+        $item.Enabled | Should -BeTrue
+        $item.Verdict | Should -Be 'Prescindible'
+        (Set-JuicerStartupItem $item $false).Outcome | Should -Be 'Aplicado'
+        $m.Backend.State.Services['AdobeARMservice'].Start | Should -Be 'Manual'
+        (Set-JuicerStartupItem $item $true).Outcome | Should -Be 'Deshecho'
+        $m.Backend.State.Services['AdobeARMservice'].Start | Should -Be 'Automatic'
+        (Read-JuicerJournal).Count | Should -Be 0
+    }
+}
+
+Describe 'Antes y después' {
+    BeforeEach { Remove-Item -LiteralPath (Get-JuicerMetricsPath) -ErrorAction SilentlyContinue }
+
+    It 'compara cada número con la medida inicial' {
+        $before = @{ Date = '2026-10-01T10:00:00'; Label = 'Antes de aplicar ajustes'; BootMs = 42000; BootDate = [datetime]'2026-10-01T09:58:00'; Startup = 14; Processes = 250; Services = 120; RamUsed = 6GB; DiskFree = 100GB; UptimeMin = 5 }
+        $after = @{ Date = '2026-10-02T10:00:00'; Label = 'Medida'; BootMs = 30000; BootDate = '2026-10-02T09:58:00'; Startup = 8; Processes = 251; Services = 125; RamUsed = 5GB; DiskFree = 110GB; UptimeMin = 240 }
+        $f = @(Compare-JuicerMetrics $before $after)
+        $f[0].Title | Should -BeLike 'Comparado con la medida del*'
+        @($f | Where-Object { $_.Title -like 'Arranque completo: 42,0 s → 30,0 s (−12,0 s)' -or $_.Title -like 'Arranque completo: 42.0 s → 30.0 s (−12.0 s)' })[0].Severity | Should -Be 'Ok'
+        @($f | Where-Object { $_.Title -like 'Programas, tareas*' })[0].Severity | Should -Be 'Ok'
+        @($f | Where-Object { $_.Title -like 'Procesos*' })[0].Severity | Should -Be 'Info'
+        @($f | Where-Object { $_.Title -like 'Servicios*' })[0].Severity | Should -Be 'Bajo'
+        @($f | Where-Object { $_.Title -like 'Espacio libre*' })[0].Severity | Should -Be 'Ok'
+        @($f | Where-Object { $_.Title -like '*recién encendido*' }).Count | Should -Be 1
+        # Same boot on both sides: nothing to compare yet, whatever type the date came back as.
+        $after.BootDate = '2026-10-01T09:58:00'
+        @(Compare-JuicerMetrics $before $after | Where-Object { $_.Title -like '*mismo arranque*' }).Count | Should -Be 1
+    }
+
+    It 'la primera medida es el punto de partida y se guarda sólo una vez' {
+        @(Invoke-JuicerMeasure)[0].Title | Should -Be 'Medida inicial guardada'
+        Save-JuicerBaseline
+        @(Read-JuicerMetrics).Count | Should -Be 1
+        @(Invoke-JuicerMeasure)[0].Title | Should -BeLike 'Comparado con*'
+        foreach ($i in 1..12) { Save-JuicerMetrics @{ Date = (Get-Date).ToString('s'); Label = "m$i" } }
+        $all = @(Read-JuicerMetrics)
+        $all.Count | Should -Be 10
+        $all[0].Label | Should -Be 'Medida inicial'
+        $all[-1].Label | Should -Be 'm12'
+        @(Invoke-JuicerMeasure -Reset)[0].Title | Should -Be 'Medida inicial guardada'
+        @(Read-JuicerMetrics).Count | Should -Be 1
+        @(Start-Juicer -Medir 6>$null)[-1] | Should -Be 0
+    }
+}
+
+Describe 'FPS y frametimes' {
+    BeforeAll {
+        # Rows like PresentMon's CSV. Times in milliseconds, as text.
+        function New-FrameRows {
+            param([string]$App = 'game.exe', [double[]]$Times, [double]$GpuShare = 0.95, [string]$Mode = 'Hardware: Independent Flip',
+                [string]$Tearing = '1', [string]$Sync = '0', [string]$FtName = 'FrameTime', [string]$GpuName = 'GPUBusy')
+            foreach ($t in $Times) {
+                $o = [ordered]@{ Application = $App; ProcessID = '100'; SyncInterval = $Sync; AllowsTearing = $Tearing; PresentMode = $Mode }
+                $o[$FtName] = $t.ToString([Globalization.CultureInfo]::InvariantCulture)
+                $o[$GpuName] = ($t * $GpuShare).ToString([Globalization.CultureInfo]::InvariantCulture)
+                $o.DisplayLatency = '12.5'
+                [pscustomobject]$o
+            }
+        }
+        # 1 % of the frames slow: the lows show it, and it is a lot of stutters for 7 seconds.
+        $script:Spiky = [double[]](@(7.0) * 990 + @(30.0) * 10)
+        # Two minutes with the odd hitch.
+        $script:Steady = [double[]](@(7.0) * 17000 + @(30.0) * 4)
+    }
+
+    It 'elige el juego y no el escritorio ni el explorador' {
+        $rows = @(New-FrameRows -Times $Spiky) + @(New-FrameRows 'dwm.exe' ([double[]](@(7.0) * 2000))) + @(New-FrameRows 'explorer.exe' ([double[]](@(16.0) * 1500)))
+        $g = @(Select-JuicerGameRows $rows)
+        $g.Count | Should -Be 1000
+        $g[0].Application | Should -Be 'game.exe'
+        @(Select-JuicerGameRows $rows 'explorer').Count | Should -Be 1500
+        @(Select-JuicerGameRows @() $null).Count | Should -Be 0
+    }
+
+    It 'calcula media, 1 % y 0,1 % bajos y tirones' {
+        $r = Measure-JuicerFrames @(New-FrameRows -Times $Spiky)
+        $r.Frames | Should -Be 1000
+        $r.AvgFps | Should -Be 138.3
+        $r.Low1 | Should -Be 142.9
+        $r.Low01 | Should -Be 33.3
+        $r.Stutters | Should -Be 10
+        $r.GpuBound | Should -Be 100
+        $r.Latency | Should -Be 12.5
+        $r.PresentMode | Should -Be 'Hardware: Independent Flip'
+        Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(7.0) * 5))) | Should -BeNullOrEmpty
+    }
+
+    It 'lee también las columnas de PresentMon 2.4 en adelante' {
+        $r = Measure-JuicerFrames @(New-FrameRows -Times $Spiky -FtName 'MsBetweenAppStart' -GpuName 'MsGPUBusy' -GpuShare 0.4)
+        $r.AvgFps | Should -Be 138.3
+        $r.GpuBound | Should -Be 0
+    }
+
+    It 'dice qué limita y cómo se muestra' {
+        $gpu = Measure-JuicerFrames @(New-FrameRows -Times $Steady)
+        $f = @(Get-JuicerFrameFindings $gpu $null 165)
+        $f[0].Title | Should -BeLike 'Media 143 FPS*'
+        @($f | Where-Object { $_.Title -like 'La gráfica es el límite*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like 'Frametimes estables*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like 'Presentación directa*' }).Count | Should -Be 1
+
+        $cpu = Measure-JuicerFrames @(New-FrameRows -Times $Steady -GpuShare 0.5 -Mode 'Composed: Copy with GPU GDI')
+        $f = @(Get-JuicerFrameFindings $cpu $null 60 @(@{ Name = 'chrome'; Pct = 9.5 }))
+        $c = @($f | Where-Object { $_.Title -like 'El procesador es el límite*' })
+        $c.Count | Should -Be 1
+        $c[0].Detail | Should -BeLike '*chrome 9.5 %*'
+        @($f | Where-Object { $_.Title -like '*copiando*' })[0].Severity | Should -Be 'Medio'
+        @($f | Where-Object { $_.Title -like 'Pasa de los 60 Hz*' }).Count | Should -Be 1
+        # Not twice: the background list is already in the processor finding.
+        @($f | Where-Object { $_.Title -like 'En segundo plano*' }).Count | Should -Be 0
+    }
+
+    It 'reconoce la sincronización vertical y los tirones' {
+        $v = Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(16.67) * 600)) -Sync '1' -Tearing '0' -GpuShare 0.3)
+        @(Get-JuicerFrameFindings $v $null 60 | Where-Object { $_.Title -like '*sincronización vertical a 60 Hz' }).Count | Should -Be 1
+        @(Get-JuicerFrameFindings $v $null 60 | Where-Object { $_.Title -like 'El procesador*' }).Count | Should -Be 0
+
+        $bad = Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(8.0) * 900 + @(40.0) * 100)))
+        @(Get-JuicerFrameFindings $bad $null 144 | Where-Object { $_.Title -like 'Frametimes irregulares*' })[0].Severity | Should -Be 'Alto'
+    }
+
+    It 'compara con la medida anterior del mismo juego' {
+        Remove-Item -LiteralPath (Get-JuicerFrameHistoryPath) -ErrorAction SilentlyContinue
+        $old = Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(10.0) * 1000)))
+        $old.Date = '2026-10-01T20:00:00'
+        Save-JuicerFrameResult $old
+        Save-JuicerFrameResult @{ Application = 'otro.exe'; AvgFps = 50; Low1 = 40; Date = '2026-10-02T20:00:00' }
+        $prev = Get-JuicerPreviousFrameResult 'game.exe'
+        $prev.AvgFps | Should -Be 100
+        $new = Measure-JuicerFrames @(New-FrameRows -Times $Steady)
+        $cmp = @(Get-JuicerFrameFindings $new $prev 165 | Where-Object { $_.Title -like 'Respecto al*' })
+        $cmp[0].Severity | Should -Be 'Ok'
+        $cmp[0].Title | Should -BeLike '*100 → 143 FPS (+43 %)*'
+        Get-JuicerPreviousFrameResult 'nunca.exe' | Should -BeNullOrEmpty
+    }
+
+    It 'calcula qué gastó CPU en segundo plano y lee la gráfica de NVIDIA' {
+        $before = @(@{ Id = 1; Name = 'chrome'; Cpu = 10.0 }, @{ Id = 2; Name = 'game'; Cpu = 100.0 }, @{ Id = 3; Name = 'Idle'; Cpu = 0.0 }, @{ Id = 4; Name = 'notepad'; Cpu = 1.0 })
+        $after = @(@{ Id = 1; Name = 'chrome'; Cpu = 22.0 }, @{ Id = 2; Name = 'game'; Cpu = 500.0 }, @{ Id = 3; Name = 'Idle'; Cpu = 900.0 }, @{ Id = 4; Name = 'notepad'; Cpu = 1.1 })
+        $h = @(Get-JuicerCpuHogs $before $after 60 4 'game.exe')
+        $h.Count | Should -Be 1
+        $h[0].Name | Should -Be 'chrome'
+        $h[0].Pct | Should -Be 5
+        $g = ConvertFrom-JuicerGpuSamples @('70, 99, 2700', '84, 99, 2600', '88, 98, 1900', '86, 40, 1500')
+        $g.MaxTemp | Should -Be 88
+        $g.LowBusyClock | Should -Be 1900
+        $f = @(Get-JuicerFrameFindings (Measure-JuicerFrames @(New-FrameRows -Times $Steady)) $null 0 @() $g)
+        @($f | Where-Object { $_.Title -like '*88 °C' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like '*bajó a 1.900 MHz*' -or $_.Title -like '*bajó a 1,900 MHz*' }).Count | Should -Be 1
+        ConvertFrom-JuicerGpuSamples @('basura') | Should -BeNullOrEmpty
     }
 }

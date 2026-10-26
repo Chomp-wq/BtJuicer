@@ -26,6 +26,9 @@ try {
         # Forward slashes: what every unzipper, Expand-Archive in 5.1 included, expects.
         [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, (Join-Path $root $f), $f)
     }
+    # How the copy knows which version it is, to tell when there is a newer one.
+    $w = New-Object IO.StreamWriter ($archive.CreateEntry('version.txt').Open()), (New-Object Text.ASCIIEncoding)
+    try { $w.Write($Version) } finally { $w.Dispose() }
 } finally {
     $archive.Dispose()
 }
@@ -34,4 +37,4 @@ $hash = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
 $template = [IO.File]::ReadAllText((Join-Path $PSScriptRoot 'winjuicer.ps1.in'))
 $launcher = $template.Replace('__SHA256__', $hash).Replace('__VERSION__', $Version)
 [IO.File]::WriteAllText((Join-Path $Out 'winjuicer.ps1'), $launcher, (New-Object Text.ASCIIEncoding))
-[pscustomobject]@{ Zip = $zip; Launcher = (Join-Path $Out 'winjuicer.ps1'); Sha256 = $hash; Files = $files.Count }
+[pscustomobject]@{ Zip = $zip; Launcher = (Join-Path $Out 'winjuicer.ps1'); Sha256 = $hash; Files = $files.Count + 1 }

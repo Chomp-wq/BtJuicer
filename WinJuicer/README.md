@@ -52,17 +52,21 @@ arranque, así que no queda nada guardado que alguien pudiera cambiar para que
 se ejecute como administrador la próxima vez. La release la publica el CI
 desde la rama principal, con todas las pruebas en verde.
 
-**O sin internet**: descarga la carpeta `WinJuicer` y haz doble clic en
-**`WinJuicer.cmd`**. Pide permisos de administrador y abre la ventana:
+**O sin internet**: descarga la carpeta `WinJuicer` (o el `WinJuicer.zip` de la
+release) y haz doble clic en **`WinJuicer.cmd`**. Pide permisos de
+administrador y abre la ventana. Una copia descargada de la release sabe qué
+versión es: al abrirse mira si hay otra más nueva (lee la versión del
+arrancador publicado, 3 KB, nada más) y, si la hay, lo dice arriba con un botón
+para copiar la orden de una línea.
 
 | Pestaña | Qué tiene |
 |---|---|
-| **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo» y «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro). |
+| **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo», «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro) y «Medir antes y después». |
 | **Ajustes** | Todos los ajustes con casillas, agrupados. Selección: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. *Exportar…* e *Importar…* llevan tu configuración a otro PC. |
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
-| **Juegos** | GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
+| **Juegos** | Medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
 | **No hacemos** | Los «trucos» que circulan, y por qué no. |
@@ -103,6 +107,10 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Recomendado -Simular                   # lo recomendado para este equipo, sin cambiar nada
 .\WinJuicer.ps1 -Recomendado
 .\WinJuicer.ps1 -Lista                                  # todos los ajustes y su estado
+.\WinJuicer.ps1 -Medir                                  # antes y después: comparado con la medida inicial
+.\WinJuicer.ps1 -MedirJuego 60                          # FPS y frametimes de lo que juegues (empieza en 10 s)
+.\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
+.\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
 .\WinJuicer.ps1 -QuitarApps Microsoft.BingNews,Clipchamp.Clipchamp
@@ -246,6 +254,7 @@ planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar»
 | Programación de GPU acelerada por hardware | Seguro | Bajo |
 | Optimizaciones para juegos en ventana (modelo flip en DX10/11) | Seguro | Medio |
 | Reserva multimedia para segundo plano al 10 % | Seguro | Bajo |
+| Frecuencia variable (VRR) también en juegos que no la piden | Rendimiento | Medio |
 | Sin grabación en segundo plano de Xbox Game Bar | Rendimiento | Medio |
 | Sin aceleración del ratón | Rendimiento | Bajo |
 | Sin atajos de Teclas especiales (Mayús ×5) | Rendimiento | Bajo |
@@ -253,6 +262,34 @@ planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar»
 Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
 de alto rendimiento y prioridad alta para un `.exe`, y exclusiones de Microsoft
 Defender para las bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
+
+### Medir FPS y frametimes
+
+La única forma de saber si un ajuste da FPS es medir la misma escena antes y
+después. Win Juicer lo hace con [PresentMon](https://github.com/GameTechDev/PresentMon),
+la herramienta de Intel que usan las reviews y CapFrameX: se descarga de su
+release de GitHub la primera vez y, cada vez antes de ejecutarlo, se comprueba
+que lleva la firma de Intel.
+
+Pulsas «Medir», vuelves al juego en 10 segundos y juegas 30, 60 o 120
+segundos. Al acabar dice:
+
+- **Media, 1 % bajo y 0,1 % bajo** (los FPS del 1 % y el 0,1 % de fotogramas
+  más lentos: lo que se siente como tirón), el frametime mediano y los
+  **tirones por minuto**.
+- **Qué limita**: si la gráfica va al máximo (para más FPS, calidad o
+  DLSS/FSR/XeSS: ningún ajuste de Windows sube eso) o si **el procesador es el
+  límite** y la gráfica espera (bajar gráficos no sirve; sí cerrar lo que gaste
+  CPU, la RAM con XMP, el plan de energía y un límite de FPS).
+- **Qué gastaba CPU en segundo plano** mientras jugabas: navegador, lanzadores,
+  Defender o Windows Update trabajando justo entonces.
+- **Cómo llega la imagen a la pantalla**: directa (Independent Flip), compuesta
+  por el escritorio (un fotograma más de latencia) o copiada con el modelo
+  antiguo (lo arregla «Optimizaciones para juegos en ventana»).
+- Si pasas de los Hz de tu pantalla, la sincronización vertical, la generación
+  de fotogramas y, con NVIDIA, la temperatura y si la gráfica bajó de frecuencia.
+- **Comparado con la medida anterior del mismo juego**: así ves si el último
+  cambio dio FPS o sólo lo parecía.
 
 ### Interfaz
 
@@ -371,9 +408,17 @@ son los mismos que mantiene WinUtil.
 
 ### Programas de inicio
 
-Lista lo que arranca con Windows —registro, carpetas de Inicio y tareas
-programadas de terceros— y lo activa o desactiva con el mismo interruptor que
-usa el Administrador de tareas. No borra nada.
+Lista lo que arranca con Windows —registro, carpetas de Inicio, tareas
+programadas de terceros y servicios de terceros conocidos— y lo activa o
+desactiva con el mismo interruptor que usa el Administrador de tareas. No borra
+nada.
+
+Los servicios se pasan a **manual**, no se deshabilitan: el programa todavía
+puede arrancarlos cuando los necesita. Sólo aparecen los que Win Juicer conoce
+(actualizadores y comprobación de licencia de Adobe, telemetría de Intel y HP,
+la analítica de Killer, Nahimic, Armoury Crate, Razer, Corsair, TeamViewer,
+AnyDesk, Bonjour…); el resto de servicios de terceros suelen ser drivers, audio
+o antivirus, y una lista de «cosas que arrancan» sólo invitaría a apagarlos.
 
 Reconoce los habituales y dice qué son: **prescindibles** (lanzadores de
 juegos, Spotify, actualizadores de Adobe y Java, navegadores precargados…:
@@ -382,6 +427,17 @@ OneDrive, el software de periféricos y RGB, Afterburner: según para qué los
 uses) o **necesarios** (Seguridad de Windows, el panel de audio, el touchpad).
 Los actualizadores de navegadores y antivirus no se tocan: son por donde llegan
 los parches. El diagnóstico cuenta cuántos prescindibles arrancan.
+
+### Antes y después
+
+Justo antes de aplicar el primer cambio, Win Juicer toma una **medida
+inicial**: tiempo del último arranque (el que cronometra Windows), programas,
+tareas y servicios de inicio, procesos y servicios en marcha, memoria en uso y
+espacio libre. «Medir antes y después» (o `-Medir`) mide otra vez y lo compara,
+en verde lo que ha mejorado. El arranque sólo cambia después de reiniciar, y la
+memoria y los procesos dependen de lo que tengas abierto: lo justo es medir las
+dos veces recién reiniciado y con todo cerrado (si no, lo avisa). «Nueva
+medida inicial» empieza la comparación desde ahora.
 
 ### Exportar e importar
 
@@ -462,6 +518,9 @@ WinJuicer/
   src/Network.ps1         DNS, restablecer la red y Windows Update
   src/Apps.ps1            instalar con winget
   src/Config.ps1          exportar e importar la configuración
+  src/Measure.ps1         antes y después: medir y comparar
+  src/Frames.ps1          FPS y frametimes con PresentMon
+  src/Version.ps1         aviso de versión nueva
   src/Startup.ps1         programas de inicio
   src/Games.ps1           bibliotecas de juegos y ajustes por ejecutable
   src/Maintenance.ps1     limpieza y mantenimiento

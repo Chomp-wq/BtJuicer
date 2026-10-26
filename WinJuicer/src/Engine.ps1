@@ -556,6 +556,8 @@ function Invoke-JuicerTweak {
     $result = New-JuicerResult $Tweak 'Aplicado'
     $result.Changes = @($pending | ForEach-Object { Format-JuicerAction $_ })
     if ($Simulate) { $result.Outcome = 'Simulado'; return $result }
+    # The «before» of Antes y después, the first time anything changes.
+    if ((Get-JuicerBackend).Name -eq 'Windows') { Save-JuicerBaseline }
 
     try {
         $captures = @(foreach ($a in $pending) { Save-JuicerActionState $a $Tweak.Id })

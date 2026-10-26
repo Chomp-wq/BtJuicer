@@ -417,6 +417,17 @@ function New-JuicerCatalog {
         )
     }
     @{
+        Id = 'juegos.vrr'; Category = 'Juegos'; Level = 2; Impact = 'Medio'; Reboot = 'No'
+        Title = 'Frecuencia variable (VRR) también en juegos que no la piden'
+        What = 'El ajuste «Frecuencia de actualización variable» de Configuración > Pantalla > Gráficos: G-Sync o FreeSync también en juegos DirectX 11 que no la activan por sí mismos.'
+        Gain = 'Sin cortes en la imagen y sin el tartamudeo de VSync cuando los FPS no llegan a los Hz de la pantalla: los frametimes se ven más uniformes.'
+        Cost = 'Sólo hace algo con una pantalla G-Sync/FreeSync. En algunos paneles VA, la VRR a pocos FPS hace parpadear el brillo en menús y pantallas de carga.'
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 18362) { 'Necesita Windows 10 1903 o posterior.' } }
+        Actions = @(
+            @{ Type = 'RegistryToken'; Path = 'HKCU\Software\Microsoft\DirectX\UserGpuPreferences'; Name = 'DirectXUserGlobalSettings'; Token = 'VRROptimizeEnable'; Value = '1' }
+        )
+    }
+    @{
         Id = 'juegos.grabacion'; Category = 'Juegos'; Level = 2; Impact = 'Medio'; Reboot = 'No'
         Title = 'Desactivar la grabación de Xbox Game Bar'
         What = 'Apaga la captura de Game Bar y la grabación continua de «lo que acaba de pasar».'

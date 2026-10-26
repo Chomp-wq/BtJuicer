@@ -268,7 +268,7 @@ function Get-JuicerHardwareProfile {
     if ($script:HardwareProfile -and -not $Refresh) { return $script:HardwareProfile }
     $hw = @{
         Cpu = Get-JuicerCpuInfo; Gpus = @(); RamBytes = [int64]0; Modules = @(); Laptop = $false; OnBattery = $false
-        ModernStandby = (Test-JuicerModernStandby); SystemDisk = $null; Printers = @(); Adapters = @()
+        ModernStandby = (Test-JuicerModernStandby); SystemDisk = $null; Printers = @(); Adapters = @(); RefreshMax = 0
         OneDrive = (Get-JuicerOneDriveState); Edge = (Test-JuicerEdgeInstalled); Home = (Test-JuicerHomeEdition)
         Insider = (Test-JuicerInsider); Build = (Get-JuicerWindowsBuild); Support = (Get-JuicerWindowsSupportInfo)
         Wsl = (Test-JuicerRegKey 'HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss')
@@ -292,6 +292,7 @@ function Get-JuicerHardwareProfile {
         }
         $hw.SystemDisk = Get-JuicerDriveMedia $env:SystemDrive
         $hw.Printers = @(Get-JuicerPhysicalPrinters)
+        try { $hw.RefreshMax = [int](@(Get-JuicerDisplays | ForEach-Object { $_.MaxHz }) | Measure-Object -Maximum).Maximum } catch { Write-Verbose "Sin pantallas: $_" }
         foreach ($d in [IO.DriveInfo]::GetDrives()) {
             if ($d.DriveType -eq 'Fixed' -and (Test-Path -LiteralPath (Join-Path $d.RootDirectory.FullName 'XboxGames'))) { $hw.GamePass = $true }
         }
