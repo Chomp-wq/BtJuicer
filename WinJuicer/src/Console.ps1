@@ -507,8 +507,8 @@ function Show-JuicerLimiter {
         try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
         Write-JuicerWrapped ('Limita con: ' + (Format-JuicerFpsBackend (Get-JuicerFpsBackend)) + '.') 2 'Gray'
         if ($m) {
-            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) ([bool]$m.Vrr)
-            Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + ". Límite recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
+            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 })
+            Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + '. Cómo la usas: ' + (Get-JuicerMonitorModes)[$m.Mode] + ". Límite recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
         }
         $limits = @(Get-JuicerFpsLimits)
         Write-Host ''
@@ -519,7 +519,9 @@ function Show-JuicerLimiter {
         Write-JuicerMenu @(
             @('A', 'Añadir un juego', 'por nombre del .exe, con el límite recomendado o el tuyo'),
             @('M', 'Añadir los juegos medidos', (@(Get-JuicerUnlimitedGames) -join ', ')),
-            @('Q', 'Quitar un límite', 'por número')
+            @('Q', 'Quitar un límite', 'por número'),
+            @('U', 'Cómo usas tu monitor', 'VRR, ELMB/DyAc u otro estroboscopio, o frecuencia fija'),
+            @('R', 'Recalcular los límites', 'con el modo y la frecuencia de ahora')
         )
         switch ((Read-JuicerChoice 'Elige, Intro para volver').ToUpperInvariant()) {
             'A' {
@@ -534,6 +536,19 @@ function Show-JuicerLimiter {
                 $q = Read-JuicerChoice 'Número'
                 if ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count) { Show-JuicerResults @(Undo-JuicerTweak $limits[[int]$q - 1].Id) }
             }
+            'U' {
+                if (-not $m) { Write-JuicerWrapped 'No se pudo leer el monitor.' 2 'Yellow'; Wait-JuicerKey; continue }
+                $modes = Get-JuicerMonitorModes
+                $keys = @($modes.Keys)
+                Write-Host ''
+                for ($i = 0; $i -lt $keys.Count; $i++) { Write-Host ('  {0}. {1}' -f ($i + 1), $modes[$keys[$i]]) }
+                $q = Read-JuicerChoice 'Número'
+                if ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $keys.Count) {
+                    [void](Set-JuicerMonitorMode $m $keys[[int]$q - 1])
+                    if ($limits.Count -gt 0 -and (Confirm-JuicerAction '¿Recalcular con este modo los límites que ya tienes?')) { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
+                }
+            }
+            'R' { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             '' { return }
         }
     }
@@ -1048,6 +1063,7 @@ function Start-Juicer {
         [string]$Juego,
         [string[]]$LimitarFps = @(),
         [int]$Fps,
+        [string]$ModoMonitor,
         [switch]$Lista,
         [switch]$Recomendado,
         [string]$Perfil,
@@ -1072,7 +1088,7 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
@@ -1101,9 +1117,24 @@ function Start-Juicer {
         return 0
     }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
+    $monitor = $null
+    if ($ModoMonitor) {
+        $mode = @((Get-JuicerMonitorModes).Keys | Where-Object { $_ -eq $ModoMonitor })
+        if ($mode.Count -eq 0) { Write-Host ('  -ModoMonitor admite: ' + (@((Get-JuicerMonitorModes).Keys) -join ', ') + '.') -ForegroundColor Yellow; return 2 }
+        $ModoMonitor = $mode[0]
+        try { $monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+        if ($monitor) {
+            [void](Set-JuicerMonitorMode $monitor $ModoMonitor)
+            Write-Host ('  ' + (Format-JuicerMonitor $monitor))
+        } elseif ($LimitarFps.Count -eq 0) {
+            Write-Host '  No se pudo leer el monitor para guardar cómo lo usas.' -ForegroundColor Yellow
+            return 1
+        }
+        if ($LimitarFps.Count -eq 0) { return 0 }
+    }
     if ($LimitarFps.Count -gt 0) {
         if ($Fps -and ($Fps -lt 20 -or $Fps -gt 1000)) { Write-Host '  -Fps va de 20 a 1000.' -ForegroundColor Yellow; return 2 }
-        $results = @(foreach ($exe in $LimitarFps) { Add-JuicerFpsLimit $exe $Fps })
+        $results = @(foreach ($exe in $LimitarFps) { Add-JuicerFpsLimit $exe $Fps $monitor $ModoMonitor })
         Show-JuicerResults $results
         return $(if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
     }

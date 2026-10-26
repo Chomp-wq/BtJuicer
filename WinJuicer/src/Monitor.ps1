@@ -91,13 +91,89 @@ function Get-JuicerVrrRange {
     $null
 }
 
-# Each display with what its EDID says. Windows only.
+# --- How each monitor is used --------------------------------------------
+#
+# The EDID says what a monitor can do, not what its owner turned on: ELMB,
+# DyAc and the like live in the monitor's own menu. So the owner says it,
+# once per monitor, and the limiter and the advice follow it. Automatico
+# means variable refresh when the monitor announces it, fixed otherwise.
+
+$script:MonitorModes = [ordered]@{
+    Automatico  = 'Automático: frecuencia variable si el monitor la anuncia'
+    VRR         = 'Frecuencia variable (G-SYNC / FreeSync)'
+    Estrobo     = 'Estroboscopio sin VRR (ELMB, DyAc, VRB, Aim Stabilizer, ULMB…)'
+    EstroboSync = 'Estroboscopio con VRR (ELMB Sync, Aim Stabilizer Sync)'
+    Fijo        = 'Frecuencia fija, sin VRR ni estroboscopio'
+}
+
+function Get-JuicerMonitorModes { $script:MonitorModes }
+
+function Get-JuicerMonitorModesPath { Join-Path (Get-JuicerHome) 'monitores.json' }
+
+# The monitor's hardware id from its device path (AUS27B1 in
+# \\?\DISPLAY#AUS27B1#…) and its model name: the same monitor on another
+# port or another day keeps its mode.
+function Get-JuicerMonitorKey {
+    param([hashtable]$Monitor)
+    $id = ''
+    $parts = @(([string]$Monitor.Display.MonitorId) -split '#')
+    if ($parts.Count -ge 2) { $id = $parts[1] }
+    $name = if ($Monitor.Info -and $Monitor.Info.Name) { [string]$Monitor.Info.Name } else { [string]$Monitor.Display.Monitor }
+    if (-not $id -and -not $name) { return 'principal' }
+    "$id|$name"
+}
+
+function Read-JuicerMonitorModes {
+    $path = Get-JuicerMonitorModesPath
+    if (-not (Test-Path -LiteralPath $path)) { return @{} }
+    try {
+        $data = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($path) | ConvertFrom-Json)
+        if ($data -is [hashtable]) { return $data }
+    } catch {
+        Write-JuicerLog "monitores.json dañado, se ignora: $_"
+    }
+    @{}
+}
+
+function Get-JuicerMonitorMode {
+    param([hashtable]$Monitor)
+    if (-not $Monitor) { return 'Automatico' }
+    $e = (Read-JuicerMonitorModes)[(Get-JuicerMonitorKey $Monitor)]
+    if ($e -is [hashtable] -and $script:MonitorModes.Contains([string]$e.Mode)) { return [string]$e.Mode }
+    'Automatico'
+}
+
+function Set-JuicerMonitorMode {
+    param([Parameter(Mandatory)][hashtable]$Monitor, [Parameter(Mandatory)][string]$Mode)
+    $key = @($script:MonitorModes.Keys | Where-Object { $_ -eq $Mode })
+    if ($key.Count -eq 0) { throw "Modo de monitor desconocido: $Mode. Valen: $(@($script:MonitorModes.Keys) -join ', ')." }
+    $all = Read-JuicerMonitorModes
+    $all[(Get-JuicerMonitorKey $Monitor)] = @{ Mode = $key[0]; Name = $(if ($Monitor.Info -and $Monitor.Info.Name) { "$($Monitor.Info.Brand) $($Monitor.Info.Name)" } else { [string]$Monitor.Display.Monitor }) }
+    [IO.File]::WriteAllText((Get-JuicerMonitorModesPath), (ConvertTo-JuicerJson $all), (New-Object Text.UTF8Encoding $false))
+    $Monitor.Mode = $key[0]
+    $Monitor.Use = Resolve-JuicerMonitorUse $Monitor
+    $key[0]
+}
+
+# What the monitor really does: VRR, EstroboSync, Estrobo or Fijo.
+function Resolve-JuicerMonitorUse {
+    param([hashtable]$Monitor)
+    if (-not $Monitor) { return 'Fijo' }
+    $mode = if ($Monitor.Mode) { [string]$Monitor.Mode } else { Get-JuicerMonitorMode $Monitor }
+    if ($mode -eq 'Automatico') { if ($Monitor.Vrr) { return 'VRR' } else { return 'Fijo' } }
+    $mode
+}
+
+# Each display with what its EDID says and how its owner uses it. Windows only.
 function Get-JuicerMonitors {
     foreach ($d in @(Get-JuicerDisplays)) {
         $path = ConvertTo-JuicerEdidKey $d.MonitorId
         $edid = if ($path) { Read-JuicerReg $path 'EDID' }
         $info = if ($edid) { ConvertFrom-JuicerEdidInfo ([byte[]]$edid.Value) }
-        @{ Display = $d; Info = $info; Vrr = (Get-JuicerVrrRange $info) }
+        $m = @{ Display = $d; Info = $info; Vrr = (Get-JuicerVrrRange $info) }
+        $m.Mode = Get-JuicerMonitorMode $m
+        $m.Use = Resolve-JuicerMonitorUse $m
+        $m
     }
 }
 
@@ -121,12 +197,21 @@ function Format-JuicerMonitor {
         $parts += 'sin VRR anunciada'
     }
     if ($i -and $i.Hdr10) { $parts += $(if ($i.MaxNits) { "HDR10 (~$($i.MaxNits) nits)" } else { 'HDR10' }) }
+    if ($Monitor.Mode -and $Monitor.Mode -ne 'Automatico') {
+        $strobe = if ($i -and $script:StrobeNames.Contains($i.Brand)) { ($script:StrobeNames[$i.Brand] -split ' ')[0] } else { 'estroboscopio' }
+        $parts += $(switch ($Monitor.Mode) {
+                'VRR' { 'usado con VRR' }
+                'Estrobo' { "usado con $strobe, sin VRR" }
+                'EstroboSync' { "usado con $strobe y VRR" }
+                'Fijo' { 'usado a frecuencia fija' }
+            })
+    }
     '{0}: {1}' -f $name, ($parts -join ', ')
 }
 
-# What to do with this monitor and this graphics card. GpuVendor is NVIDIA,
-# AMD or Intel; Games are measured games (Low1, AvgFps), to say whether
-# strobing would hold.
+# What to do with this monitor, used the way its owner uses it, and this
+# graphics card. GpuVendor is NVIDIA, AMD or Intel; Games are measured games
+# (Application, Low1, AvgFps, Fps90), to say whether strobing holds.
 function Get-JuicerMonitorFindings {
     param([object[]]$Monitors, [string]$GpuVendor, [object[]]$Games = @())
     $out = @()
@@ -136,30 +221,54 @@ function Get-JuicerMonitorFindings {
         $title = Format-JuicerMonitor $m
         $oled = $i.Name -match 'OLED|PG27AQDM|AW3423|AW2725|QD-?OLED'
         $hz = [int]$d.MaxHz
-        $cap = Get-JuicerFpsCap $hz ([bool]$m.Vrr)
-        if ($m.Vrr) {
-            $how = switch ($GpuVendor) {
-                'NVIDIA' { "En el Panel de control de NVIDIA > Configurar G-SYNC, actívalo «para pantalla completa y en ventana» (si sale «no validado», actívalo igualmente). Después, en Administrar la configuración 3D: Sincronización vertical «Activada» y, en los juegos, desactivada. En juegos con NVIDIA Reflex, actívalo (On; On + Boost si limita el procesador)." }
-                'AMD' { 'En AMD Software > Juegos > Pantalla, activa AMD FreeSync; Enhanced Sync desactivado y la sincronización vertical de los juegos desactivada.' }
-                'Intel' { 'En Intel Graphics Software > Pantalla, activa Adaptive Sync.' }
-                default { 'Actívala en el panel de tu gráfica.' }
+        $use = Resolve-JuicerMonitorUse $m
+        $rates = @($d.RefreshRates | Where-Object { $_ })
+        $cap = Get-JuicerFpsCap $hz $use $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) $rates
+        $strobe = if ($script:StrobeNames.Contains($i.Brand)) { $script:StrobeNames[$i.Brand] } else { 'el estroboscopio' }
+        $vrrHow = switch ($GpuVendor) {
+            'NVIDIA' { "En el Panel de control de NVIDIA > Configurar G-SYNC, actívalo «para pantalla completa y en ventana» (si sale «no validado», actívalo igualmente). Después, en Administrar la configuración 3D: Sincronización vertical «Activada» y, en los juegos, desactivada. En juegos con NVIDIA Reflex, actívalo (On; On + Boost si limita el procesador)." }
+            'AMD' { 'En AMD Software > Juegos > Pantalla, activa AMD FreeSync; Enhanced Sync desactivado y la sincronización vertical de los juegos desactivada.' }
+            'Intel' { 'En Intel Graphics Software > Pantalla, activa Adaptive Sync.' }
+            default { 'Actívala en el panel de tu gráfica.' }
+        }
+        switch ($use) {
+            'VRR' {
+                $out += New-JuicerFinding 'Monitor' 'Info' $title ("Lo usas con frecuencia variable: sin cortes ni tirones de VSync aunque los FPS no lleguen a los Hz. $vrrHow Comprueba también que FreeSync/Adaptive-Sync está activado en el menú del propio monitor: muchos vienen con ella apagada. Límite: $($cap.Fps) FPS, para no salir nunca del rango (Juegos > Limitador de FPS lo pone por juego).")
+                if (-not $m.Vrr) {
+                    $out += New-JuicerFinding 'Monitor' 'Bajo' 'Has dicho que usas VRR, pero el monitor no la anuncia' 'Por DisplayPort puede funcionar igualmente. Si el panel de la gráfica no ofrece G-SYNC/FreeSync para este monitor, cambia el modo a «Frecuencia fija» en el limitador: el límite y los consejos cambian.'
+                }
             }
-            $out += New-JuicerFinding 'Monitor' 'Info' $title ("Tiene frecuencia variable: sin cortes ni tirones de VSync aunque los FPS no lleguen a los Hz. $how Comprueba también que FreeSync/Adaptive-Sync está activado en el menú del propio monitor: muchos vienen con ella apagada. Y un límite de $($cap.Fps) FPS para no salir nunca del rango (Juegos > Limitador de FPS lo pone por juego).")
-            if ($m.Vrr.Min -gt 0 -and $m.Vrr.Max -lt 2 * $m.Vrr.Min) {
-                $out += New-JuicerFinding 'Monitor' 'Bajo' "Por debajo de $($m.Vrr.Min) FPS se pierde la frecuencia variable" "Su rango ($($m.Vrr.Min)–$($m.Vrr.Max) Hz) no llega para duplicar fotogramas (LFC): si un juego baja de ahí vuelven los tirones. Ajusta la calidad para mantenerte por encima."
+            'EstroboSync' {
+                $out += New-JuicerFinding 'Monitor' 'Info' $title ("Lo usas con $strobe y frecuencia variable a la vez. $vrrHow Límite: $($cap.Fps) FPS. El estroboscopio sigue a cada fotograma, así que el parpadeo se nota más cuanto más bajan los FPS: mantente cerca de los Hz, y si en un juego caes a menudo muy por debajo, mejor VRR sin estrobo.")
             }
-        } else {
-            $out += New-JuicerFinding 'Monitor' 'Info' $title "No anuncia FreeSync ni VRR de HDMI. Si su menú tiene «FreeSync» o «Adaptive-Sync», actívalo (por DisplayPort puede funcionar aunque no lo anuncie). Sin VRR hay dos opciones: sin VSync y sin límite (menos latencia, con cortes en la imagen) o VSync con un límite de $hz FPS (imagen limpia, algo más de latencia)."
+            'Estrobo' {
+                $out += New-JuicerFinding 'Monitor' 'Info' $title ("Lo usas con $strobe: el movimiento más nítido posible, a frecuencia fija. Para que cada destello muestre un fotograma nuevo, el límite va exacto a los Hz ($($cap.Fps) FPS) con la sincronización vertical forzada; Win Juicer lo pone así por juego. Si el juego no llega a los Hz, el estrobo enseña cada fotograma repetido como un salto.")
+                $out += New-JuicerFinding 'Monitor' 'Info' "Cómo sacarle partido a $(($strobe -split ' ')[0])" ('El estroboscopio suele funcionar sólo a ciertas frecuencias, y a menudo no a la máxima: si la opción sale gris, baja un escalón los Hz. El overdrive, en el nivel que el monitor asocia al estrobo (normalmente el intermedio): uno alto deja imágenes dobles. Baja el brillo de la habitación, no el del monitor: el estrobo ya le quita bastante.')
+                foreach ($g in $Games) {
+                    $c = Get-JuicerFpsCap $hz 'Estrobo' $g 0 $rates
+                    if ($c.Warn) { $out += New-JuicerFinding 'Monitor' 'Medio' "$($g.Application) no sostiene $hz FPS con el estroboscopio" $c.Warn }
+                }
+            }
+            default {
+                if ($m.Vrr) {
+                    $out += New-JuicerFinding 'Monitor' 'Info' $title "Tiene $($m.Vrr.Kind), pero lo usas a frecuencia fija. Sin VRR, cada fotograma tiene que esperar al siguiente refresco: o VSync con límite a $hz FPS (imagen limpia, algo más de latencia) o sin VSync (menos latencia, con cortes). Si no es a propósito, elige «Frecuencia variable» en el limitador y actívala: $vrrHow"
+                } else {
+                    $out += New-JuicerFinding 'Monitor' 'Info' $title "No anuncia FreeSync ni VRR de HDMI. Si su menú tiene «FreeSync» o «Adaptive-Sync», actívalo (por DisplayPort puede funcionar aunque no lo anuncie) y elige «Frecuencia variable» en el limitador. Sin VRR hay dos opciones: sin VSync y sin límite (menos latencia, con cortes en la imagen) o VSync con un límite de $hz FPS (imagen limpia, algo más de latencia)."
+                }
+            }
+        }
+        if ($m.Vrr -and $use -in 'VRR', 'EstroboSync' -and $m.Vrr.Min -gt 0 -and $m.Vrr.Max -lt 2 * $m.Vrr.Min) {
+            $out += New-JuicerFinding 'Monitor' 'Bajo' "Por debajo de $($m.Vrr.Min) FPS se pierde la frecuencia variable" "Su rango ($($m.Vrr.Min)–$($m.Vrr.Max) Hz) no llega para duplicar fotogramas (LFC): si un juego baja de ahí vuelven los tirones. Ajusta la calidad para mantenerte por encima."
         }
 
-        if (-not $oled -and $hz -ge 120 -and $script:StrobeNames.Contains($i.Brand)) {
+        if (-not $oled -and $hz -ge 120 -and $use -in 'VRR', 'Fijo' -and $script:StrobeNames.Contains($i.Brand)) {
             $holds = @($Games | Where-Object { $_.Low1 -ge $hz })
             $tail = if ($holds.Count -gt 0) { " En tus medidas, $(($holds | ForEach-Object { $_.Application }) -join ', ') no baja de $hz FPS: ahí te serviría." } else { '' }
-            $out += New-JuicerFinding 'Monitor' 'Info' "Nitidez en movimiento: busca «$($script:StrobeNames[$i.Brand])» en el menú del monitor" ("Si tu modelo la tiene, hace parpadear la retroiluminación y el movimiento se ve mucho más nítido, a cambio de brillo y, casi siempre, sin frecuencia variable. Vale la pena en shooters donde los FPS no bajan nunca de los Hz; si bajan, mejor la VRR.$tail")
+            $out += New-JuicerFinding 'Monitor' 'Info' "Nitidez en movimiento: busca «$($script:StrobeNames[$i.Brand])» en el menú del monitor" ("Si tu modelo la tiene, hace parpadear la retroiluminación y el movimiento se ve mucho más nítido, a cambio de brillo y, casi siempre, sin frecuencia variable. Vale la pena en shooters donde los FPS no bajan nunca de los Hz; si bajan, mejor la VRR. Si la activas, dilo en el limitador («Cómo usas tu monitor») y el límite se ajusta.$tail")
         }
         if ($oled) {
             $out += New-JuicerFinding 'Monitor' 'Info' 'OLED: respuesta casi instantánea' 'No necesita overdrive ni estroboscopio. Con VRR puede parpadear el brillo en menús y pantallas de carga con FPS muy variables: un límite de FPS lo reduce.'
-        } else {
+        } elseif ($use -notin 'Estrobo') {
             $out += New-JuicerFinding 'Monitor' 'Info' 'Overdrive en el nivel intermedio' 'En el menú del monitor (Overdrive, Trace Free, AMA, Response Time): el nivel máximo deja halos claros u oscuros detrás de lo que se mueve; el intermedio suele ser el mejor.'
         }
         if ($i.Hdr10) {
