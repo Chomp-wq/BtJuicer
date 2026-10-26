@@ -91,8 +91,31 @@ function Get-JuicerStartupItems {
                     })
             }
         }
+
+        if (-not $NoTasks) {
+            foreach ($svc in @(Get-Service -ErrorAction SilentlyContinue)) {
+                $k = Get-JuicerKnownService $svc.Name $svc.DisplayName
+                if (-not $k) { continue }
+                $cur = Read-JuicerService $svc.Name
+                if ($cur) { [void]$items.Add((New-JuicerServiceItem $svc.Name $svc.DisplayName $cur.Start $k)) }
+            }
+        }
     }
     $items.ToArray()
+}
+
+function Read-JuicerService { param([string]$Name) & (Get-JuicerBackend).SvcRead $Name }
+
+# A service that starts with Windows. Only the known ones are listed: the rest
+# of the third-party services are drivers, audio and antivirus, which a list
+# of «things that start» invites to switch off.
+function New-JuicerServiceItem {
+    param([string]$Name, [string]$DisplayName, [string]$Start, [hashtable]$Known)
+    @{
+        Id = "servicio:$Name"; Name = $DisplayName; Source = 'Servicio'; Kind = 'Servicio'; Command = $Name
+        ServiceName = $Name; Start = $Start; Enabled = ($Start -in 'Automatic', 'AutomaticDelayed')
+        Verdict = $Known.V; Why = $Known.W
+    }
 }
 
 function New-JuicerStartupTweak {
@@ -101,6 +124,13 @@ function New-JuicerStartupTweak {
     $title = if ($Enable) { "Inicio: activar $($Item.Name)" } else { "Inicio: desactivar $($Item.Name)" }
     if ($Item.Kind -eq 'Tarea') {
         $action = @{ Type = 'Task'; Path = $Item.TaskPath; Name = $Item.TaskName; Enabled = $Enable }
+    } elseif ($Item.Kind -eq 'Servicio') {
+        # Manual, not disabled: the program can still start it when it needs it.
+        if ($Enable) {
+            $action = @{ Type = 'Service'; Name = $Item.ServiceName; Start = 'Automatic'; Ok = { param($c) $c.Start -in 'Automatic', 'AutomaticDelayed' } }
+        } else {
+            $action = @{ Type = 'Service'; Name = $Item.ServiceName; Start = 'Manual'; Ok = { param($c) $c.Start -in 'Manual', 'Disabled' } }
+        }
     } else {
         $action = @{
             Type = 'Registry'; Path = $Item.ApprovedPath; Name = $Item.ApprovedName; Kind = 'Binary'
@@ -165,6 +195,41 @@ $script:StartupKnown = @(
     @{ P = 'Docker'; V = 'Opcional'; W = 'Si no lo usas cada día, ábrelo cuando lo necesites: arrancado reserva memoria.' }
 )
 
+# Services that start with Windows for a program that does not need them
+# running all the time. Matched by service name or display name. Updaters of
+# browsers and antivirus are left out, as above.
+$script:ServiceKnown = @(
+    @{ P = '^AdobeARMservice$|^AdobeUpdateService$'; V = 'Prescindible'; W = 'Actualizador de Adobe siempre residente; Acrobat y Creative Cloud buscan actualizaciones al abrirse.' }
+    @{ P = '^AGSService$|^AGMService$|Adobe Genuine'; V = 'Prescindible'; W = 'Comprobación de licencia de Adobe que vigila el equipo entero; las apps de Adobe funcionan sin ella.' }
+    @{ P = '^Origin(Client|WebHelper)Service$'; V = 'Prescindible'; W = 'Restos de Origin, sustituido por la app de EA.' }
+    @{ P = '^EABackgroundService$'; V = 'Opcional'; W = 'Actualiza los juegos de EA en segundo plano; en manual, la app de EA lo arranca al abrirse.' }
+    @{ P = 'SystemUsageReportSvc_QUEENCREEK|Intel\(R\) SUR QC|^ESRV_SVC_QUEENCREEK$'; V = 'Prescindible'; W = 'Telemetría de Intel (informe de uso del sistema); no hace nada por el equipo.' }
+    @{ P = '^DSAService$|^DSAUpdateService$|Intel\(R\) Driver & Support'; V = 'Opcional'; W = 'El asistente de drivers de Intel; en manual sigue funcionando cuando lo abres.' }
+    @{ P = '^HpTouchpointAnalyticsService$|HP Insights Analytics|^HPDiagsCap$|^HPAppHelperCap$|^HPSysInfoCap$'; V = 'Prescindible'; W = 'Telemetría y diagnóstico de HP siempre residentes.' }
+    @{ P = '^SupportAssistAgent$|^DellClientManagementService$|Dell SupportAssist'; V = 'Opcional'; W = 'SupportAssist de Dell: drivers y garantía. Si actualizas drivers tú, sobra que esté siempre en marcha.' }
+    @{ P = 'Killer Analytics|^KAPSService$|^xTendSoftAPService$|^xTendUtilityService$'; V = 'Prescindible'; W = 'Analítica y «priorización» de las tarjetas Killer; la red funciona igual o mejor sin ellas.' }
+    @{ P = '^Killer Network Service$|^KNDBWM$|^KillerNetworkService$'; V = 'Opcional'; W = 'La priorización de tráfico de Killer, que a veces añade latencia en vez de quitarla. Prueba sin ella.' }
+    @{ P = '^NahimicService$|Nahimic'; V = 'Opcional'; W = 'Efectos de sonido de Nahimic (MSI, Alienware). Conocido por cuelgues y tirones en algunos juegos; si no usas sus efectos, sobra.' }
+    @{ P = 'Razer|^RzActionSvc$'; V = 'Opcional'; W = 'Si los perfiles y el RGB están guardados en el periférico, no hace falta que arranque siempre.' }
+    @{ P = '^Corsair|^CorsairLLAService$|iCUE'; V = 'Opcional'; W = 'Sin él, iCUE no controla el RGB ni los ventiladores hasta que lo abres.' }
+    @{ P = '^LGHUBUpdaterService$'; V = 'Prescindible'; W = 'Actualizador de G HUB; G HUB se actualiza al abrirse.' }
+    @{ P = '^ArmouryCrateService$|^AsusUpdateCheck$|^ASUSOptimization$|^ASUSSoftwareManager$|^ROG Live Service$'; V = 'Opcional'; W = 'Armoury Crate: RGB, ventiladores y perfiles de ASUS. En portátiles ROG/TUF controla los modos de rendimiento: ahí, déjalo.' }
+    @{ P = '^TeamViewer$'; V = 'Opcional'; W = 'Arrancado siempre, el equipo acepta conexiones remotas. Si sólo lo usas para conectarte tú a otros, ponlo en manual.' }
+    @{ P = '^AnyDesk$'; V = 'Opcional'; W = 'Arrancado siempre, el equipo acepta conexiones remotas. Si no te conectas a él desde fuera, ponlo en manual.' }
+    @{ P = '^Apple Mobile Device Service$'; V = 'Opcional'; W = 'Sólo hace falta para conectar un iPhone o iPad al PC.' }
+    @{ P = '^Bonjour Service$'; V = 'Prescindible'; W = 'Lo instala iTunes para descubrir dispositivos en la red; casi nadie lo necesita.' }
+    @{ P = 'CCleaner'; V = 'Prescindible'; W = 'Su monitorización en segundo plano no hace falta; Windows ya se limpia solo.' }
+    @{ P = '^SamsungMagicianSVC$'; V = 'Opcional'; W = 'Samsung Magician funciona igual abriéndolo cuando lo necesites.' }
+)
+
+function Get-JuicerKnownService {
+    param([string]$Name, [string]$DisplayName = '')
+    foreach ($k in $script:ServiceKnown) {
+        if ($Name -match $k.P -or $DisplayName -match $k.P) { return $k }
+    }
+    $null
+}
+
 function Get-JuicerStartupVerdict {
     param([string]$Name = '', [string]$Command = '')
     $text = "$Name $Command"
@@ -177,6 +242,7 @@ function Get-JuicerStartupVerdict {
 # Startup entries with their verdict, for the screens.
 function Get-JuicerStartupReview {
     foreach ($i in @(Get-JuicerStartupItems)) {
+        if ($i.Kind -eq 'Servicio') { $i; continue }
         $v = Get-JuicerStartupVerdict $i.Name $i.Command
         $i.Verdict = if ($v) { $v.Verdict } else { $null }
         $i.Why = if ($v) { $v.Why } else { $null }

@@ -110,6 +110,16 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         { Get-JuicerWindowsSupportInfo } | Should -Not -Throw
     }
 
+    It 'mide arranque, procesos, servicios, memoria y espacio' {
+        $m = Get-JuicerMetrics
+        $m.Processes | Should -BeGreaterThan 10
+        $m.Services | Should -BeGreaterThan 10
+        $m.RamUsed | Should -BeGreaterThan 0
+        $m.DiskFree | Should -BeGreaterThan 0
+        $m.Startup | Should -Not -BeNullOrEmpty
+        @(Compare-JuicerMetrics $m $m).Count | Should -BeGreaterThan 3
+    }
+
     It 'lee el hardware y hace la revisión de overclock, BIOS y estabilidad' {
         $hw = Get-JuicerHardwareProfile -Refresh
         foreach ($l in (Format-JuicerHardwareSummary $hw)) { Write-Host "    $l" }

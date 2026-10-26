@@ -230,7 +230,12 @@ Describe 'Arranque en una línea' {
             Add-Type -AssemblyName System.IO.Compression.FileSystem
             $z = [IO.Compression.ZipFile]::OpenRead($r.Zip)
             try { $names = @($z.Entries | ForEach-Object { $_.FullName }) } finally { $z.Dispose() }
-            foreach ($n in 'WinJuicer.cmd', 'WinJuicer.ps1', 'WinJuicer.psm1', 'src/Gui.ps1', 'src/Engine.ps1') { $names | Should -Contain $n }
+            foreach ($n in 'WinJuicer.cmd', 'WinJuicer.ps1', 'WinJuicer.psm1', 'src/Gui.ps1', 'src/Engine.ps1', 'version.txt') { $names | Should -Contain $n }
+            $z = [IO.Compression.ZipFile]::OpenRead($r.Zip)
+            try {
+                $sr = New-Object IO.StreamReader ($z.GetEntry('version.txt').Open())
+                try { $sr.ReadToEnd() | Should -Be 'abc1234' } finally { $sr.Dispose() }
+            } finally { $z.Dispose() }
             @($names | Where-Object { $_ -like 'tests*' -or $_ -like 'build*' -or $_ -match '\\' }).Count | Should -Be 0
             @($names | Where-Object { $_ -like 'src/*' }).Count | Should -Be @(Get-ChildItem (Join-Path $Root 'src') -Filter *.ps1).Count
 
@@ -240,6 +245,7 @@ Describe 'Arranque en una línea' {
             $text = [IO.File]::ReadAllText($r.Launcher)
             $text | Should -BeLike "*-Sha256 '$((Get-FileHash $r.Zip -Algorithm SHA256).Hash)' -Version 'abc1234'*"
             $text | Should -Not -BeLike '*__SHA256__*'
+            ConvertFrom-JuicerLauncherVersion $text | Should -Be 'abc1234'
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errors)
             $errors | Should -BeNullOrEmpty
@@ -313,5 +319,78 @@ Describe 'Ventana (sin pantalla)' {
         Get-JuicerSelection 'Extremo' $t $states $advice | Should -Be @('a', 'b', 'c')
         Get-JuicerSelection 'Recomendado' $t $states $advice | Should -Be @('a', 'c')
         @(Get-JuicerSelection 'Ninguno' $t $states $advice).Count | Should -Be 0
+    }
+}
+
+Describe 'Versión nueva' {
+    It 'avisa sólo si la copia publicada es otra' {
+        Get-JuicerVersion | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local $null -Latest { 'abc1234' } | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local 'dev' -Latest { 'abc1234' } | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local 'abc1234' -Latest { 'abc1234' } | Should -BeNullOrEmpty
+        Get-JuicerUpdateNotice -Local 'abc1234' -Latest { $null } | Should -BeNullOrEmpty
+        $n = Get-JuicerUpdateNotice -Local 'abc1234' -Latest { 'def5678' }
+        $n.Latest | Should -Be 'def5678'
+        $n.Command | Should -BeLike 'irm https://github.com/*/winjuicer.ps1 | iex'
+        ConvertFrom-JuicerLauncherVersion 'sin versión' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Servicios que arrancan con Windows' {
+    It 'reconoce los conocidos y deja fuera el resto' {
+        (Get-JuicerKnownService 'AdobeARMservice' 'Adobe Acrobat Update Service').V | Should -Be 'Prescindible'
+        (Get-JuicerKnownService 'SystemUsageReportSvc_QUEENCREEK' 'Intel(R) System Usage Report Service SystemUsageReportSvc_QUEENCREEK').V | Should -Be 'Prescindible'
+        (Get-JuicerKnownService 'NahimicService' 'Nahimic service').V | Should -Be 'Opcional'
+        Get-JuicerKnownService 'NVDisplay.ContainerLocalSystem' 'NVIDIA Display Container LS' | Should -BeNullOrEmpty
+        Get-JuicerKnownService 'edgeupdate' 'Microsoft Edge Update Service (edgeupdate)' | Should -BeNullOrEmpty
+        Get-JuicerKnownService 'Audiosrv' 'Windows Audio' | Should -BeNullOrEmpty
+    }
+
+    It 'lo pasa a manual y lo deja como estaba' {
+        $m = New-NetMachine
+        $m.Backend.State.Services['AdobeARMservice'] = @{ Start = 'Automatic'; Running = $true }
+        $item = New-JuicerServiceItem 'AdobeARMservice' 'Adobe Acrobat Update Service' 'Automatic' (Get-JuicerKnownService 'AdobeARMservice')
+        $item.Enabled | Should -BeTrue
+        $item.Verdict | Should -Be 'Prescindible'
+        (Set-JuicerStartupItem $item $false).Outcome | Should -Be 'Aplicado'
+        $m.Backend.State.Services['AdobeARMservice'].Start | Should -Be 'Manual'
+        (Set-JuicerStartupItem $item $true).Outcome | Should -Be 'Deshecho'
+        $m.Backend.State.Services['AdobeARMservice'].Start | Should -Be 'Automatic'
+        (Read-JuicerJournal).Count | Should -Be 0
+    }
+}
+
+Describe 'Antes y después' {
+    BeforeEach { Remove-Item -LiteralPath (Get-JuicerMetricsPath) -ErrorAction SilentlyContinue }
+
+    It 'compara cada número con la medida inicial' {
+        $before = @{ Date = '2026-10-01T10:00:00'; Label = 'Antes de aplicar ajustes'; BootMs = 42000; BootDate = [datetime]'2026-10-01T09:58:00'; Startup = 14; Processes = 250; Services = 120; RamUsed = 6GB; DiskFree = 100GB; UptimeMin = 5 }
+        $after = @{ Date = '2026-10-02T10:00:00'; Label = 'Medida'; BootMs = 30000; BootDate = '2026-10-02T09:58:00'; Startup = 8; Processes = 251; Services = 125; RamUsed = 5GB; DiskFree = 110GB; UptimeMin = 240 }
+        $f = @(Compare-JuicerMetrics $before $after)
+        $f[0].Title | Should -BeLike 'Comparado con la medida del*'
+        @($f | Where-Object { $_.Title -like 'Arranque completo: 42,0 s → 30,0 s (−12,0 s)' -or $_.Title -like 'Arranque completo: 42.0 s → 30.0 s (−12.0 s)' })[0].Severity | Should -Be 'Ok'
+        @($f | Where-Object { $_.Title -like 'Programas, tareas*' })[0].Severity | Should -Be 'Ok'
+        @($f | Where-Object { $_.Title -like 'Procesos*' })[0].Severity | Should -Be 'Info'
+        @($f | Where-Object { $_.Title -like 'Servicios*' })[0].Severity | Should -Be 'Bajo'
+        @($f | Where-Object { $_.Title -like 'Espacio libre*' })[0].Severity | Should -Be 'Ok'
+        @($f | Where-Object { $_.Title -like '*recién encendido*' }).Count | Should -Be 1
+        # Same boot on both sides: nothing to compare yet, whatever type the date came back as.
+        $after.BootDate = '2026-10-01T09:58:00'
+        @(Compare-JuicerMetrics $before $after | Where-Object { $_.Title -like '*mismo arranque*' }).Count | Should -Be 1
+    }
+
+    It 'la primera medida es el punto de partida y se guarda sólo una vez' {
+        @(Invoke-JuicerMeasure)[0].Title | Should -Be 'Medida inicial guardada'
+        Save-JuicerBaseline
+        @(Read-JuicerMetrics).Count | Should -Be 1
+        @(Invoke-JuicerMeasure)[0].Title | Should -BeLike 'Comparado con*'
+        foreach ($i in 1..12) { Save-JuicerMetrics @{ Date = (Get-Date).ToString('s'); Label = "m$i" } }
+        $all = @(Read-JuicerMetrics)
+        $all.Count | Should -Be 10
+        $all[0].Label | Should -Be 'Medida inicial'
+        $all[-1].Label | Should -Be 'm12'
+        @(Invoke-JuicerMeasure -Reset)[0].Title | Should -Be 'Medida inicial guardada'
+        @(Read-JuicerMetrics).Count | Should -Be 1
+        @(Start-Juicer -Medir 6>$null)[-1] | Should -Be 0
     }
 }

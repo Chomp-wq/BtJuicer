@@ -162,6 +162,10 @@ $script:GuiXaml = @'
         <TextBlock Text="WIN JUICER" FontSize="24" FontWeight="Bold" Foreground="#F5B400"/>
         <TextBlock Text="  exprime Windows, sin humo y con vuelta atrás" FontSize="14" Foreground="#9A9AA5" VerticalAlignment="Bottom" Margin="0,0,0,4"/>
       </StackPanel>
+      <StackPanel x:Name="UpdatePanel" Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center" Visibility="Collapsed" Margin="16,0,0,0">
+        <TextBlock x:Name="UpdateNote" Foreground="#F5B400" VerticalAlignment="Center"/>
+        <Button x:Name="BtnUpdateCopy" Content="Copiar la orden" ToolTip="Cierra Win Juicer y pega la orden en PowerShell"/>
+      </StackPanel>
       <TextBlock x:Name="HwLine" Foreground="#9A9AA5" TextAlignment="Right" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" Margin="24,0,0,0"/>
     </DockPanel>
 
@@ -173,6 +177,8 @@ $script:GuiXaml = @'
           <DockPanel Grid.Row="0">
             <Button x:Name="BtnAudit" Content="Analizar de nuevo" DockPanel.Dock="Right"/>
             <Button x:Name="BtnAuditSave" Content="Guardar informe" DockPanel.Dock="Right"/>
+            <Button x:Name="BtnMeasureReset" Content="Nueva medida inicial" DockPanel.Dock="Right" ToolTip="Empieza la comparación desde ahora"/>
+            <Button x:Name="BtnMeasure" Content="Medir antes y después" DockPanel.Dock="Right" ToolTip="Arranque, procesos, servicios, memoria y espacio, comparados con la primera medida"/>
             <Button x:Name="BtnAuditRecommended" Content="Aplicar lo recomendado para este equipo" Style="{StaticResource Accent}" DockPanel.Dock="Right"/>
             <TextBlock Style="{StaticResource Note}" VerticalAlignment="Center" Text="Diagnóstico completo: hardware, BIOS y microcódigo, overclock y estabilidad, gráfica, discos y red. No cambia nada. Lo que necesita la BIOS o un cable no lo arregla ningún programa: cada aviso dice dónde se arregla."/>
           </DockPanel>
@@ -433,7 +439,12 @@ $script:GuiWork = @{
         $Sync.Status = 'Leyendo el hardware…'
         $hw = Get-JuicerHardwareProfile
         $Sync.Status = 'Comprobando el estado de cada ajuste…'
-        @{ Hw = $hw; Advice = (Get-JuicerAdvice $hw); Snapshot = (Get-JuicerGuiSnapshot) }
+        $Sync.Status = 'Buscando versiones nuevas…'
+        @{ Hw = $hw; Advice = (Get-JuicerAdvice $hw); Snapshot = (Get-JuicerGuiSnapshot); Update = (Get-JuicerUpdateNotice) }
+    }
+    Measure    = {
+        $Sync.Status = 'Midiendo arranque, procesos y memoria…'
+        @{ Findings = (Invoke-JuicerMeasure -Reset:([bool]$A.Reset)) }
     }
     Audit      = {
         $f = @(Get-JuicerAudit -OnSection { param($n) $Sync.Status = "Revisando: $n…" })
@@ -748,6 +759,10 @@ function Show-JuicerGuiAudit {
     $p.Children.Clear()
     [void]$p.Children.Add((New-JuicerUi TextBlock @{ Text = 'Este equipo'; Foreground = '#F5B400'; FontWeight = 'SemiBold'; FontSize = 14; Margin = '2,4,2,4' }))
     foreach ($l in (Format-JuicerHardwareSummary $script:Gui.Hw)) { [void]$p.Children.Add((New-JuicerUi TextBlock @{ Text = $l; TextWrapping = 'Wrap'; Margin = '2,1' })) }
+    if (@($script:Gui.Measure).Count -gt 0) {
+        [void]$p.Children.Add((New-JuicerUi TextBlock @{ Text = 'Antes y después'; Foreground = '#F5B400'; FontWeight = 'SemiBold'; FontSize = 14; Margin = '2,14,2,4' }))
+        foreach ($f in $script:Gui.Measure) { [void]$p.Children.Add((New-JuicerFindingCard $f)) }
+    }
     $top = @($Findings | Where-Object { $_.Severity -in 'Alto', 'Medio' } | Sort-Object { $script:SeverityOrder[$_.Severity] })
     if ($top.Count -gt 0) {
         [void]$p.Children.Add((New-JuicerUi TextBlock @{ Text = 'Lo que más rinde arreglar'; Foreground = '#F5B400'; FontWeight = 'SemiBold'; FontSize = 14; Margin = '2,14,2,4' }))
@@ -943,6 +958,16 @@ function Start-JuicerGuiAudit {
     }
 }
 
+function Start-JuicerGuiMeasure {
+    param([bool]$Reset)
+    Start-JuicerGuiTask 'Midiendo…' 'Measure' @{ Reset = $Reset } {
+        param($r)
+        $script:Gui.Measure = @($r.Findings)
+        Show-JuicerGuiAudit $script:Gui.Findings
+        Set-JuicerGuiStatus 'Medida hecha: está arriba del todo en Equipo.'
+    }
+}
+
 function Start-JuicerGuiDebloat {
     $script:Gui.DebloatLoaded = $true
     Start-JuicerGuiTask 'Leyendo las apps instaladas…' 'Debloat' @{} {
@@ -1002,6 +1027,15 @@ function Register-JuicerGuiHandlers {
     $c = $script:Gui.C
     $h = @{
         BtnAudit              = { Start-JuicerGuiAudit }
+        BtnMeasure            = { Start-JuicerGuiMeasure $false }
+        BtnMeasureReset       = {
+            if (-not (Confirm-JuicerGui '¿Empezar la comparación desde ahora? La medida inicial anterior se descarta.')) { return }
+            Start-JuicerGuiMeasure $true
+        }
+        BtnUpdateCopy         = {
+            ('System.Windows.Clipboard' -as [type])::SetText($script:OneLineCommand)
+            Set-JuicerGuiStatus 'Orden copiada. Cierra Win Juicer, abre PowerShell y pégala.'
+        }
         BtnAuditSave          = {
             if (@($script:Gui.Findings).Count -eq 0) { Show-JuicerGuiMessage 'El diagnóstico todavía no ha terminado.' | Out-Null; return }
             $p = Save-JuicerAuditReport '' (Format-JuicerHardwareSummary $script:Gui.Hw) $script:Gui.Findings
@@ -1221,6 +1255,11 @@ function Complete-JuicerGuiInit {
     $summary = @(Format-JuicerHardwareSummary $R.Hw)
     $script:Gui.C.HwLine.Text = (@($summary | Select-Object -First 2) -join '   ·   ')
     $script:Gui.C.HwLine.ToolTip = New-JuicerTip $summary
+    if ($R.Update) {
+        $script:Gui.C.UpdateNote.Text = "Hay una versión nueva ($($R.Update.Latest)); tienes la $($R.Update.Local)."
+        $script:Gui.C.UpdatePanel.ToolTip = $R.Update.Command
+        $script:Gui.C.UpdatePanel.Visibility = 'Visible'
+    }
     Show-JuicerGuiTweaks
     Show-JuicerGuiApps
     Show-JuicerGuiUndo
@@ -1240,7 +1279,7 @@ function Show-JuicerGui {
         Window = $win; C = @{}; Sync = [hashtable]::Synchronized(@{ Status = '' }); Task = $null
         Checks = @{}; AppChecks = @{}; InstallChecks = @{}; UndoChecks = @{}
         Hw = @{ Cpu = @{}; Gpus = @() }; Advice = @{}; Snapshot = @{ States = @{}; Dns = @() }
-        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; GameExe = $null; Findings = @()
+        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; GameExe = $null; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
