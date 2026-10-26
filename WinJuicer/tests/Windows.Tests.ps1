@@ -117,7 +117,12 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
     It 'lista las apps de la Tienda y las características de Windows' {
         { @(Get-JuicerDebloatState (Get-JuicerHardwareProfile)) } | Should -Not -Throw
         $b = Get-JuicerBackend
-        { & $b.FeatRead 'NetFx3' } | Should -Not -Throw
+        # The window asks for every component when it opens: dism took about
+        # a minute here, which is why reading goes through WMI.
+        & (Get-Module WinJuicer) { $script:FeatureCache = $null }
+        $t = Measure-Command { $f = & $b.FeatRead 'NetFx3' }
+        Write-Host ('    características leídas en {0:N1} s; NetFx3: {1}' -f $t.TotalSeconds, $(if ($f) { $f.Enabled } else { 'no existe' }))
+        $t.TotalSeconds | Should -BeLessThan 20
         { Get-JuicerCurrentDns } | Should -Not -Throw
     }
 

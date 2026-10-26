@@ -365,29 +365,22 @@ function Set-WinDns {
     Clear-DnsClientCache -ErrorAction SilentlyContinue
 }
 
-# dism prints in the system language unless asked; /English makes the state
-# names safe to read.
+# Reading goes through WMI: «dism /Get-Features» takes up to a minute, and
+# the window asks for every component when it opens. Changing goes through
+# dism, which also brings in what a feature depends on.
+# InstallState: 1 enabled, 2 disabled, 3 not on disk (Windows Update brings it).
 $script:FeatureCache = $null
 
 function Read-WinFeature {
     param([string]$Name)
     if ($null -eq $script:FeatureCache) {
-        $r = Invoke-WinNative 'dism.exe' @('/Online', '/English', '/Get-Features', '/Format:Table')
-        if ($r.Code -ne 0) { throw "dism no pudo listar las características: $($r.Output)" }
-        $script:FeatureCache = ConvertFrom-JuicerDismTable $r.Output
+        $cache = @{}
+        foreach ($f in @(Get-CimInstance Win32_OptionalFeature -ErrorAction Stop)) { $cache[[string]$f.Name] = [int]$f.InstallState }
+        $script:FeatureCache = $cache
     }
     $state = $script:FeatureCache[$Name]
     if ($null -eq $state) { return $null }
-    @{ Enabled = ($state -in 'Enabled', 'Enable Pending') }
-}
-
-function ConvertFrom-JuicerDismTable {
-    param([string]$Text)
-    $t = @{}
-    foreach ($line in ($Text -split "`r?`n")) {
-        if ($line -match '^\s*([\w\-\.]+)\s*\|\s*(Enabled|Disabled|Enable Pending|Disable Pending|Disabled with Payload Removed)\s*$') { $t[$Matches[1]] = $Matches[2] }
-    }
-    $t
+    @{ Enabled = ($state -eq 1) }
 }
 
 function Set-WinFeature {
