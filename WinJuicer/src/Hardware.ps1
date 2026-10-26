@@ -60,6 +60,48 @@ function Get-JuicerCpuTraits {
     $t
 }
 
+# --- Processor and memory together ----------------------------------------
+
+# The memory speed each platform runs best at, which is not always the
+# fastest the kit is sold at. On AM4 the Infinity Fabric (FCLK) has to run at
+# half the memory's transfer rate to stay 1:1; most Zen 3 chips top out at
+# FCLK 1800-1900, so DDR4-4000 drops to 2:1 and its extra bandwidth comes with
+# more latency than it gains. AM5 keeps the controller 1:1 up to about 6400;
+# beyond that it goes 1:2. Intel 12th-14th gen run DDR4 in Gear 1 up to about
+# 3600-3733 and DDR5 always in Gear 2, where speed is speed. APUs have a
+# stronger fabric and their integrated graphics want every MT/s. Null when
+# the platform has no such ceiling or is not recognised: then the kit's
+# rating is the target.
+function Get-JuicerMemoryPlan {
+    param([hashtable]$Cpu, [string]$Ddr)
+    if (-not $Cpu -or -not $Cpu.Name -or $Cpu.Mobile) { return $null }
+    $n = $Cpu.Name
+    $plan = $null
+    if ($Cpu.Vendor -eq 'AMD' -and $Ddr -eq 'DDR4') {
+        if ($n -match 'Ryzen [3579] (?:[12]\d{3}|3\d{3}G)') {
+            $plan = @{ Target = 3200; Max = 3466; Platform = 'Ryzen de primera o segunda generación (Zen/Zen+)'; Why = 'Su Infinity Fabric ronda los 1600-1733 MHz: por encima de 3200-3466 MT/s la memoria deja de ir sincronizada con él.' }
+        } elseif ($n -match 'Ryzen [3579] [45]\d{3}G') {
+            $plan = @{ Target = 4000; Max = 4400; Platform = 'APU Ryzen (Renoir/Cezanne)'; Apu = $true; Why = 'Las APU sostienen un Infinity Fabric de 2000-2200 MHz: hasta 4000-4400 MT/s en 1:1, y su gráfica integrada aprovecha cada MT/s.' }
+        } elseif ($n -match 'Ryzen [3579] 3\d{3}') {
+            $plan = @{ Target = 3600; Max = 3733; Platform = 'Ryzen 3000 (Zen 2)'; Why = 'Su Infinity Fabric llega a 1800-1866 MHz: 3600-3733 MT/s en 1:1. Más arriba pasa a 2:1 y la latencia sube más de lo que gana el ancho de banda.' }
+        } elseif ($n -match 'Ryzen [3579] 5\d{3}') {
+            $plan = @{ Target = 3600; Max = 3800; Platform = 'Ryzen 5000 (Zen 3)'; Why = 'Su Infinity Fabric (FCLK) llega casi siempre a 1800 MHz y a veces a 1900: 3600 MT/s en 1:1, o 3800 si tu FCLK aguanta 1900 sin errores WHEA. A 4000 haría falta FCLK 2000, que casi ningún Zen 3 sostiene: pasa a 2:1 y rinde menos.' }
+        }
+    } elseif ($Cpu.Vendor -eq 'AMD' -and $Ddr -eq 'DDR5') {
+        if ($n -match 'Ryzen [3579] 8\d{3}G') {
+            $plan = @{ Target = 6400; Max = 8000; Platform = 'APU Ryzen 8000G'; Apu = $true; Why = 'Las APU de AM5 sostienen más velocidad en 1:1 y su gráfica integrada la aprovecha: cuanto más rápida, mejor.' }
+        } elseif ($n -match 'Ryzen [3579] [79]\d{3}') {
+            $plan = @{ Target = 6000; Max = 6400; Platform = 'Ryzen de AM5 (Zen 4/Zen 5)'; Why = 'El controlador va 1:1 con la memoria hasta unos 6000-6400 MT/s; por encima pasa a 1:2 y la latencia sube. DDR5-6000 CL30 es el punto dulce; 8000 en 1:2 sólo compensa con placas de dos ranuras y mucho ajuste.' }
+        }
+    } elseif ($Cpu.Vendor -eq 'Intel' -and $Ddr -eq 'DDR4') {
+        if ($n -match 'i[3579]-1[1-4]\d{3}') {
+            $plan = @{ Target = 3600; Max = 3733; Platform = 'Intel de 11.ª a 14.ª generación con DDR4'; Why = 'Con DDR4 el controlador va en Gear 1 hasta unos 3600-3733 MT/s; por encima pasa a Gear 2, con bastante más latencia.' }
+        }
+    }
+    if ($plan -and $Cpu.X3D) { $plan.X3d = $true }
+    $plan
+}
+
 # --- Graphics --------------------------------------------------------------
 
 function Get-JuicerGpuTraits {

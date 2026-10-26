@@ -347,7 +347,35 @@ function Get-JuicerTuningAudit {
         $gm = Read-JuicerReg 'HKCU\Software\Microsoft\GameBar' 'AutoGameModeEnabled'
         $out += Get-JuicerX3dFindings -Cpu $cpu -Driver $driver -GameBar $hw.GameBar -ActivePlan $plan -GameModeOff ($gm -and $gm.Value -eq 0)
     }
+    $out += Get-JuicerCpuTuningFindings $cpu
     $out
+}
+
+# What fine-tuning each Ryzen allows, and the one that pays off: a negative
+# Curve Optimizer lowers voltage at each frequency, so the chip runs cooler
+# and holds its boost longer. The X3D parts lock the multiplier, but from
+# AGESA 1.2.0.8 (AM4) and on AM5 they accept Curve Optimizer.
+function Get-JuicerCpuTuningFindings {
+    param([hashtable]$Cpu)
+    if (-not $Cpu -or $Cpu.Vendor -ne 'AMD' -or $Cpu.Mobile -or -not $Cpu.Name) { return @() }
+    $area = 'Overclock y BIOS'
+    $n = $Cpu.Name
+    $test = ' Pruébalo con OCCT o CoreCycler durante horas: si aparecen errores WHEA o cierres, sube el valor (menos negativo) en ese núcleo.'
+    if ($n -match 'Ryzen [3579] 5\d{3}X3D') {
+        return (New-JuicerFinding $area 'Info' "Tu $n no admite overclock, pero sí Curve Optimizer" ("Con una BIOS de AGESA 1.2.0.8 o posterior (en PBO > Curve Optimizer), o con la herramienta PBO2 Tuner desde Windows: un valor negativo de -15 a -30 baja 5-10 °C y sostiene la frecuencia máxima más tiempo, que en un X3D es casi todo lo que se puede ganar." + $test))
+    }
+    if ($n -match 'Ryzen [3579] 7\d{3}X3D') {
+        return (New-JuicerFinding $area 'Info' "Tu $n admite Curve Optimizer, no overclock" ("En la BIOS, PBO > Curve Optimizer, negativo de -15 a -30: menos temperatura y más tiempo a la frecuencia máxima. Subir la frecuencia o el PPT no está permitido en los 7000X3D." + $test))
+    }
+    if ($n -match 'Ryzen [3579] 9\d{3}X3D') {
+        return (New-JuicerFinding $area 'Info' "Tu $n admite PBO completo y Curve Optimizer" ("A diferencia de los X3D anteriores, los 9000X3D dejan subir límites de potencia y frecuencia. Lo que más rinde por esfuerzo: Curve Optimizer negativo (-15 a -30) y, si la refrigeración aguanta, PBO con límites de placa." + $test))
+    }
+    if ($Cpu.Am4 -or $Cpu.Am5) {
+        # Curve Optimizer arrived with Zen 3: the 1000 to 4000 series do not have it.
+        if ($n -match 'Ryzen [3579] [1-4]\d{3}') { return @() }
+        return (New-JuicerFinding $area 'Info' "Tu $n admite PBO y Curve Optimizer" ("Curve Optimizer negativo (de -10 a -30 por núcleo) en la BIOS suele dar más frecuencia sostenida con menos temperatura, sin tocar nada más. Si tu disipador va justo, el modo Eco (65 W o 105 W) pierde muy poco en juegos." + $test))
+    }
+    @()
 }
 
 function Get-JuicerGpuTuningAudit {

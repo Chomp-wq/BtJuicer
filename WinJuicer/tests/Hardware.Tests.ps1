@@ -514,3 +514,61 @@ Describe 'Frecuencia variable' {
         $a.Reason | Should -BeLike '*FreeSync*'
     }
 }
+
+Describe 'Procesador y memoria juntos' {
+    BeforeAll {
+        function New-Kit {
+            param([string]$Part, [int]$At, [int]$Type = 26, [int]$Jedec = 2133)
+            foreach ($slot in 'DIMM_A2', 'DIMM_B2') {
+                [pscustomobject]@{ Capacity = 16GB; Speed = $Jedec; ConfiguredClockSpeed = $At; SMBIOSMemoryType = $Type; DeviceLocator = $slot; BankLabel = ''; PartNumber = $Part }
+            }
+        }
+        $script:X3d = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD' -Cores 8 -Threads 16
+    }
+
+    It 'un kit de 4000 a 3600 en un Ryzen 5000 está bien elegido, y no pide XMP' {
+        $f = @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 3600) $false $X3d)
+        $ok = @($f | Where-Object { $_.Title -like 'Bien elegido*' })
+        $ok.Count | Should -Be 1
+        $ok[0].Title | Should -BeLike '*kit es de 4000*3600-3800*'
+        $ok[0].Detail | Should -BeLike '*FCLK*3D V-Cache*'
+        @($f | Where-Object { $_.Title -like '*certificado*' -or $_.Severity -in 'Alto', 'Medio' }).Count | Should -Be 0
+    }
+
+    It 'el mismo kit a 4000 en ese Ryzen: que baje a 3600-3800' {
+        $f = @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 4000) $false $X3d)
+        $w = @($f | Where-Object { $_.Title -like 'La RAM va a 4000 MT/s: más de lo que rinde*' })
+        $w.Count | Should -Be 1
+        $w[0].Detail | Should -BeLike '*2:1*3600-3800*'
+    }
+
+    It 'sin XMP en ese Ryzen: 3600 a mano, no el XMP de 4000' {
+        $w = @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 2133) $false $X3d | Where-Object { $_.Severity -eq 'Alto' })
+        $w[0].Title | Should -BeLike '*lo óptimo es 3600-3800*'
+        $w[0].Detail | Should -BeLike '*no actives su XMP tal cual*'
+        # A 3600 kit: then XMP is right.
+        @(Get-JuicerRamFindings @(New-Kit 'F4-3600C16-16GVKC' 2133) $false $X3d | Where-Object { $_.Title -like '*certificado a 3600*' }).Count | Should -Be 1
+    }
+
+    It 'conoce cada plataforma' {
+        $am5 = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD'
+        (Get-JuicerMemoryPlan $am5 'DDR5').Target | Should -Be 6000
+        @(Get-JuicerRamFindings @(New-Kit 'F5-7200J3445G16GX2-TZ5RK' 7200 34 4800) $false $am5 | Where-Object { $_.Title -like '*7200 MT/s: más de lo que rinde*' }).Count | Should -Be 1
+        $apu = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700G with Radeon Graphics' -Vendor 'AuthenticAMD'
+        (Get-JuicerMemoryPlan $apu 'DDR4').Max | Should -Be 4400
+        @(Get-JuicerRamFindings @(New-Kit 'F4-4000C18-16GVK' 4000) $false $apu | Where-Object { $_.Severity -in 'Alto', 'Medio' }).Count | Should -Be 0
+        (Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 3600 6-Core Processor' -Vendor 'AuthenticAMD') 'DDR4').Max | Should -Be 3733
+        (Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name '12th Gen Intel(R) Core(TM) i5-12600K' -Vendor 'GenuineIntel') 'DDR4').Why | Should -BeLike '*Gear 1*'
+        Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name '12th Gen Intel(R) Core(TM) i5-12600K' -Vendor 'GenuineIntel') 'DDR5' | Should -BeNullOrEmpty
+        Get-JuicerMemoryPlan (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7840HS w/ Radeon 780M Graphics' -Vendor 'AuthenticAMD') 'DDR5' | Should -BeNullOrEmpty
+    }
+
+    It 'dice qué ajuste fino admite cada Ryzen' {
+        @(Get-JuicerCpuTuningFindings $X3d)[0].Title | Should -BeLike '*no admite overclock, pero sí Curve Optimizer'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD'))[0].Title | Should -BeLike '*Curve Optimizer, no overclock'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 9800X3D 8-Core Processor' -Vendor 'AuthenticAMD'))[0].Title | Should -BeLike '*PBO completo*'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 7600X 6-Core Processor' -Vendor 'AuthenticAMD'))[0].Title | Should -BeLike '*PBO y Curve Optimizer'
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 3600 6-Core Processor' -Vendor 'AuthenticAMD')).Count | Should -Be 0
+        @(Get-JuicerCpuTuningFindings (Get-JuicerCpuTraits -Name '13th Gen Intel(R) Core(TM) i7-13700K' -Vendor 'GenuineIntel')).Count | Should -Be 0
+    }
+}
