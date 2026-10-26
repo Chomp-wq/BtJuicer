@@ -46,6 +46,11 @@ function Get-JuicerAdviceRule {
         'juegos.modo' {
             if ($c.DualCcdX3D) { return New-JuicerVerdict 'Recomendado' "Imprescindible en tu $($c.Name): el reparto entre CCD depende de él." }
         }
+        'juegos.vrr' {
+            if ($Hw.RefreshMax -gt 60) { return New-JuicerVerdict 'Recomendado' "Tu pantalla llega a $($Hw.RefreshMax) Hz: a esas frecuencias casi todas tienen G-Sync o FreeSync, y así lo usan todos los juegos." }
+            if ($Hw.RefreshMax -gt 0) { return New-JuicerVerdict 'NoRecomendado' 'Tu pantalla va a 60 Hz: casi ninguna de 60 Hz tiene frecuencia variable, así que no cambia nada.' }
+            return New-JuicerVerdict 'Opcional' 'Sólo si tu pantalla tiene G-Sync o FreeSync.'
+        }
         'juegos.hags' {
             if (Test-JuicerAnyGpu $Hw { $_.FrameGen }) { return New-JuicerVerdict 'Recomendado' 'Tu gráfica RTX 40 o posterior lo necesita para la generación de fotogramas de DLSS.' }
             if (Test-JuicerAnyGpu $Hw { $_.Discrete -and $_.Hags -eq $true }) { return New-JuicerVerdict 'Recomendado' 'Tu gráfica lo admite: algo menos de carga en el procesador.' }

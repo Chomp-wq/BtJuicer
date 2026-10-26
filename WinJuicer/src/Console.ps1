@@ -484,16 +484,42 @@ function Show-JuicerGames {
         Write-JuicerMenu @(
             @('1', 'Exclusiones de Defender', 'cargas más rápidas en tus bibliotecas (Extremo)'),
             @('2', 'Configurar un juego', 'GPU potente y prioridad alta para un .exe'),
-            @('3', 'Juegos configurados', 'ver y deshacer')
+            @('3', 'Juegos configurados', 'ver y deshacer'),
+            @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon')
         )
         $c = Read-JuicerChoice 'Elige, Intro para volver'
         switch ($c) {
             '1' { Show-JuicerDefenderLibraries }
             '2' { Show-JuicerConfigureGame }
             '3' { Show-JuicerConfiguredGames }
+            '4' { Show-JuicerFrameMeasure }
             '' { return }
         }
     }
+}
+
+# One line that rewrites itself: a countdown, not a scrolling list.
+function Write-JuicerStatusLine {
+    param([string]$Text)
+    Write-Host ("`r  " + $Text).PadRight(76) -NoNewline -ForegroundColor DarkGray
+}
+
+function Show-JuicerFrameMeasure {
+    Write-JuicerHeader 'Medir FPS y frametimes'
+    Write-JuicerWrapped 'Abre el juego y prepara una escena que puedas repetir. Al empezar tienes 10 segundos para volver al juego; juega con normalidad hasta que acabe. La primera vez descarga PresentMon, de Intel.' 2 'Gray'
+    Write-Host ''
+    $s = Read-JuicerChoice 'Segundos de medida (Intro = 60)'
+    $secs = 60
+    if ($s -match '^\d+$' -and [int]$s -ge 10 -and [int]$s -le 600) { $secs = [int]$s }
+    try {
+        $f = @(Invoke-JuicerFrameCapture -Seconds $secs -Delay 10 -OnStatus ${function:Write-JuicerStatusLine})
+        Write-Host ''
+        Write-JuicerFindings $f
+    } catch {
+        Write-Host ''
+        Write-JuicerWrapped "No se pudo medir: $_" 2 'Yellow'
+    }
+    Wait-JuicerKey
 }
 
 function Show-JuicerDefenderLibraries {
@@ -977,6 +1003,8 @@ function Start-Juicer {
         [switch]$Equipo,
         [switch]$Medir,
         [switch]$NuevaMedida,
+        [int]$MedirJuego,
+        [string]$Juego,
         [switch]$Lista,
         [switch]$Recomendado,
         [string]$Perfil,
@@ -1000,7 +1028,7 @@ function Start-Juicer {
     $Deshacer = & $split $Deshacer
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $MedirJuego -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
@@ -1029,6 +1057,18 @@ function Start-Juicer {
         return 0
     }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
+    if ($MedirJuego) {
+        if ($MedirJuego -lt 10 -or $MedirJuego -gt 600) { Write-Host '  -MedirJuego va de 10 a 600 segundos.' -ForegroundColor Yellow; return 2 }
+        try {
+            $f = @(Invoke-JuicerFrameCapture -Seconds $MedirJuego -Delay 10 -Process $Juego -OnStatus ${function:Write-JuicerStatusLine})
+            Write-Host ''
+            Write-JuicerFindings $f
+            return 0
+        } catch {
+            Write-Host "  No se pudo medir: $_" -ForegroundColor Yellow
+            return 1
+        }
+    }
     if ($Medir -or $NuevaMedida) { Write-JuicerFindings (Invoke-JuicerMeasure -Reset:$NuevaMedida); return 0 }
     if ($Exportar) {
         $cfg = Export-JuicerConfig $Exportar

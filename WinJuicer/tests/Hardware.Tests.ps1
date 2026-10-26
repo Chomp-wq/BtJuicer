@@ -501,3 +501,11 @@ Describe 'Pantallas, discos y versión de Windows' {
         (Format-JuicerHardwareSummary $hw) -join "`n" | Should -BeLike '*Windows: 24H2, con parches*'
     }
 }
+
+Describe 'Frecuencia variable' {
+    It 'la recomienda con pantallas de más de 60 Hz' {
+        (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 165 }))['juegos.vrr'].Verdict | Should -Be 'Recomendado'
+        (Get-JuicerAdvice (New-TestHw -Extra @{ RefreshMax = 60 }))['juegos.vrr'].Verdict | Should -Be 'NoRecomendado'
+        (Get-JuicerAdvice (New-TestHw))['juegos.vrr'].Verdict | Should -Be 'Opcional'
+    }
+}

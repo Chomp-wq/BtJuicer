@@ -394,3 +394,111 @@ Describe 'Antes y después' {
         @(Start-Juicer -Medir 6>$null)[-1] | Should -Be 0
     }
 }
+
+Describe 'FPS y frametimes' {
+    BeforeAll {
+        # Rows like PresentMon's CSV. Times in milliseconds, as text.
+        function New-FrameRows {
+            param([string]$App = 'game.exe', [double[]]$Times, [double]$GpuShare = 0.95, [string]$Mode = 'Hardware: Independent Flip',
+                [string]$Tearing = '1', [string]$Sync = '0', [string]$FtName = 'FrameTime', [string]$GpuName = 'GPUBusy')
+            foreach ($t in $Times) {
+                $o = [ordered]@{ Application = $App; ProcessID = '100'; SyncInterval = $Sync; AllowsTearing = $Tearing; PresentMode = $Mode }
+                $o[$FtName] = $t.ToString([Globalization.CultureInfo]::InvariantCulture)
+                $o[$GpuName] = ($t * $GpuShare).ToString([Globalization.CultureInfo]::InvariantCulture)
+                $o.DisplayLatency = '12.5'
+                [pscustomobject]$o
+            }
+        }
+        # 1 % of the frames slow: the lows show it, and it is a lot of stutters for 7 seconds.
+        $script:Spiky = [double[]](@(7.0) * 990 + @(30.0) * 10)
+        # Two minutes with the odd hitch.
+        $script:Steady = [double[]](@(7.0) * 17000 + @(30.0) * 4)
+    }
+
+    It 'elige el juego y no el escritorio ni el explorador' {
+        $rows = @(New-FrameRows -Times $Spiky) + @(New-FrameRows 'dwm.exe' ([double[]](@(7.0) * 2000))) + @(New-FrameRows 'explorer.exe' ([double[]](@(16.0) * 1500)))
+        $g = @(Select-JuicerGameRows $rows)
+        $g.Count | Should -Be 1000
+        $g[0].Application | Should -Be 'game.exe'
+        @(Select-JuicerGameRows $rows 'explorer').Count | Should -Be 1500
+        @(Select-JuicerGameRows @() $null).Count | Should -Be 0
+    }
+
+    It 'calcula media, 1 % y 0,1 % bajos y tirones' {
+        $r = Measure-JuicerFrames @(New-FrameRows -Times $Spiky)
+        $r.Frames | Should -Be 1000
+        $r.AvgFps | Should -Be 138.3
+        $r.Low1 | Should -Be 142.9
+        $r.Low01 | Should -Be 33.3
+        $r.Stutters | Should -Be 10
+        $r.GpuBound | Should -Be 100
+        $r.Latency | Should -Be 12.5
+        $r.PresentMode | Should -Be 'Hardware: Independent Flip'
+        Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(7.0) * 5))) | Should -BeNullOrEmpty
+    }
+
+    It 'lee también las columnas de PresentMon 2.4 en adelante' {
+        $r = Measure-JuicerFrames @(New-FrameRows -Times $Spiky -FtName 'MsBetweenAppStart' -GpuName 'MsGPUBusy' -GpuShare 0.4)
+        $r.AvgFps | Should -Be 138.3
+        $r.GpuBound | Should -Be 0
+    }
+
+    It 'dice qué limita y cómo se muestra' {
+        $gpu = Measure-JuicerFrames @(New-FrameRows -Times $Steady)
+        $f = @(Get-JuicerFrameFindings $gpu $null 165)
+        $f[0].Title | Should -BeLike 'Media 143 FPS*'
+        @($f | Where-Object { $_.Title -like 'La gráfica es el límite*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like 'Frametimes estables*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like 'Presentación directa*' }).Count | Should -Be 1
+
+        $cpu = Measure-JuicerFrames @(New-FrameRows -Times $Steady -GpuShare 0.5 -Mode 'Composed: Copy with GPU GDI')
+        $f = @(Get-JuicerFrameFindings $cpu $null 60 @(@{ Name = 'chrome'; Pct = 9.5 }))
+        $c = @($f | Where-Object { $_.Title -like 'El procesador es el límite*' })
+        $c.Count | Should -Be 1
+        $c[0].Detail | Should -BeLike '*chrome 9.5 %*'
+        @($f | Where-Object { $_.Title -like '*copiando*' })[0].Severity | Should -Be 'Medio'
+        @($f | Where-Object { $_.Title -like 'Pasa de los 60 Hz*' }).Count | Should -Be 1
+        # Not twice: the background list is already in the processor finding.
+        @($f | Where-Object { $_.Title -like 'En segundo plano*' }).Count | Should -Be 0
+    }
+
+    It 'reconoce la sincronización vertical y los tirones' {
+        $v = Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(16.67) * 600)) -Sync '1' -Tearing '0' -GpuShare 0.3)
+        @(Get-JuicerFrameFindings $v $null 60 | Where-Object { $_.Title -like '*sincronización vertical a 60 Hz' }).Count | Should -Be 1
+        @(Get-JuicerFrameFindings $v $null 60 | Where-Object { $_.Title -like 'El procesador*' }).Count | Should -Be 0
+
+        $bad = Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(8.0) * 900 + @(40.0) * 100)))
+        @(Get-JuicerFrameFindings $bad $null 144 | Where-Object { $_.Title -like 'Frametimes irregulares*' })[0].Severity | Should -Be 'Alto'
+    }
+
+    It 'compara con la medida anterior del mismo juego' {
+        Remove-Item -LiteralPath (Get-JuicerFrameHistoryPath) -ErrorAction SilentlyContinue
+        $old = Measure-JuicerFrames @(New-FrameRows -Times ([double[]](@(10.0) * 1000)))
+        $old.Date = '2026-10-01T20:00:00'
+        Save-JuicerFrameResult $old
+        Save-JuicerFrameResult @{ Application = 'otro.exe'; AvgFps = 50; Low1 = 40; Date = '2026-10-02T20:00:00' }
+        $prev = Get-JuicerPreviousFrameResult 'game.exe'
+        $prev.AvgFps | Should -Be 100
+        $new = Measure-JuicerFrames @(New-FrameRows -Times $Steady)
+        $cmp = @(Get-JuicerFrameFindings $new $prev 165 | Where-Object { $_.Title -like 'Respecto al*' })
+        $cmp[0].Severity | Should -Be 'Ok'
+        $cmp[0].Title | Should -BeLike '*100 → 143 FPS (+43 %)*'
+        Get-JuicerPreviousFrameResult 'nunca.exe' | Should -BeNullOrEmpty
+    }
+
+    It 'calcula qué gastó CPU en segundo plano y lee la gráfica de NVIDIA' {
+        $before = @(@{ Id = 1; Name = 'chrome'; Cpu = 10.0 }, @{ Id = 2; Name = 'game'; Cpu = 100.0 }, @{ Id = 3; Name = 'Idle'; Cpu = 0.0 }, @{ Id = 4; Name = 'notepad'; Cpu = 1.0 })
+        $after = @(@{ Id = 1; Name = 'chrome'; Cpu = 22.0 }, @{ Id = 2; Name = 'game'; Cpu = 500.0 }, @{ Id = 3; Name = 'Idle'; Cpu = 900.0 }, @{ Id = 4; Name = 'notepad'; Cpu = 1.1 })
+        $h = @(Get-JuicerCpuHogs $before $after 60 4 'game.exe')
+        $h.Count | Should -Be 1
+        $h[0].Name | Should -Be 'chrome'
+        $h[0].Pct | Should -Be 5
+        $g = ConvertFrom-JuicerGpuSamples @('70, 99, 2700', '84, 99, 2600', '88, 98, 1900', '86, 40, 1500')
+        $g.MaxTemp | Should -Be 88
+        $g.LowBusyClock | Should -Be 1900
+        $f = @(Get-JuicerFrameFindings (Measure-JuicerFrames @(New-FrameRows -Times $Steady)) $null 0 @() $g)
+        @($f | Where-Object { $_.Title -like '*88 °C' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like '*bajó a 1.900 MHz*' -or $_.Title -like '*bajó a 1,900 MHz*' }).Count | Should -Be 1
+        ConvertFrom-JuicerGpuSamples @('basura') | Should -BeNullOrEmpty
+    }
+}

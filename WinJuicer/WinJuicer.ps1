@@ -25,6 +25,14 @@
 .PARAMETER NuevaMedida
     Descarta la medida inicial y guarda la de ahora como punto de partida.
 
+.PARAMETER MedirJuego
+    Mide FPS y frametimes durante esos segundos (de 10 a 600), empezando 10
+    segundos después para dar tiempo a volver al juego. Usa PresentMon de Intel.
+
+.PARAMETER Juego
+    Con -MedirJuego, el .exe que medir (por ejemplo cs2.exe). Sin él, el que
+    más fotogramas presente.
+
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
 
@@ -93,6 +101,8 @@ param(
     [switch]$Equipo,
     [switch]$Medir,
     [switch]$NuevaMedida,
+    [int]$MedirJuego,
+    [string]$Juego,
     [switch]$Lista,
     [switch]$Recomendado,
     [ValidateSet('Seguro', 'Rendimiento', 'Extremo')][string]$Perfil,

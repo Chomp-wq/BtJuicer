@@ -296,6 +296,17 @@ $script:GuiXaml = @'
       <TabItem Header="Juegos" x:Name="TabJuegos">
         <ScrollViewer VerticalScrollBarVisibility="Auto">
           <StackPanel Margin="14,4,14,10">
+            <TextBlock Text="Medir FPS y frametimes" Style="{StaticResource Head}"/>
+            <TextBlock Style="{StaticResource Note}" Text="Con PresentMon de Intel (se descarga la primera vez). Pulsa, vuelve al juego en 10 segundos y juega una escena que puedas repetir: media, 1 % y 0,1 % bajos, tirones, si limita el procesador o la gráfica y qué gastaba CPU en segundo plano. Cada medida se compara con la anterior del mismo juego, así sabes si un ajuste dio FPS de verdad."/>
+            <WrapPanel>
+              <ComboBox x:Name="FrameSeconds" Width="130" Margin="3" SelectedIndex="1">
+                <ComboBoxItem Content="30 segundos" Tag="30"/>
+                <ComboBoxItem Content="60 segundos" Tag="60"/>
+                <ComboBoxItem Content="120 segundos" Tag="120"/>
+              </ComboBox>
+              <Button x:Name="BtnFrameMeasure" Content="Medir (empieza en 10 s)" Style="{StaticResource Accent}"/>
+            </WrapPanel>
+            <StackPanel x:Name="FramePanel"/>
             <TextBlock Text="Configurar un juego" Style="{StaticResource Head}"/>
             <TextBlock Style="{StaticResource Note}" Text="Elige el .exe del juego (el que se ejecuta de verdad, no el lanzador). La GPU de alto rendimiento sólo cambia algo con dos gráficas, como en los portátiles con integrada y dedicada."/>
             <WrapPanel>
@@ -441,6 +452,9 @@ $script:GuiWork = @{
         $Sync.Status = 'Comprobando el estado de cada ajuste…'
         $Sync.Status = 'Buscando versiones nuevas…'
         @{ Hw = $hw; Advice = (Get-JuicerAdvice $hw); Snapshot = (Get-JuicerGuiSnapshot); Update = (Get-JuicerUpdateNotice) }
+    }
+    Frames     = {
+        @{ Findings = @(Invoke-JuicerFrameCapture -Seconds ([int]$A.Seconds) -Delay 10 -OnStatus { param($t) $Sync.Status = $t }) }
     }
     Measure    = {
         $Sync.Status = 'Midiendo arranque, procesos y memoria…'
@@ -1028,6 +1042,17 @@ function Register-JuicerGuiHandlers {
     $h = @{
         BtnAudit              = { Start-JuicerGuiAudit }
         BtnMeasure            = { Start-JuicerGuiMeasure $false }
+        BtnFrameMeasure       = {
+            $item = $script:Gui.C.FrameSeconds.SelectedItem
+            $secs = if ($item) { [int]$item.Tag } else { 60 }
+            Start-JuicerGuiTask 'Preparando la medida…' 'Frames' @{ Seconds = $secs } {
+                param($r)
+                $p = $script:Gui.C.FramePanel
+                $p.Children.Clear()
+                foreach ($f in @($r.Findings)) { [void]$p.Children.Add((New-JuicerFindingCard $f)) }
+                Set-JuicerGuiStatus 'Medida terminada: el resultado está en la pestaña Juegos.'
+            }
+        }
         BtnMeasureReset       = {
             if (-not (Confirm-JuicerGui '¿Empezar la comparación desde ahora? La medida inicial anterior se descarta.')) { return }
             Start-JuicerGuiMeasure $true
