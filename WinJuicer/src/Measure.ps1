@@ -123,7 +123,7 @@ function Compare-JuicerMetrics {
 }
 
 # What the «Medir» buttons do: the first time, keep the starting point; after
-# that, measure and compare with it.
+# that, measure and compare with it. Callers wrap it in @().
 function Invoke-JuicerMeasure {
     param([switch]$Reset)
     $list = @(Read-JuicerMetrics)
@@ -131,8 +131,8 @@ function Invoke-JuicerMeasure {
     $now = Get-JuicerMetrics $(if ($first) { 'Medida inicial' } else { 'Medida' })
     if ($first) {
         Save-JuicerMetrics $now -Reset:$Reset
-        return , @(New-JuicerFinding 'Antes y después' 'Info' 'Medida inicial guardada' 'Aplica los ajustes, reinicia, espera un par de minutos y vuelve a medir: verás cuánto ha cambiado el arranque, los procesos y la memoria.')
+        return (New-JuicerFinding 'Antes y después' 'Info' 'Medida inicial guardada' 'Aplica los ajustes, reinicia, espera un par de minutos y vuelve a medir: verás cuánto ha cambiado el arranque, los procesos y la memoria.')
     }
     Save-JuicerMetrics $now
-    , @(Compare-JuicerMetrics $list[0] $now)
+    Compare-JuicerMetrics $list[0] $now
 }

@@ -444,7 +444,7 @@ $script:GuiWork = @{
     }
     Measure    = {
         $Sync.Status = 'Midiendo arranque, procesos y memoria…'
-        @{ Findings = (Invoke-JuicerMeasure -Reset:([bool]$A.Reset)) }
+        @{ Findings = @(Invoke-JuicerMeasure -Reset:([bool]$A.Reset)) }
     }
     Audit      = {
         $f = @(Get-JuicerAudit -OnSection { param($n) $Sync.Status = "Revisando: $n…" })
