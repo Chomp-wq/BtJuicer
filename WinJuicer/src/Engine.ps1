@@ -24,11 +24,16 @@ function Get-JuicerHome {
 
 function Get-JuicerJournalPath { Join-Path (Get-JuicerHome) 'diario.json' }
 
+# One previous file is kept: past a megabyte the log becomes registro.1.log.
 function Write-JuicerLog {
     param([string]$Message)
     try {
+        $path = Join-Path (Get-JuicerHome) 'registro.log'
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -gt 1MB) {
+            Move-Item -LiteralPath $path -Destination (Join-Path (Get-JuicerHome) 'registro.1.log') -Force
+        }
         $line = '{0:yyyy-MM-dd HH:mm:ss}  {1}{2}' -f (Get-Date), $Message, [Environment]::NewLine
-        [IO.File]::AppendAllText((Join-Path (Get-JuicerHome) 'registro.log'), $line, (New-Object Text.UTF8Encoding $false))
+        [IO.File]::AppendAllText($path, $line, (New-Object Text.UTF8Encoding $false))
     } catch {
         Write-Verbose "No se pudo escribir el registro: $_"
     }

@@ -172,6 +172,7 @@ $script:GuiXaml = @'
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
           <DockPanel Grid.Row="0">
             <Button x:Name="BtnAudit" Content="Analizar de nuevo" DockPanel.Dock="Right"/>
+            <Button x:Name="BtnAuditSave" Content="Guardar informe" DockPanel.Dock="Right"/>
             <Button x:Name="BtnAuditRecommended" Content="Aplicar lo recomendado para este equipo" Style="{StaticResource Accent}" DockPanel.Dock="Right"/>
             <TextBlock Style="{StaticResource Note}" VerticalAlignment="Center" Text="Diagnóstico completo: hardware, BIOS y microcódigo, overclock y estabilidad, gráfica, discos y red. No cambia nada. Lo que necesita la BIOS o un cable no lo arregla ningún programa: cada aviso dice dónde se arregla."/>
           </DockPanel>
@@ -280,6 +281,33 @@ $script:GuiXaml = @'
             <StackPanel x:Name="StartupPanel" Margin="0,4,8,0"/>
           </ScrollViewer>
         </Grid>
+      </TabItem>
+
+      <TabItem Header="Juegos" x:Name="TabJuegos">
+        <ScrollViewer VerticalScrollBarVisibility="Auto">
+          <StackPanel Margin="14,4,14,10">
+            <TextBlock Text="Configurar un juego" Style="{StaticResource Head}"/>
+            <TextBlock Style="{StaticResource Note}" Text="Elige el .exe del juego (el que se ejecuta de verdad, no el lanzador). La GPU de alto rendimiento sólo cambia algo con dos gráficas, como en los portátiles con integrada y dedicada."/>
+            <WrapPanel>
+              <Button x:Name="BtnGameExe" Content="Elegir el .exe…"/>
+              <TextBlock x:Name="GameExe" VerticalAlignment="Center" Margin="8,0" Foreground="#9A9AA5" Text="Ningún juego elegido."/>
+            </WrapPanel>
+            <CheckBox x:Name="ChkGameGpu" Content="Usar siempre la GPU de alto rendimiento" IsChecked="True"/>
+            <CheckBox x:Name="ChkGamePrio" Content="Prioridad de CPU alta (no tiempo real)"/>
+            <WrapPanel>
+              <Button x:Name="BtnGameApply" Content="Aplicar a este juego" Style="{StaticResource Accent}"/>
+            </WrapPanel>
+            <TextBlock Text="Exclusiones de Microsoft Defender (nivel Extremo)" Style="{StaticResource Head}"/>
+            <TextBlock Style="{StaticResource Note}" Text="Lo que más acorta las cargas de todo lo que Win Juicer puede tocar: Defender deja de analizar los archivos de esas carpetas al abrirse. A cambio, un archivo malicioso dentro de ellas no se detectaría al abrirse. Las tiendas verifican lo que descargan; los mods y lo que copies a mano, no."/>
+            <StackPanel x:Name="LibPanel"/>
+            <WrapPanel>
+              <Button x:Name="BtnLibAdd" Content="Excluir las seleccionadas"/>
+              <Button x:Name="BtnLibFolder" Content="Añadir otra carpeta…"/>
+              <Button x:Name="BtnLibRefresh" Content="Volver a buscar"/>
+            </WrapPanel>
+            <TextBlock Style="{StaticResource Note}" Margin="4,12,4,4" Text="Lo que configures aquí se deshace en la pestaña Deshacer, como todo lo demás."/>
+          </StackPanel>
+        </ScrollViewer>
       </TabItem>
 
       <TabItem Header="Mantenimiento" x:Name="TabMantenimiento">
@@ -412,6 +440,13 @@ $script:GuiWork = @{
         foreach ($id in @($A.Ids)) { $t = Find-JuicerTweak $id; if ($t) { $tweaks += $t } }
         foreach ($n in @($A.Apps)) { $app = Find-JuicerDebloatApp $n; if ($app) { $tweaks += New-JuicerAppxTweak $app } }
         if ($A.Dns) { $tweaks += New-JuicerDnsTweak $A.Dns }
+        foreach ($g in @($A.Games)) {
+            $tweaks += switch ($g.Kind) {
+                'defender' { New-JuicerDefenderTweak $g.Path $g.Launcher }
+                'gpu' { New-JuicerGpuTweak $g.Path }
+                'prioridad' { New-JuicerPriorityTweak $g.Path }
+            }
+        }
         $results = @()
         $rp = $null
         if ($A.RestorePoint -and -not $A.Simulate -and $tweaks.Count -gt 0) {
@@ -444,6 +479,14 @@ $script:GuiWork = @{
         $r = @()
         if ($A.Item) { $r = @(Set-JuicerStartupItem $A.Item ([bool]$A.Enable)) }
         @{ Items = @(Get-JuicerStartupItems); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
+    }
+    Games      = {
+        $Sync.Status = 'Buscando bibliotecas de juegos…'
+        $journal = Read-JuicerJournal
+        $libs = @(foreach ($l in @(Get-JuicerGameLibraries)) {
+                @{ Path = $l.Path; Launcher = $l.Launcher; State = (Get-JuicerTweakState (New-JuicerDefenderTweak $l.Path $l.Launcher) $journal).State }
+            })
+        @{ Libraries = $libs }
     }
     Installed  = {
         $Sync.Status = 'Preguntando a winget qué está instalado…'
@@ -911,6 +954,29 @@ function Start-JuicerGuiInstalled {
     }
 }
 
+function Start-JuicerGuiGames {
+    Start-JuicerGuiTask 'Buscando bibliotecas de juegos…' 'Games' @{} { param($r) Show-JuicerGuiGames $r.Libraries }
+}
+
+function Show-JuicerGuiGames {
+    param([object[]]$Libraries)
+    $c = $script:Gui.C
+    $c.LibPanel.Children.Clear()
+    foreach ($l in @($Libraries)) {
+        $done = $l.State -eq 'Aplicado'
+        $label = '{0}: {1}{2}' -f $l.Launcher, $l.Path, $(if ($done) { '  ✓ ya excluida' } else { '' })
+        $cb = New-JuicerUi CheckBox @{ Content = $label; Tag = @{ Path = $l.Path; Launcher = $l.Launcher }; IsEnabled = -not $done }
+        [void]$c.LibPanel.Children.Add($cb)
+    }
+    if (@($Libraries).Count -eq 0) {
+        [void]$c.LibPanel.Children.Add((New-JuicerUi TextBlock @{ Text = 'No he encontrado bibliotecas de Steam, Epic, GOG ni Xbox. Puedes añadir otra carpeta.'; Foreground = '#9A9AA5'; TextWrapping = 'Wrap' }))
+    }
+    # Choosing a GPU only means something with two of them.
+    $gpus = @($script:Gui.Hw.Gpus).Count
+    $c.ChkGameGpu.IsEnabled = $gpus -ge 2
+    if ($gpus -lt 2) { $c.ChkGameGpu.IsChecked = $false; $c.ChkGameGpu.ToolTip = 'Sólo hay una tarjeta gráfica: elegir GPU no cambia nada aquí.' }
+}
+
 function Start-JuicerGuiStartupList {
     Start-JuicerGuiTask 'Leyendo los programas de inicio…' 'Startup' @{} { param($r) Show-JuicerGuiStartup $r.Items }
 }
@@ -928,6 +994,47 @@ function Register-JuicerGuiHandlers {
     $c = $script:Gui.C
     $h = @{
         BtnAudit              = { Start-JuicerGuiAudit }
+        BtnAuditSave          = {
+            if (@($script:Gui.Findings).Count -eq 0) { Show-JuicerGuiMessage 'El diagnóstico todavía no ha terminado.' | Out-Null; return }
+            $p = Save-JuicerAuditReport '' (Format-JuicerHardwareSummary $script:Gui.Hw) $script:Gui.Findings
+            Show-JuicerGuiMessage "Informe guardado en el escritorio:`n$p" | Out-Null
+        }
+        BtnGameExe            = {
+            $d = New-Object Microsoft.Win32.OpenFileDialog
+            $d.Filter = 'Juegos (*.exe)|*.exe'
+            $d.Title = 'Elige el .exe del juego'
+            if ($d.ShowDialog($script:Gui.Window)) {
+                $script:Gui.GameExe = $d.FileName
+                $script:Gui.C.GameExe.Text = $d.FileName
+            }
+        }
+        BtnGameApply          = {
+            $exe = $script:Gui.GameExe
+            if (-not $exe) { Show-JuicerGuiMessage 'Elige primero el .exe del juego.' | Out-Null; return }
+            $games = @()
+            if ($script:Gui.C.ChkGameGpu.IsChecked -and $script:Gui.C.ChkGameGpu.IsEnabled) { $games += @{ Kind = 'gpu'; Path = $exe } }
+            if ($script:Gui.C.ChkGamePrio.IsChecked) { $games += @{ Kind = 'prioridad'; Path = $exe } }
+            if ($games.Count -eq 0) { Show-JuicerGuiMessage 'Marca al menos una de las dos opciones.' | Out-Null; return }
+            Start-JuicerGuiTask 'Configurando el juego…' 'Run' @{ Games = $games } { param($r) Complete-JuicerGuiRun $r }
+        }
+        BtnLibRefresh         = { Start-JuicerGuiGames }
+        BtnLibFolder          = {
+            Add-Type -AssemblyName System.Windows.Forms
+            $d = ('System.Windows.Forms.FolderBrowserDialog' -as [type])::new()
+            $d.Description = 'Carpeta de juegos que Defender no debe analizar al abrir'
+            if ($d.ShowDialog() -eq 'OK') {
+                $cb = New-JuicerUi CheckBox @{ Content = $d.SelectedPath; Tag = @{ Path = $d.SelectedPath; Launcher = '' }; IsChecked = $true }
+                [void]$script:Gui.C.LibPanel.Children.Add($cb)
+            }
+        }
+        BtnLibAdd             = {
+            $sel = @($script:Gui.C.LibPanel.Children | Where-Object { $_.IsChecked -and $_.IsEnabled -and $_.Tag -is [hashtable] } | ForEach-Object { $_.Tag })
+            if ($sel.Count -eq 0) { Show-JuicerGuiMessage 'No hay ninguna carpeta seleccionada.' | Out-Null; return }
+            $list = ($sel | ForEach-Object { '· ' + $_.Path }) -join "`n"
+            if (-not (Confirm-JuicerGui "EXTREMO: Defender dejará de analizar al abrirse los archivos de:`n`n$list`n`nUn archivo malicioso ahí dentro no se detectaría al abrirse. ¿Seguir?" 'Warning')) { return }
+            $games = @($sel | ForEach-Object { @{ Kind = 'defender'; Path = $_.Path; Launcher = $_.Launcher } })
+            Start-JuicerGuiTask 'Añadiendo exclusiones…' 'Run' @{ Games = $games } { param($r) Complete-JuicerGuiRun $r; Start-JuicerGuiGames }
+        }
         BtnAuditRecommended   = {
             $ids = Get-JuicerSelection 'Recomendado' @(Get-JuicerCatalog) $script:Gui.Snapshot.States $script:Gui.Advice
             if ($ids.Count -eq 0) { Show-JuicerGuiMessage 'Ya tienes aplicado todo lo recomendado para este equipo.' | Out-Null; return }
@@ -1029,6 +1136,7 @@ function Register-JuicerGuiHandlers {
             if ($tab -eq $script:Gui.C.TabDebloat -and -not $script:Gui.DebloatLoaded) { Start-JuicerGuiDebloat }
             elseif ($tab -eq $script:Gui.C.TabInstalar -and $null -eq $script:Gui.Installed) { Start-JuicerGuiInstalled }
             elseif ($tab -eq $script:Gui.C.TabInicio -and -not $script:Gui.StartupLoaded) { $script:Gui.StartupLoaded = $true; Start-JuicerGuiStartupList }
+            elseif ($tab -eq $script:Gui.C.TabJuegos -and -not $script:Gui.GamesLoaded) { $script:Gui.GamesLoaded = $true; Start-JuicerGuiGames }
             elseif ($tab -eq $script:Gui.C.TabDeshacer) { Show-JuicerGuiUndo }
         })
 }
@@ -1084,7 +1192,7 @@ function Show-JuicerGui {
         Window = $win; C = @{}; Sync = [hashtable]::Synchronized(@{ Status = '' }); Task = $null
         Checks = @{}; AppChecks = @{}; InstallChecks = @{}; UndoChecks = @{}
         Hw = @{ Cpu = @{}; Gpus = @() }; Advice = @{}; Snapshot = @{ States = @{}; Dns = @() }
-        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false
+        Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; GameExe = $null; Findings = @()
         Queue = (New-Object System.Collections.ArrayList)
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
@@ -1100,5 +1208,13 @@ function Show-JuicerGui {
         return $script:Gui
     }
     $win.Add_ContentRendered({ Start-JuicerGuiTask 'Leyendo el equipo…' 'Init' @{} { param($r) Complete-JuicerGuiInit $r } })
+    # Closing kills the background runspace: never in the middle of a change.
+    $win.Add_Closing({
+            $t = $script:Gui.Task
+            if ($t -and $t.Work -eq 'Run' -and -not $t.Handle.IsCompleted) {
+                $_.Cancel = $true
+                Show-JuicerGuiMessage 'Win Juicer está aplicando cambios. Espera a que termine para cerrar: cortarlo a medias dejaría el cambio en curso a medio hacer.' 'Warning' | Out-Null
+            }
+        })
     [void]$win.ShowDialog()
 }

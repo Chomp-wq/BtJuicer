@@ -926,6 +926,7 @@ function Start-Juicer {
     [CmdletBinding()]
     param(
         [switch]$Diagnostico,
+        [string]$Informe,
         [switch]$Equipo,
         [switch]$Lista,
         [switch]$Recomendado,
@@ -948,7 +949,7 @@ function Start-Juicer {
     $Deshacer = & $split $Deshacer
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
-    $cli = $Diagnostico -or $Equipo -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Equipo -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
@@ -970,6 +971,12 @@ function Start-Juicer {
     $script:Screen = $false
     $script:Interactive = -not $Si
     if ($Lista) { Show-JuicerList; return 0 }
+    if ($Informe) {
+        $f = @(Get-JuicerAudit)
+        $p = Save-JuicerAuditReport $Informe (Format-JuicerHardwareSummary (Get-JuicerHardwareProfile)) $f
+        Write-Host "  Informe guardado en $p"
+        return 0
+    }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
     if ($Equipo) { Show-JuicerEquipo; return 0 }
     if ($Instalar.Count -gt 0) {

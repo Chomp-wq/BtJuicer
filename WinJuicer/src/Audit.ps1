@@ -386,6 +386,40 @@ function Get-JuicerCatalogAudit {
     $out
 }
 
+# The diagnosis as a text file, to keep or to paste in a forum when asking
+# for help: the most important first, then everything by area.
+function Format-JuicerAuditReport {
+    param([string[]]$Summary = @(), [object[]]$Findings = @(), [datetime]$When = (Get-Date))
+    $labels = @{ Alto = 'ALTO'; Medio = 'MEDIO'; Bajo = 'BAJO'; Info = 'INFO'; Ok = 'OK' }
+    $l = New-Object System.Collections.ArrayList
+    [void]$l.Add(('Win Juicer — diagnóstico del {0}' -f $When.ToString('g')))
+    [void]$l.Add('')
+    [void]$l.Add('Este equipo')
+    foreach ($s in $Summary) { [void]$l.Add("  $s") }
+    $top = @($Findings | Where-Object { $_.Severity -in 'Alto', 'Medio' } | Sort-Object { $script:SeverityOrder[$_.Severity] })
+    if ($top.Count -gt 0) {
+        [void]$l.Add('')
+        [void]$l.Add('Lo que más rinde arreglar')
+        $n = 0
+        foreach ($f in $top) { $n++; [void]$l.Add(('  {0}. [{1}] {2}' -f $n, $labels[$f.Severity], $f.Title)) }
+    }
+    $area = ''
+    foreach ($f in $Findings) {
+        if ($f.Area -ne $area) { $area = $f.Area; [void]$l.Add(''); [void]$l.Add($area) }
+        [void]$l.Add(('  [{0}] {1}' -f $labels[$f.Severity], $f.Title))
+        if ($f.Detail) { [void]$l.Add("        $($f.Detail)") }
+    }
+    ($l -join [Environment]::NewLine) + [Environment]::NewLine
+}
+
+function Save-JuicerAuditReport {
+    param([string]$Path, [string[]]$Summary, [object[]]$Findings)
+    if (-not $Path) { $Path = Join-Path ([Environment]::GetFolderPath('Desktop')) ('WinJuicer-diagnostico-{0:yyyyMMdd-HHmm}.txt' -f (Get-Date)) }
+    # With BOM, so the Notepad of any Windows reads the accents right.
+    [IO.File]::WriteAllText($Path, (Format-JuicerAuditReport $Summary $Findings), (New-Object Text.UTF8Encoding $true))
+    $Path
+}
+
 # OnSection, if given, is told the name of each part as it starts: the
 # window shows it while the diagnosis runs.
 function Get-JuicerAudit {

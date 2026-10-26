@@ -270,6 +270,36 @@ Describe 'BIOS y firmware' {
     }
 }
 
+Describe 'Informe' {
+    It 'lo grave primero, luego todo por área, y se guarda legible' {
+        $f = @(
+            @{ Area = 'Memoria'; Severity = 'Info'; Title = '32 GB'; Detail = '' }
+            @{ Area = 'Memoria'; Severity = 'Alto'; Title = 'XMP apagado'; Detail = 'Actívalo.' }
+            @{ Area = 'Disco'; Severity = 'Medio'; Title = 'Poco espacio'; Detail = '' }
+        )
+        $t = Format-JuicerAuditReport @('Procesador: X') $f ([datetime]'2026-10-26 10:00')
+        $t | Should -BeLike '*Lo que más rinde arreglar*1. `[ALTO`] XMP apagado*2. `[MEDIO`] Poco espacio*'
+        $t | Should -BeLike '*Memoria*`[INFO`] 32 GB*Actívalo.*Disco*'
+        $p = Join-Path ([IO.Path]::GetTempPath()) ('wj-informe-' + [guid]::NewGuid().ToString('N') + '.txt')
+        try {
+            Save-JuicerAuditReport $p @('Procesador: X') $f | Should -Be $p
+            $b = [IO.File]::ReadAllBytes($p)
+            $b[0] | Should -Be 0xEF
+            [IO.File]::ReadAllText($p) | Should -BeLike '*diagnóstico*'
+        } finally {
+            Remove-Item -LiteralPath $p -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'el registro de cambios no crece sin límite' {
+        $log = Join-Path (Get-JuicerHome) 'registro.log'
+        [IO.File]::WriteAllText($log, ('x' * 1.1MB))
+        Write-JuicerLog 'línea nueva'
+        (Get-Item -LiteralPath $log).Length | Should -BeLessThan 1KB
+        Test-Path -LiteralPath (Join-Path (Get-JuicerHome) 'registro.1.log') | Should -BeTrue
+    }
+}
+
 Describe 'Programas y red' {
     It 'reconoce software de overclock y antivirus de terceros' {
         $f = @(Get-JuicerSoftwareFindings -Installed @('MSI Afterburner 4.6.6', 'Armoury Crate', '7-Zip') -Antivirus @('Windows Defender', 'McAfee LiveSafe'))
@@ -353,6 +383,15 @@ Describe 'Consejero' {
         foreach ($t in (Get-JuicerCatalog)) {
             $a[$t.Id].Verdict | Should -BeIn @('Recomendado', 'Opcional', 'NoRecomendado') -Because $t.Id
             $a[$t.Id].Reason | Should -Not -BeNullOrEmpty -Because $t.Id
+        }
+    }
+
+    It 'nada de los niveles Rendimiento y Extremo se queda con un consejo genérico' {
+        foreach ($hw in (New-TestHw -Gpus @('NVIDIA GeForce RTX 4070')), (New-TestHw -Laptop $true -Ram 8GB -Disk 'HDD')) {
+            $a = Get-JuicerAdvice $hw
+            foreach ($t in @(Get-JuicerCatalog | Where-Object { $_.Level -ge 2 })) {
+                $a[$t.Id].Reason | Should -Not -BeLike 'Depende de cómo uses*' -Because $t.Id
+            }
         }
     }
 

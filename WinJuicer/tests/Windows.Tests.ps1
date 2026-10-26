@@ -147,12 +147,16 @@ Import-Module '$psm' -Force
     Show-JuicerGuiAudit @(Get-JuicerAudit)
     Show-JuicerGuiDebloat @(Get-JuicerDebloatState `$hw)
     Show-JuicerGuiStartup @(Get-JuicerStartupItems)
+    Show-JuicerGuiGames @(@{ Path = 'D:\SteamLibrary\steamapps'; Launcher = 'Steam'; State = 'Pendiente' }, @{ Path = 'E:\XboxGames'; Launcher = 'Xbox / Game Pass'; State = 'Aplicado' })
+    `$script:Gui.Findings = @(Get-JuicerAudit)
+    `$informe = Save-JuicerAuditReport (Join-Path ([IO.Path]::GetTempPath()) 'wj-informe.txt') (Format-JuicerHardwareSummary `$hw) `$script:Gui.Findings
     Select-JuicerGuiTweaks 'Recomendado'
     `$script:Gui.C.SearchBox.Text = 'steam'
     `$r = @{
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
         Visible = @(`$script:Gui.InstallChecks.Values | Where-Object { `$_.Check.Visibility -eq 'Visible' }).Count
+        Libs = `$script:Gui.C.LibPanel.Children.Count; Report = (Get-Item -LiteralPath `$informe).Length
     }
     `$script:Gui.Window.Close()
     `$r
@@ -168,6 +172,8 @@ Import-Module '$psm' -Force
             $r.Apps | Should -BeGreaterThan 40
             $r.Cards | Should -BeGreaterThan 5
             $r.Visible | Should -Be 1
+            $r.Libs | Should -Be 2
+            $r.Report | Should -BeGreaterThan 500
         } finally {
             $ps.Dispose()
             $rs.Dispose()

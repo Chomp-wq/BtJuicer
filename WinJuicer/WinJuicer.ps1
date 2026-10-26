@@ -11,6 +11,9 @@
 .PARAMETER Diagnostico
     Revisa el equipo, BIOS y overclock incluidos, y dice qué lo frena. No cambia nada.
 
+.PARAMETER Informe
+    Hace el diagnóstico y lo guarda en un archivo de texto en esa ruta. No cambia nada.
+
 .PARAMETER Equipo
     Muestra el hardware detectado y, para cada ajuste, si conviene a este equipo y por qué.
 
@@ -72,6 +75,7 @@
 [CmdletBinding()]
 param(
     [switch]$Diagnostico,
+    [string]$Informe,
     [switch]$Equipo,
     [switch]$Lista,
     [switch]$Recomendado,

@@ -44,17 +44,19 @@ permisos de administrador y abre la ventana:
 
 | Pestaña | Qué tiene |
 |---|---|
-| **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botón «Aplicar lo recomendado para este equipo». |
+| **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo» y «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro). |
 | **Ajustes** | Todos los ajustes con casillas, agrupados. Selección: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. |
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas. |
+| **Juegos** | GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
 | **No hacemos** | Los «trucos» que circulan, y por qué no. |
 
 Lo lento (leer el hardware, el diagnóstico, aplicar) va en segundo plano, y la
-barra de estado dice qué está haciendo. Lo muy largo (winget, DISM, SFC) se abre
+barra de estado dice qué está haciendo. La ventana no se deja cerrar mientras
+está aplicando un cambio, para que nada quede a medias. Lo muy largo (winget, DISM, SFC) se abre
 en su propia ventana para que veas su progreso.
 
 Si prefieres la consola, o la ventana no puede abrirse, `WinJuicer.cmd -Consola`
@@ -83,6 +85,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 
 ```powershell
 .\WinJuicer.ps1 -Diagnostico
+.\WinJuicer.ps1 -Informe C:\diagnostico.txt            # el diagnóstico, guardado en un archivo
 .\WinJuicer.ps1 -Equipo                                 # hardware y qué conviene aquí, ajuste a ajuste
 .\WinJuicer.ps1 -Recomendado -Simular                   # lo recomendado para este equipo, sin cambiar nada
 .\WinJuicer.ps1 -Recomendado
@@ -121,6 +124,9 @@ recomendado** aquí, y por qué. Algunos ejemplos de cómo cambia:
 | no tiene impresoras | recomienda desactivar la cola de impresión |
 | tiene gráfica dedicada | recomienda que Windows Update no le cambie el driver |
 | usa WSL o Docker, o es Windows Insider, o Home | desaconseja lo que los rompería o lo que Home ignora |
+
+Ningún ajuste se queda con un «depende» genérico: cada uno lleva el motivo
+concreto para tu equipo, también cuando la respuesta es «opcional».
 
 «Para este equipo» nunca incluye preferencias ni componentes, y lo de nivel
 Extremo sólo cuando el hardware lo pide (el indexado con disco duro), y aun así
@@ -217,9 +223,9 @@ planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar»
 | Sin aceleración del ratón | Rendimiento | Bajo |
 | Sin atajos de Teclas especiales (Mayús ×5) | Rendimiento | Bajo |
 
-Y por juego, desde el menú **Juegos** de la consola: GPU de alto rendimiento y
-prioridad alta para un `.exe`, y exclusiones de Microsoft Defender para las
-bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
+Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
+de alto rendimiento y prioridad alta para un `.exe`, y exclusiones de Microsoft
+Defender para las bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
 
 ### Interfaz
 
