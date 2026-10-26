@@ -270,7 +270,7 @@ function Get-JuicerHardwareProfile {
         Cpu = Get-JuicerCpuInfo; Gpus = @(); RamBytes = [int64]0; Modules = @(); Laptop = $false; OnBattery = $false
         ModernStandby = (Test-JuicerModernStandby); SystemDisk = $null; Printers = @(); Adapters = @()
         OneDrive = (Get-JuicerOneDriveState); Edge = (Test-JuicerEdgeInstalled); Home = (Test-JuicerHomeEdition)
-        Insider = (Test-JuicerInsider); Build = (Get-JuicerWindowsBuild)
+        Insider = (Test-JuicerInsider); Build = (Get-JuicerWindowsBuild); Support = (Get-JuicerWindowsSupportInfo)
         Wsl = (Test-JuicerRegKey 'HKCU\Software\Microsoft\Windows\CurrentVersion\Lxss')
         Docker = (Test-JuicerRegKey 'HKLM\SOFTWARE\Docker Inc.\Docker Desktop')
         # The Xbox app comes with Windows; Gaming Services only arrives with
@@ -323,6 +323,10 @@ function Format-JuicerHardwareSummary {
     }
     if ($Hw.RamBytes -gt 0) { $lines += ('Memoria: {0} en {1} módulo(s)' -f (Format-JuicerBytes $Hw.RamBytes), @($Hw.Modules).Count) }
     if ($Hw.SystemDisk) { $lines += ('Disco de Windows: {0} ({1}, {2})' -f $Hw.SystemDisk.Name, $Hw.SystemDisk.Media, $Hw.SystemDisk.Bus) }
+    if ($Hw.Support) {
+        $state = if ($Hw.Support.End -lt (Get-Date)) { 'sin parches de seguridad desde el' } else { 'con parches de seguridad hasta el' }
+        $lines += ('Windows: {0}, {1} {2}' -f $Hw.Support.Version, $state, $Hw.Support.End.ToString('d'))
+    }
     $kind = if ($Hw.Laptop) { 'Portátil' + $(if ($Hw.OnBattery) { ', con batería' } else { ', enchufado' }) } else { 'Sobremesa' }
     if ($Hw.ModernStandby) { $kind += ', Modern Standby' }
     $lines += "Equipo: $kind"

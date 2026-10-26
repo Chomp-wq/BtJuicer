@@ -21,6 +21,11 @@ namespace WinJuicer {
         public int Height;
         public int Hz;
         public int MaxHz;
+        public bool Primary;
+        public string MonitorId;
+        public string[] Resolutions;
+        public int NativeWidth;
+        public int NativeHeight;
     }
 
     public static class Native {
@@ -83,6 +88,7 @@ namespace WinJuicer {
                 cur.dmSize = (short)Marshal.SizeOf(cur);
                 if (!EnumDisplaySettings(dd.DeviceName, -1, ref cur)) continue;
                 int max = cur.dmDisplayFrequency;
+                var sizes = new List<string>();
                 for (int m = 0; ; m++) {
                     var dm = new DEVMODE();
                     dm.dmSize = (short)Marshal.SizeOf(dm);
@@ -90,13 +96,21 @@ namespace WinJuicer {
                     if (dm.dmPelsWidth == cur.dmPelsWidth && dm.dmPelsHeight == cur.dmPelsHeight && dm.dmDisplayFrequency > max) {
                         max = dm.dmDisplayFrequency;
                     }
+                    string size = dm.dmPelsWidth + "x" + dm.dmPelsHeight;
+                    if (!sizes.Contains(size)) sizes.Add(size);
                 }
+                // Flag 1, EDD_GET_DEVICE_INTERFACE_NAME: DeviceID becomes the
+                // monitor's device path, which leads to its EDID.
                 var mon = new DISPLAY_DEVICE();
                 mon.cb = Marshal.SizeOf(mon);
+                bool hasMon = EnumDisplayDevices(dd.DeviceName, 0, ref mon, 1);
                 var d = new Display();
                 d.Device = dd.DeviceName;
                 d.Adapter = dd.DeviceString;
-                d.Monitor = EnumDisplayDevices(dd.DeviceName, 0, ref mon, 0) ? mon.DeviceString : "";
+                d.Primary = (dd.StateFlags & 4) != 0;
+                d.Monitor = hasMon ? mon.DeviceString : "";
+                d.MonitorId = hasMon ? mon.DeviceID : "";
+                d.Resolutions = sizes.ToArray();
                 d.Width = cur.dmPelsWidth;
                 d.Height = cur.dmPelsHeight;
                 d.Hz = cur.dmDisplayFrequency;
@@ -189,5 +203,36 @@ function Test-JuicerModernStandby {
 function Get-JuicerDisplays {
     if (-not (Test-JuicerWindows)) { return @() }
     Initialize-JuicerNative
-    @([WinJuicer.Native]::GetDisplays())
+    $displays = @([WinJuicer.Native]::GetDisplays())
+    foreach ($d in $displays) {
+        $path = ConvertTo-JuicerEdidKey $d.MonitorId
+        if (-not $path) { continue }
+        $edid = Read-JuicerReg $path 'EDID'
+        $native = if ($edid) { ConvertFrom-JuicerEdid $edid.Value }
+        if ($native) { $d.NativeWidth = $native.Width; $d.NativeHeight = $native.Height }
+    }
+    $displays
+}
+
+# \\?\DISPLAY#GSM5B7F#5&2d3b7a1f&0&UID4353#{e6f07b5f-...} is the monitor's
+# instance under Enum\DISPLAY, where Windows keeps the EDID it read from it.
+function ConvertTo-JuicerEdidKey {
+    param([string]$MonitorId)
+    $p = $MonitorId -split '#'
+    if ($p.Count -lt 3 -or $p[0] -notmatch 'DISPLAY$') { return $null }
+    "HKLM\SYSTEM\CurrentControlSet\Enum\DISPLAY\$($p[1])\$($p[2])\Device Parameters"
+}
+
+# The panel's native resolution is the first detailed timing of the EDID,
+# the one the monitor prefers. Twelve bits per side: past 4095 pixels (5K
+# and up) it lives in an extension instead, and this says nothing.
+function ConvertFrom-JuicerEdid {
+    param([byte[]]$Edid)
+    if (-not $Edid -or $Edid.Count -lt 128) { return $null }
+    if ($Edid[0] -ne 0 -or $Edid[1] -ne 0xFF -or $Edid[7] -ne 0) { return $null }
+    if ($Edid[54] -eq 0 -and $Edid[55] -eq 0) { return $null }
+    $w = $Edid[56] + (($Edid[58] -band 0xF0) -shl 4)
+    $h = $Edid[59] + (($Edid[61] -band 0xF0) -shl 4)
+    if ($w -lt 640 -or $h -lt 480) { return $null }
+    @{ Width = $w; Height = $h }
 }
