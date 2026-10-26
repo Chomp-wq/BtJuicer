@@ -135,6 +135,10 @@ function New-JuicerFpsLimitTweak {
     $actions = @(
         @{ Type = 'FpsLimit'; Exe = $exe; Fps = $Fps }
         @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x007BA09E; Value = [uint32]1; Label = 'Fotogramas pre-renderizados: 1 (modo de baja latencia activado)' }
+        # With a cap the card is not at 100 %, and the driver may drop its
+        # clocks in light scenes: the next heavy frame then arrives late.
+        # Only for this game, so the desktop still idles low (PREFERRED_PSTATE_PREFER_MAX).
+        @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x1057EB71; Value = [uint32]1; Label = 'Modo de energía: preferir rendimiento máximo (sin bajadas de frecuencia que den picos de frametime)' }
     )
     if ($VSync) {
         $label = if ($Use -eq 'Estrobo') { 'Sincronización vertical: forzada (un fotograma por destello del estroboscopio)' } else { 'Sincronización vertical: forzada (con G-SYNC y el límite por debajo de los Hz)' }

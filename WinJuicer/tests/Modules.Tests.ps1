@@ -710,6 +710,7 @@ Describe 'Limitador de FPS' {
         $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
         $M.Backend.State.NvSettings['cs2.exe|8102046'] | Should -Be 1
         $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x47814940
+        $M.Backend.State.NvSettings['cs2.exe|274197361'] | Should -Be 1
         @(Get-JuicerFpsLimits)[0].Fps | Should -Be 157
         (Undo-JuicerTweak 'fps:cs2.exe').Outcome | Should -Be 'Deshecho'
         $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse

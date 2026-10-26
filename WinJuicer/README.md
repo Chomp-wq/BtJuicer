@@ -356,7 +356,11 @@ se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
   través de él) y, con G-SYNC, la sincronización vertical forzada, que con el
   límite por debajo de los Hz no llega a actuar más que para tapar un corte en
   un pico (con estroboscopio sin VRR, para que cada destello tenga su
-  fotograma). El modo «Ultra» no tiene un identificador público y no se toca.
+  fotograma). También el modo de energía «Preferir rendimiento máximo», sólo
+  para ese juego: con el límite la gráfica no va al 100 % y el driver podría
+  bajarle la frecuencia en escenas ligeras, y el siguiente fotograma pesado
+  llegaría tarde. El modo «Ultra» no tiene un identificador público y no se
+  toca.
 - Con RivaTuner, en su Setup: «Front edge sync» da la menor latencia y «Back
   edge sync» los frametimes más planos.
 - Se deshace como todo lo demás, devolviendo el límite que tuviera el juego.
