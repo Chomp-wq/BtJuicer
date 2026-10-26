@@ -125,3 +125,61 @@ function Set-JuicerStartupItem {
     if (Get-JuicerJournalEntry (Read-JuicerJournal) $opposite) { return (Undo-JuicerTweak $opposite) }
     Invoke-JuicerTweak (New-JuicerStartupTweak $Item $Enable)
 }
+
+# --- What each entry is ----------------------------------------------------------
+#
+# The usual suspects, by name or command. Prescindible: starting with Windows
+# only makes it load sooner, it works the same when opened. Opcional: depends
+# on what you use it for. Necesario: something stops working without it.
+# Updaters of browsers and security software are left out on purpose: they
+# are how patches arrive.
+
+$script:StartupKnown = @(
+    @{ P = 'SecurityHealth'; V = 'Necesario'; W = 'El icono de Seguridad de Windows: avisa si Defender o el firewall se apagan.' }
+    @{ P = 'RtkAudUService|RTHDVCPL|Realtek ?HD ?Audio|RtkNGUI|WavesSvc|MaxxAudio'; V = 'Necesario'; W = 'El panel del audio: sin él pueden fallar los conectores de auriculares o micro.' }
+    @{ P = 'SynTPEnh|ETDCtrl|ELAN ?Smart|Synaptics|PrecisionTouchpad'; V = 'Necesario'; W = 'Los gestos del touchpad.' }
+    @{ P = 'steam\.exe|\bSteam\b'; V = 'Prescindible'; W = 'Steam se abre solo al lanzar un juego o desde su acceso directo. Arrancarlo con Windows sólo adelanta su carga y sus descargas.' }
+    @{ P = 'EpicGamesLauncher'; V = 'Prescindible'; W = 'Se abre solo cuando lanzas un juego de Epic.' }
+    @{ P = 'EADesktop|\bEA ?app\b|Origin\.exe'; V = 'Prescindible'; W = 'Se abre solo cuando lanzas un juego de EA.' }
+    @{ P = 'UbisoftConnect|Ubisoft Connect|upc\.exe'; V = 'Prescindible'; W = 'Se abre solo cuando lanzas un juego de Ubisoft.' }
+    @{ P = 'Battle\.net'; V = 'Prescindible'; W = 'Lo abres tú cuando vas a jugar.' }
+    @{ P = 'GalaxyClient|GOG Galaxy'; V = 'Prescindible'; W = 'Lo abres tú cuando vas a jugar.' }
+    @{ P = 'Overwolf'; V = 'Prescindible'; W = 'Plataforma de complementos con anuncios; arranca con los juegos que la usan.' }
+    @{ P = 'Spotify'; V = 'Prescindible'; W = 'Abre en un segundo cuando quieres música.' }
+    @{ P = 'Skype'; V = 'Prescindible'; W = 'Si no esperas llamadas de Skype, sobra.' }
+    @{ P = 'Zoom'; V = 'Prescindible'; W = 'Las reuniones abren Zoom solas desde el enlace.' }
+    @{ P = 'iTunesHelper'; V = 'Prescindible'; W = 'Sólo abre iTunes al conectar un iPhone.' }
+    @{ P = 'jusched|Java Update'; V = 'Prescindible'; W = 'Comprobador de actualizaciones de Java que se queda residente.' }
+    @{ P = 'CCleaner'; V = 'Prescindible'; W = 'Su «limpieza inteligente» y sus avisos no hacen falta; Windows ya se limpia solo.' }
+    @{ P = 'MicrosoftEdgeAutoLaunch|GoogleChromeAutoLaunch|Opera ?(GX)? ?(Browser Assistant|Stable)|BraveSoftware.*--no-startup-window'; V = 'Prescindible'; W = 'Deja el navegador precargado al iniciar sesión, lo uses o no.' }
+    @{ P = 'igfxTray|HotKeysCmds|igfxpers|Persistence Module'; V = 'Prescindible'; W = 'Icono y atajos de la gráfica Intel; el driver funciona igual sin él.' }
+    @{ P = 'Cortana'; V = 'Prescindible'; W = 'Cortana está retirada.' }
+    @{ P = 'Adobe ?ARM|AdobeAAMUpdater|AdobeGCInvoker|Adobe ?Updater|CCXProcess|Adobe Creative Cloud'; V = 'Prescindible'; W = 'Procesos de Adobe que se cargan siempre; Adobe comprueba sus actualizaciones al abrir sus programas.' }
+    @{ P = 'Discord'; V = 'Opcional'; W = 'Si quieres estar disponible en cuanto enciendes, déjalo; si no, ábrelo al jugar.' }
+    @{ P = '\bTeams\b|ms-teams|MSTeams'; V = 'Opcional'; W = 'Necesario si te llaman por Teams; si no, sobra.' }
+    @{ P = 'OneDrive'; V = 'Opcional'; W = 'Si haces copias en OneDrive, déjalo; si no sincronizas nada, sobra.' }
+    @{ P = 'Dropbox|GoogleDriveFS|Google Drive'; V = 'Opcional'; W = 'Si sincronizas carpetas con él, déjalo.' }
+    @{ P = 'G ?HUB|LGHUB|Razer|Synapse|iCUE|Armoury|NZXT|SteelSeries|SignalRgb|OpenRGB'; V = 'Opcional'; W = 'Si los perfiles, macros y RGB están guardados en el propio periférico, no hace falta que arranque; si no, sin él los pierdes hasta abrirlo.' }
+    @{ P = 'Afterburner|RTSS|RivaTuner'; V = 'Opcional'; W = 'Si aplica un overclock, una curva de ventiladores o un límite de FPS al arrancar, déjalo.' }
+    @{ P = 'Wallpaper ?Engine|wallpaper32|wallpaper64'; V = 'Opcional'; W = 'Sin él, fondo de escritorio normal.' }
+    @{ P = 'Docker'; V = 'Opcional'; W = 'Si no lo usas cada día, ábrelo cuando lo necesites: arrancado reserva memoria.' }
+)
+
+function Get-JuicerStartupVerdict {
+    param([string]$Name = '', [string]$Command = '')
+    $text = "$Name $Command"
+    foreach ($k in $script:StartupKnown) {
+        if ($text -match $k.P) { return @{ Verdict = $k.V; Why = $k.W } }
+    }
+    $null
+}
+
+# Startup entries with their verdict, for the screens.
+function Get-JuicerStartupReview {
+    foreach ($i in @(Get-JuicerStartupItems)) {
+        $v = Get-JuicerStartupVerdict $i.Name $i.Command
+        $i.Verdict = if ($v) { $v.Verdict } else { $null }
+        $i.Why = if ($v) { $v.Why } else { $null }
+        $i
+    }
+}

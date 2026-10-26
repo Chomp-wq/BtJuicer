@@ -30,7 +30,7 @@ jobs:
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
             Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
           }
-          $r = 'src', 'WinJuicer.ps1', 'WinJuicer.psm1' | ForEach-Object {
+          $r = 'src', 'build', 'WinJuicer.ps1', 'WinJuicer.psm1' | ForEach-Object {
             Invoke-ScriptAnalyzer -Path (Join-Path WinJuicer $_) -Recurse -Settings WinJuicer/PSScriptAnalyzerSettings.psd1
           }
           $r | Format-Table -AutoSize RuleName, ScriptName, Line, Message | Out-String -Width 250
@@ -57,3 +57,33 @@ jobs:
         if: matrix.powershell == '7'
         shell: pwsh
         run: ./WinJuicer/tests/Invoke-Tests.ps1
+
+  # Lo que descarga «irm …/winjuicer.ps1 | iex»: sólo desde main y con todo lo
+  # anterior en verde. Tiene su propia release para no mezclarse con el APK.
+  publicar:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [analisis, pruebas]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir
+        shell: pwsh
+        run: ./WinJuicer/build/Build-Release.ps1 -Out dist -Version $env:GITHUB_SHA.Substring(0, 7)
+
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG=winjuicer
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --prerelease \
+              --title "Win Juicer — última versión" \
+              --notes "Para abrirlo en una línea, en PowerShell: irm https://github.com/${GITHUB_REPOSITORY}/releases/download/winjuicer/winjuicer.ps1 | iex"
+          fi
+          # El zip primero: el arrancador nuevo sólo aparece cuando su zip ya está.
+          gh release upload "$TAG" dist/WinJuicer.zip --clobber
+          gh release upload "$TAG" dist/winjuicer.ps1 --clobber

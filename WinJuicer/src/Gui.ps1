@@ -198,6 +198,9 @@ $script:GuiXaml = @'
             <Button x:Name="BtnUndoSelected" Content="Deshacer seleccionados"/>
             <Button x:Name="BtnApply" Content="Aplicar seleccionados" Style="{StaticResource Accent}"/>
             <CheckBox x:Name="ChkRestorePoint" Content="Punto de restauración antes" IsChecked="True" Margin="10,0,0,0"/>
+            <TextBlock Text="   " />
+            <Button x:Name="BtnExport" Content="Exportar…"/>
+            <Button x:Name="BtnImport" Content="Importar…"/>
           </WrapPanel>
           <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Note}"
                      Text="Pasa el ratón por encima de cada ajuste: qué hace, qué ganas, qué cuesta y si conviene a este equipo. ★ recomendado aquí · ✓ ya aplicado · – no aplica en este equipo. Todo se puede deshacer."/>
@@ -275,7 +278,8 @@ $script:GuiXaml = @'
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
           <DockPanel Grid.Row="0">
             <Button x:Name="BtnStartupRefresh" Content="Volver a leer" DockPanel.Dock="Right"/>
-            <TextBlock Style="{StaticResource Note}" VerticalAlignment="Center" Text="Lo que arranca solo al iniciar sesión. Desmarcar no borra nada: es el mismo interruptor del Administrador de tareas, y se aplica al momento."/>
+            <Button x:Name="BtnStartupJunk" Content="Desactivar los prescindibles" Style="{StaticResource Accent}" DockPanel.Dock="Right"/>
+            <TextBlock Style="{StaticResource Note}" VerticalAlignment="Center" Text="Lo que arranca solo al iniciar sesión. Desmarcar no borra nada: es el mismo interruptor del Administrador de tareas, y se aplica al momento. Prescindible: funciona igual abriéndolo cuando lo necesites."/>
           </DockPanel>
           <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="StartupPanel" Margin="0,4,8,0"/>
@@ -478,7 +482,8 @@ $script:GuiWork = @{
     Startup    = {
         $r = @()
         if ($A.Item) { $r = @(Set-JuicerStartupItem $A.Item ([bool]$A.Enable)) }
-        @{ Items = @(Get-JuicerStartupItems); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
+        foreach ($i in @($A.Disable)) { $Sync.Status = "Desactivando $($i.Name)…"; $r += Set-JuicerStartupItem $i $false }
+        @{ Items = @(Get-JuicerStartupReview); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
     }
     Games      = {
         $Sync.Status = 'Buscando bibliotecas de juegos…'
@@ -827,6 +832,7 @@ function Set-JuicerGuiSearch {
 
 function Show-JuicerGuiStartup {
     param([object[]]$Items)
+    $script:Gui.Startup = @($Items)
     $p = $script:Gui.C.StartupPanel
     $p.Children.Clear()
     if (@($Items).Count -eq 0) { [void]$p.Children.Add((New-JuicerUi TextBlock @{ Text = 'No hay nada configurado para arrancar al iniciar sesión.'; Foreground = '#4CC38A' })); return }
@@ -834,8 +840,10 @@ function Show-JuicerGuiStartup {
         $row = New-JuicerUi StackPanel @{ Orientation = 'Horizontal' }
         [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $i.Name; Width = 280; TextTrimming = 'CharacterEllipsis' }))
         [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $i.Source; Foreground = '#9A9AA5'; Width = 190 }))
-        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $i.Command; Foreground = '#6E6E78'; TextTrimming = 'CharacterEllipsis'; MaxWidth = 560 }))
-        $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $i; IsChecked = [bool]$i.Enabled; ToolTip = (New-JuicerTip @($i.Command)) }
+        $vc = @{ Prescindible = '#4CC38A'; Opcional = '#F5B400'; Necesario = '#4EA1FF' }
+        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $(if ($i.Verdict) { $i.Verdict.ToLowerInvariant() } else { '' }); Foreground = $(if ($i.Verdict) { $vc[$i.Verdict] } else { '#9A9AA5' }); Width = 100 }))
+        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $i.Command; Foreground = '#6E6E78'; TextTrimming = 'CharacterEllipsis'; MaxWidth = 480 }))
+        $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $i; IsChecked = [bool]$i.Enabled; ToolTip = (New-JuicerTip @($i.Why, $i.Command)) }
         $cb.Add_Click({
                 $item = $this.Tag
                 Start-JuicerGuiTask "Cambiando $($item.Name)…" 'Startup' @{ Item = $item; Enable = [bool]$this.IsChecked } {
@@ -1052,6 +1060,34 @@ function Register-JuicerGuiHandlers {
             if ($ids.Count -eq 0) { Show-JuicerGuiMessage 'Ninguno de los seleccionados lo cambió Win Juicer: no hay nada que deshacer.' | Out-Null; return }
             Start-JuicerGuiTask 'Deshaciendo…' 'Run' @{ Undo = $ids } { param($r) Complete-JuicerGuiRun $r }
         }
+        BtnExport             = {
+            $d = New-Object Microsoft.Win32.SaveFileDialog
+            $d.Filter = 'Configuración de Win Juicer (*.json)|*.json'
+            $d.FileName = 'winjuicer-config.json'
+            if (-not $d.ShowDialog($script:Gui.Window)) { return }
+            $cfg = Export-JuicerConfig $d.FileName
+            $n = @($cfg.Tweaks).Count + $cfg.Toggles.Count + @($cfg.Apps).Count + $(if ($cfg.Dns) { 1 } else { 0 })
+            if ($n -eq 0) { Show-JuicerGuiMessage 'Guardado, pero vacío: Win Juicer todavía no ha cambiado nada en este equipo.' | Out-Null; return }
+            Show-JuicerGuiMessage "Guardado en $($d.FileName):`n`n$(Format-JuicerConfigSummary (Read-JuicerConfig $d.FileName))`n`nEn el otro equipo, Importar lo aplica. Programas de inicio y ajustes de juegos no se exportan: son de este PC." | Out-Null
+        }
+        BtnImport             = {
+            $d = New-Object Microsoft.Win32.OpenFileDialog
+            $d.Filter = 'Configuración de Win Juicer (*.json)|*.json'
+            if (-not $d.ShowDialog($script:Gui.Window)) { return }
+            $cfg = Read-JuicerConfig $d.FileName
+            $n = @($cfg.Tweaks).Count + $cfg.Toggles.Count + @($cfg.Apps).Count + $(if ($cfg.Dns) { 1 } else { 0 })
+            if ($n -eq 0) { Show-JuicerGuiMessage "No hay nada que aplicar en $($d.FileName)." | Out-Null; return }
+            $risky = @(@($cfg.Tweaks | ForEach-Object { Find-JuicerTweak $_ } | Where-Object { $_.Level -ge 3 } | ForEach-Object { $_.Title }) +
+                @($cfg.Apps | ForEach-Object { Find-JuicerDebloatApp $_ } | Where-Object { $_.Class -eq 'Cuidado' } | ForEach-Object { 'Quitar ' + $_.Title }))
+            $text = "Se aplicará:`n`n$(Format-JuicerConfigSummary $cfg)"
+            if ($risky.Count -gt 0) { $text += "`n`nIncluye cosas del nivel Extremo o con cuidado: $($risky -join ', '). Lee qué cuestan en Ajustes antes de seguir." }
+            $text += "`n`nLo que no aplique en este equipo se saltará solo. ¿Seguir?"
+            if (-not (Confirm-JuicerGui $text $(if ($risky.Count) { 'Warning' } else { 'Question' }))) { return }
+            $toggles = @($cfg.Toggles.Keys | ForEach-Object { @{ Id = $_; On = [bool]$cfg.Toggles[$_] } })
+            Start-JuicerGuiTask 'Aplicando la configuración importada…' 'Run' @{
+                Ids = $cfg.Tweaks; Apps = $cfg.Apps; Dns = $cfg.Dns; Toggles = $toggles; RestorePoint = [bool]$script:Gui.C.ChkRestorePoint.IsChecked
+            } { param($r) Complete-JuicerGuiRun $r }
+        }
         BtnPlanAdd            = { if ($script:Gui.PlanId) { Invoke-JuicerGuiApply @($script:Gui.PlanId) } }
         BtnPlanRemove         = {
             $id = $script:Gui.PlanId
@@ -1088,6 +1124,18 @@ function Register-JuicerGuiHandlers {
         BtnUpgradeAll         = { Invoke-JuicerGuiWinget 'upgrade' }
         BtnInstalledRefresh   = { Start-JuicerGuiInstalled }
         BtnStartupRefresh     = { Start-JuicerGuiStartupList }
+        BtnStartupJunk        = {
+            $junk = @($script:Gui.Startup | Where-Object { $_.Enabled -and $_.Verdict -eq 'Prescindible' })
+            if ($junk.Count -eq 0) { Show-JuicerGuiMessage 'No hay nada prescindible arrancando con Windows.' | Out-Null; return }
+            $list = ($junk | ForEach-Object { "· $($_.Name): $($_.Why)" }) -join "`n"
+            if (-not (Confirm-JuicerGui "Dejarán de arrancar con Windows (no se desinstala nada):`n`n$list`n`n¿Seguir?")) { return }
+            Start-JuicerGuiTask 'Desactivando programas de inicio…' 'Startup' @{ Disable = $junk } {
+                param($r)
+                Show-JuicerGuiStartup $r.Items
+                Show-JuicerGuiResults $r.Results
+                Show-JuicerGuiUndo
+            }
+        }
         BtnCleanup            = { Start-JuicerModuleWindow 'Invoke-JuicerCleanup' 'Win Juicer: limpieza' }
         BtnOptimize           = { Start-JuicerModuleWindow 'Invoke-JuicerDriveOptimize' 'Win Juicer: optimizar unidades' }
         BtnComponents         = { Start-JuicerModuleWindow 'Invoke-JuicerComponentCleanup' 'Win Juicer: limpiar componentes' }

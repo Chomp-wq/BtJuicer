@@ -5,3 +5,6 @@ local.properties
 *.iml
 .DS_Store
 captures/
+
+# Win Juicer: lo que construye build/Build-Release.ps1
+WinJuicer/dist/

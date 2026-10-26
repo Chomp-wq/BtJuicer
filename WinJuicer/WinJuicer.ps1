@@ -45,6 +45,12 @@
 .PARAMETER DeshacerTodo
     Deshace todos los cambios de Win Juicer.
 
+.PARAMETER Exportar
+    Guarda en un archivo JSON lo que Win Juicer ha cambiado en este equipo.
+
+.PARAMETER Importar
+    Aplica la configuración de un archivo exportado en otro equipo.
+
 .PARAMETER Simular
     Muestra qué cambiaría, sin cambiar nada.
 
@@ -86,6 +92,8 @@ param(
     [string[]]$Instalar = @(),
     [string[]]$Deshacer = @(),
     [switch]$DeshacerTodo,
+    [string]$Exportar,
+    [string]$Importar,
     [switch]$Simular,
     [switch]$Si,
     [switch]$AceptoRiesgos,

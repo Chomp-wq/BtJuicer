@@ -359,10 +359,13 @@ function Get-JuicerBootAudit {
     }
 
     try {
-        $items = Get-JuicerStartupItems
+        $items = @(Get-JuicerStartupReview)
         $on = @($items | Where-Object { $_.Enabled })
-        $sev = if ($on.Count -gt 12) { 'Medio' } elseif ($on.Count -gt 6) { 'Bajo' } else { 'Ok' }
-        $out += New-JuicerFinding 'Arranque' $sev "$($on.Count) programas y tareas se abren al iniciar sesión" 'Desactiva en Programas de inicio los que no necesites nada más encender.'
+        $junk = @($on | Where-Object { $_.Verdict -eq 'Prescindible' })
+        $sev = if ($on.Count -gt 12 -or $junk.Count -ge 4) { 'Medio' } elseif ($on.Count -gt 6 -or $junk.Count -gt 0) { 'Bajo' } else { 'Ok' }
+        $detail = 'Desactiva en Programas de inicio los que no necesites nada más encender.'
+        if ($junk.Count -gt 0) { $detail = "$($junk.Count) son prescindibles: $(($junk | ForEach-Object { $_.Name }) -join ', '). Funcionan igual abriéndolos cuando los necesites. " + $detail }
+        $out += New-JuicerFinding 'Arranque' $sev "$($on.Count) programas y tareas se abren al iniciar sesión" $detail
     } catch {
         Write-Verbose "Sin programas de inicio: $_"
     }

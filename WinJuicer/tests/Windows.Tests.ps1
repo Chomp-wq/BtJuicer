@@ -237,6 +237,22 @@ Import-Module '$psm' -Force
         }
     }
 
+    It 'el arrancador en una línea comprueba la huella, descomprime y Win Juicer arranca' {
+        $out = Join-Path ([IO.Path]::GetTempPath()) ('wj-dist-' + [guid]::NewGuid().ToString('N'))
+        $r = & (Join-Path (Split-Path -Parent $PSScriptRoot) 'build/Build-Release.ps1') -Out $out -Version 'prueba'
+        # Everything but the last line, which would download the real one.
+        $lines = [IO.File]::ReadAllLines($r.Launcher)
+        Invoke-Expression (($lines | Where-Object { $_ -notlike 'Start-WinJuicerOneLine *' }) -join "`n")
+        { Start-WinJuicerOneLine -Source $r.Zip -Sha256 ('0' * 64) -Version 'prueba' -NoLaunch } | Should -Throw '*no coincide*'
+        $main = Start-WinJuicerOneLine -Source $r.Zip -Sha256 $r.Sha256 -Version 'prueba' -NoLaunch
+        Test-Path -LiteralPath $main | Should -BeTrue
+        Test-Path -LiteralPath (Join-Path (Split-Path -Parent $main) 'src\Gui.ps1') | Should -BeTrue
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $main -Lista | Out-Null
+        $LASTEXITCODE | Should -Be 0
+        Remove-Item -LiteralPath (Split-Path -Parent $main), $out -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
     It 'añade y quita una exclusión de Defender' {
         $dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-def-' + [guid]::NewGuid().ToString('N'))
         New-Item -ItemType Directory -Path $dir | Out-Null

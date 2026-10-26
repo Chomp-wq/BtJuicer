@@ -357,6 +357,28 @@ Describe 'Programas de inicio' {
         Get-MachineSnapshot $m | Should -Be $before
     }
 
+    It 'clasifica las entradas conocidas, y no se confunde de programa' -ForEach @(
+        @{ N = 'Steam'; C = '"C:\Program Files (x86)\Steam\steam.exe" -silent'; V = 'Prescindible' }
+        @{ N = 'EpicGamesLauncher'; C = 'C:\Epic\EpicGamesLauncher.exe -silent'; V = 'Prescindible' }
+        @{ N = 'MicrosoftEdgeAutoLaunch_0123'; C = 'msedge.exe --no-startup-window'; V = 'Prescindible' }
+        @{ N = 'Discord'; C = 'Update.exe --processStart Discord.exe'; V = 'Opcional' }
+        @{ N = 'TeamSpeak 3 Client'; C = 'ts3client_win64.exe'; V = $null }
+        @{ N = 'com.squirrel.Teams.Teams'; C = 'Update.exe --processStart Teams.exe'; V = 'Opcional' }
+        @{ N = 'SecurityHealth'; C = '%windir%\system32\SecurityHealthSystray.exe'; V = 'Necesario' }
+        @{ N = 'RtkAudUService'; C = 'RtkAudUService64.exe -background'; V = 'Necesario' }
+        @{ N = 'Mi programa'; C = 'C:\x\mio.exe'; V = $null }
+    ) {
+        $got = Get-JuicerStartupVerdict $N $C
+        if ($null -eq $V) { $got | Should -BeNullOrEmpty } else { $got.Verdict | Should -Be $V; $got.Why | Should -Not -BeNullOrEmpty }
+    }
+
+    It 'el diagnóstico cuenta los prescindibles' {
+        Write-JuicerReg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run' 'Steam' 'String' '"C:\Steam\steam.exe" -silent'
+        $items = @(Get-JuicerStartupReview | Where-Object { $_.Kind -eq 'Registro' })
+        ($items | Where-Object { $_.Name -eq 'Steam' }).Verdict | Should -Be 'Prescindible'
+        ($items | Where-Object { $_.Name -eq 'Discord' }).Verdict | Should -Be 'Opcional'
+    }
+
     It 'el formato binario es el del Administrador de tareas' {
         $off = New-JuicerApprovedBytes $false
         $off.Count | Should -Be 12

@@ -39,16 +39,28 @@ y que busca exactamente eso, y te dice por orden qué merece la pena arreglar.
 
 ## Cómo se usa
 
-Descarga la carpeta `WinJuicer` y haz doble clic en **`WinJuicer.cmd`**. Pide
-permisos de administrador y abre la ventana:
+**En una línea**, como WinUtil: abre PowerShell y pega
+
+```powershell
+irm https://github.com/Chomp-wq/BtJuicer/releases/download/winjuicer/winjuicer.ps1 | iex
+```
+
+Descarga la última versión, comprueba que el zip es exactamente el publicado
+(SHA256) y la abre como administrador. Se descarga y comprueba en cada
+arranque, así que no queda nada guardado que alguien pudiera cambiar para que
+se ejecute como administrador la próxima vez. La release la publica el CI
+desde la rama principal, con todas las pruebas en verde.
+
+**O sin internet**: descarga la carpeta `WinJuicer` y haz doble clic en
+**`WinJuicer.cmd`**. Pide permisos de administrador y abre la ventana:
 
 | Pestaña | Qué tiene |
 |---|---|
 | **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo» y «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro). |
-| **Ajustes** | Todos los ajustes con casillas, agrupados. Selección: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. |
+| **Ajustes** | Todos los ajustes con casillas, agrupados. Selección: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. *Exportar…* e *Importar…* llevan tu configuración a otro PC. |
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
-| **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas. |
+| **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
 | **Juegos** | GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
@@ -95,6 +107,8 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -QuitarApps Microsoft.BingNews,Clipchamp.Clipchamp
 .\WinJuicer.ps1 -Dns Cloudflare
 .\WinJuicer.ps1 -Instalar Valve.Steam,Discord.Discord
+.\WinJuicer.ps1 -Exportar C:\mi-config.json             # lo que Win Juicer cambió aquí
+.\WinJuicer.ps1 -Importar C:\mi-config.json -Simular    # en otro PC: qué haría
 .\WinJuicer.ps1 -Deshacer ui.menu
 .\WinJuicer.ps1 -DeshacerTodo
 ```
@@ -348,6 +362,22 @@ Lista lo que arranca con Windows —registro, carpetas de Inicio y tareas
 programadas de terceros— y lo activa o desactiva con el mismo interruptor que
 usa el Administrador de tareas. No borra nada.
 
+Reconoce los habituales y dice qué son: **prescindibles** (lanzadores de
+juegos, Spotify, actualizadores de Adobe y Java, navegadores precargados…:
+funcionan igual abriéndolos cuando hacen falta), **opcionales** (Discord,
+OneDrive, el software de periféricos y RGB, Afterburner: según para qué los
+uses) o **necesarios** (Seguridad de Windows, el panel de audio, el touchpad).
+Los actualizadores de navegadores y antivirus no se tocan: son por donde llegan
+los parches. El diagnóstico cuenta cuántos prescindibles arrancan.
+
+### Exportar e importar
+
+Como en WinUtil: *Exportar* guarda en un JSON lo que Win Juicer ha cambiado en
+este equipo —ajustes, preferencias, apps quitadas y DNS— y en otro PC
+*Importar* lo aplica, con el mismo motor y el mismo diario, así que también se
+deshace. Lo que sólo tiene sentido aquí (programas de inicio, ajustes de un
+`.exe`) no se exporta, y lo que no aplique en el otro equipo se salta y lo dice.
+
 ### Mantenimiento
 
 Limpieza de temporales, informes de errores y descargas de Windows Update;
@@ -418,11 +448,13 @@ WinJuicer/
   src/Debloat.ps1         las apps que vienen con Windows, y OneDrive
   src/Network.ps1         DNS, restablecer la red y Windows Update
   src/Apps.ps1            instalar con winget
+  src/Config.ps1          exportar e importar la configuración
   src/Startup.ps1         programas de inicio
   src/Games.ps1           bibliotecas de juegos y ajustes por ejecutable
   src/Maintenance.ps1     limpieza y mantenimiento
   src/Console.ps1         menús de texto y línea de órdenes
   src/Gui.ps1             la ventana
+  build/                  el zip y el arrancador de «irm … | iex»
   tests/                  Pester
 ```
 

@@ -15,6 +15,7 @@ $script:StateMarks = @{
 }
 $script:SeverityColors = @{ Alto = 'Red'; Medio = 'Yellow'; Bajo = 'Cyan'; Info = 'Gray'; Ok = 'Green' }
 $script:LevelColors = @{ 0 = 'Cyan'; 1 = 'Green'; 2 = 'Yellow'; 3 = 'Red' }
+$script:StartupVerdictColors = @{ Prescindible = 'Green'; Opcional = 'Yellow'; Necesario = 'Cyan' }
 $script:VerdictMarks = @{ Recomendado = @('+', 'Green'); Opcional = @(' ', 'DarkGray'); NoRecomendado = @('-', 'DarkGray') }
 $script:RebootLabels = @{
     Reinicio   = 'Reinicia el equipo para completar'
@@ -409,7 +410,7 @@ function Show-JuicerStartup {
     while ($true) {
         Write-JuicerHeader 'Programas de inicio'
         Write-Host '  Leyendo…' -ForegroundColor DarkGray
-        $items = @(Get-JuicerStartupItems | Sort-Object { -not $_.Enabled }, { $_.Name })
+        $items = @(Get-JuicerStartupReview | Sort-Object { -not $_.Enabled }, { $_.Name })
         Write-JuicerHeader 'Programas de inicio'
         if ($items.Count -eq 0) { Write-Host '  No hay nada configurado para arrancar al iniciar sesión.' -ForegroundColor Green }
         $n = 0
@@ -420,16 +421,26 @@ function Show-JuicerStartup {
             Write-Host ('  {0} ' -f $mark[0]) -ForegroundColor $mark[1] -NoNewline
             Write-Host ('{0,3}  ' -f $n) -ForegroundColor Yellow -NoNewline
             Write-Host ('{0,-28} ' -f $(if ($i.Name.Length -gt 28) { $i.Name.Substring(0, 27) + '…' } else { $i.Name })) -NoNewline
-            Write-Host $i.Source -ForegroundColor DarkGray
+            Write-Host ('{0,-28} ' -f $i.Source) -ForegroundColor DarkGray -NoNewline
+            if ($i.Verdict) { Write-Host $i.Verdict.ToLowerInvariant() -ForegroundColor $script:StartupVerdictColors[$i.Verdict] } else { Write-Host '' }
+            if ($i.Why) { Write-JuicerWrapped $i.Why 12 'Gray' }
             $cmd = $i.Command
             if ($cmd.Length -gt $w + 30) { $cmd = $cmd.Substring(0, $w + 29) + '…' }
             Write-Host "            $cmd" -ForegroundColor DarkGray
         }
         Write-Host ''
         Write-JuicerWrapped 'Desactivar no borra nada: es el mismo interruptor del Administrador de tareas. Las apps de la Tienda que arrancan solas se gestionan en Configuración > Aplicaciones > Inicio.' 2 'DarkGray'
-        $c = Read-JuicerChoice 'Números para activar o desactivar (ej. 2,5,7), Intro para volver'
+        $junk = @($items | Where-Object { $_.Enabled -and $_.Verdict -eq 'Prescindible' })
+        $prompt = if ($junk.Count -gt 0) { "Números para activar o desactivar (ej. 2,5,7), P para desactivar los $($junk.Count) prescindibles, Intro para volver" } else { 'Números para activar o desactivar (ej. 2,5,7), Intro para volver' }
+        $c = Read-JuicerChoice $prompt
         if ($c -eq '') { return }
         $results = @()
+        if ($c -match '^[pP]$' -and $junk.Count -gt 0) {
+            foreach ($i in $junk) { $results += Set-JuicerStartupItem $i $false }
+            Show-JuicerResults $results
+            Wait-JuicerKey
+            continue
+        }
         foreach ($k in (Get-JuicerNumbers $c $items.Count)) {
             $i = $items[$k - 1]
             $results += Set-JuicerStartupItem $i (-not $i.Enabled)
@@ -937,6 +948,8 @@ function Start-Juicer {
         [string[]]$Instalar = @(),
         [string[]]$Deshacer = @(),
         [switch]$DeshacerTodo,
+        [string]$Exportar,
+        [string]$Importar,
         [switch]$Simular,
         [switch]$Si,
         [switch]$AceptoRiesgos,
@@ -949,7 +962,7 @@ function Start-Juicer {
     $Deshacer = & $split $Deshacer
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
-    $cli = $Diagnostico -or $Informe -or $Equipo -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     if (-not $cli) {
@@ -978,6 +991,16 @@ function Start-Juicer {
         return 0
     }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
+    if ($Exportar) {
+        $cfg = Export-JuicerConfig $Exportar
+        Write-Host ('  Configuración guardada en {0}: {1} ajustes, {2} preferencias, {3} apps{4}.' -f $Exportar, @($cfg.Tweaks).Count, $cfg.Toggles.Count, @($cfg.Apps).Count, $(if ($cfg.Dns) { ", DNS $($cfg.Dns)" } else { '' }))
+        return 0
+    }
+    $imported = $null
+    if ($Importar) {
+        try { $imported = Read-JuicerConfig $Importar } catch { Write-Host "  $_" -ForegroundColor Red; return 2 }
+        if ($imported.Unknown.Count -gt 0) { Write-Host "  Se ignora lo que esta versión no conoce: $($imported.Unknown -join ', ')" -ForegroundColor Yellow }
+    }
     if ($Equipo) { Show-JuicerEquipo; return 0 }
     if ($Instalar.Count -gt 0) {
         foreach ($id in $Instalar) { if (-not (Test-JuicerWingetId $id)) { Write-Host "  Identificador de winget no válido: $id" -ForegroundColor Red; return 2 } }
@@ -1010,6 +1033,7 @@ function Start-Juicer {
         if (-not $t) { Write-Host "  No sé quitar «$name». Los nombres están en el menú Debloat." -ForegroundColor Red; return 2 }
         & $add $t
     }
+    if ($imported) { foreach ($t in @(Get-JuicerConfigTweaks $imported)) { & $add $t } }
     if ($Dns) {
         if (-not (Get-JuicerDnsProviders).Contains($Dns)) {
             Write-Host "  DNS desconocido: $Dns. Usa: $(@((Get-JuicerDnsProviders).Keys) -join ', ')." -ForegroundColor Red
@@ -1029,6 +1053,17 @@ function Start-Juicer {
                 if (-not (Confirm-JuicerAction "¿Aplicar $($todo.Count) ajustes?")) { return 0 }
             }
             $results += Invoke-JuicerTweakSet $todo -Simulate:$Simular -AcceptRisk:$AceptoRiesgos -NoRestorePoint:$SinPuntoDeRestauracion
+        }
+    }
+    if ($imported) {
+        foreach ($k in $imported.Toggles.Keys) {
+            $t = Find-JuicerTweak $k
+            if ($Simular) {
+                $target = if ($imported.Toggles[$k]) { $t } else { Get-JuicerInverseTweak $t }
+                $results += Invoke-JuicerTweak $target -Simulate
+            } else {
+                $results += @(Set-JuicerToggle $t ([bool]$imported.Toggles[$k]))
+            }
         }
     }
     if ($results.Count -gt 0) { Show-JuicerResults $results }

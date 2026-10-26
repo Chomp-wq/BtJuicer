@@ -164,6 +164,91 @@ Describe 'winget' {
     }
 }
 
+Describe 'Exportar e importar' {
+    It 'lo de un equipo se aplica en otro, y lo que es de este PC no viaja' {
+        $m = New-NetMachine
+        $m.Backend.State.Appx['Clipchamp.Clipchamp'] = @{ Installed = $true; Provisioned = $true }
+        Write-JuicerReg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'HideFileExt' 'DWord' 0
+        foreach ($t in (Find-JuicerTweak 'juegos.ventana'), (Find-JuicerTweak 'ui.menu'), (New-JuicerDnsTweak 'Quad9'),
+            (New-JuicerAppxTweak (Find-JuicerDebloatApp 'Clipchamp.Clipchamp')), (New-JuicerPriorityTweak 'C:\Juegos\x.exe')) {
+            [void](Invoke-JuicerTweak $t)
+        }
+        [void](Set-JuicerToggle (Find-JuicerTweak 'pref.oscuro') $true)
+        [void](Set-JuicerToggle (Find-JuicerTweak 'pref.extensiones') $false)
+        $file = Join-Path (Get-JuicerHome) 'config.json'
+        $cfg = Export-JuicerConfig $file
+        @($cfg.Tweaks) | Should -Be @('juegos.ventana', 'ui.menu')
+        $cfg.Toggles['pref.oscuro'] | Should -BeTrue
+        $cfg.Toggles['pref.extensiones'] | Should -BeFalse
+        $cfg.Dns | Should -Be 'Quad9'
+        @($cfg.Apps) | Should -Be @('Clipchamp.Clipchamp')
+
+        # The other PC.
+        $m2 = New-NetMachine
+        $m2.Backend.State.Appx['Clipchamp.Clipchamp'] = @{ Installed = $true; Provisioned = $false }
+        Write-JuicerReg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'HideFileExt' 'DWord' 0
+        @(Start-Juicer -Importar $file -Si -SinPuntoDeRestauracion 6>$null)[-1] | Should -Be 0
+        foreach ($id in 'juegos.ventana', 'ui.menu', 'pref.oscuro') { (Get-JuicerTweakState (Find-JuicerTweak $id)).State | Should -Be 'Aplicado' -Because $id }
+        (Read-JuicerReg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced' 'HideFileExt').Value | Should -Be 1
+        @(Get-JuicerCurrentDns)[0].Provider | Should -Be 'Quad9'
+        $m2.Backend.State.Appx.ContainsKey('Clipchamp.Clipchamp') | Should -BeFalse
+        Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\x.exe\PerfOptions' 'CpuPriorityClass' | Should -BeNullOrEmpty
+        # And it all undoes like anything else.
+        [void](Undo-JuicerAll)
+        (Read-JuicerJournal).Count | Should -Be 0
+    }
+
+    It 'simular no cambia nada, ni las preferencias' {
+        $m = New-NetMachine
+        $file = Join-Path (Get-JuicerHome) 'config-sim.json'
+        [IO.File]::WriteAllText($file, '{ "Version": 1, "Tweaks": ["ui.menu"], "Toggles": { "pref.oscuro": true }, "Apps": [], "Dns": "Google" }')
+        $before = Get-MachineSnapshot $m
+        @(Start-Juicer -Importar $file -Simular -Si 6>$null)[-1] | Should -Be 0
+        Get-MachineSnapshot $m | Should -Be $before
+    }
+
+    It 'lo desconocido se ignora con aviso, y un archivo que no es suyo se rechaza' {
+        $m = New-NetMachine
+        $file = Join-Path (Get-JuicerHome) 'config-raro.json'
+        [IO.File]::WriteAllText($file, '{ "Version": 1, "Tweaks": ["ui.menu", "no.existe", "pref.oscuro"], "Toggles": { "ui.menu": true }, "Apps": ["Nada.Nada"], "Dns": "Raro" }')
+        $cfg = Read-JuicerConfig $file
+        @($cfg.Tweaks) | Should -Be @('ui.menu')
+        $cfg.Toggles.Count | Should -Be 0
+        @($cfg.Unknown) | Should -Be @('no.existe', 'pref.oscuro', 'ui.menu', 'app:Nada.Nada', 'dns:Raro')
+        Format-JuicerConfigSummary $cfg | Should -BeLike '*Menú contextual clásico*no conoce*'
+        [IO.File]::WriteAllText($file, '{ "otra": "cosa" }')
+        { Read-JuicerConfig $file } | Should -Throw '*Win Juicer*'
+        @(Start-Juicer -Importar $file -Si 6>$null)[-1] | Should -Be 2
+    }
+}
+
+Describe 'Arranque en una línea' {
+    It 'el zip lleva lo necesario, y el arrancador su huella, en ASCII y sin BOM' {
+        $out = Join-Path ([IO.Path]::GetTempPath()) ('wj-dist-' + [guid]::NewGuid().ToString('N'))
+        try {
+            $r = & (Join-Path $Root 'build/Build-Release.ps1') -Out $out -Version 'abc1234'
+            Add-Type -AssemblyName System.IO.Compression.FileSystem
+            $z = [IO.Compression.ZipFile]::OpenRead($r.Zip)
+            try { $names = @($z.Entries | ForEach-Object { $_.FullName }) } finally { $z.Dispose() }
+            foreach ($n in 'WinJuicer.cmd', 'WinJuicer.ps1', 'WinJuicer.psm1', 'src/Gui.ps1', 'src/Engine.ps1') { $names | Should -Contain $n }
+            @($names | Where-Object { $_ -like 'tests*' -or $_ -like 'build*' -or $_ -match '\\' }).Count | Should -Be 0
+            @($names | Where-Object { $_ -like 'src/*' }).Count | Should -Be @(Get-ChildItem (Join-Path $Root 'src') -Filter *.ps1).Count
+
+            $bytes = [IO.File]::ReadAllBytes($r.Launcher)
+            @($bytes | Where-Object { $_ -gt 127 }).Count | Should -Be 0
+            $bytes[0] | Should -Not -Be 0xEF
+            $text = [IO.File]::ReadAllText($r.Launcher)
+            $text | Should -BeLike "*-Sha256 '$((Get-FileHash $r.Zip -Algorithm SHA256).Hash)' -Version 'abc1234'*"
+            $text | Should -Not -BeLike '*__SHA256__*'
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($text, [ref]$null, [ref]$errors)
+            $errors | Should -BeNullOrEmpty
+        } finally {
+            Remove-Item -LiteralPath $out -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 Describe 'Línea de órdenes' {
     It '-Equipo, -QuitarApps, -Dns y -Recomendado' {
         $m = New-NetMachine
