@@ -84,7 +84,7 @@ private data class Snapshot(
     val days: Long,
     val since: Long,
     val blocked: Int,
-    val dnsMs: Long?,
+    val dns: SaviorVpnService.Companion.DnsHealth?,
 ) {
     val ready get() = vpn && guard && admin && !dnsStrict && autostart
 }
@@ -100,7 +100,7 @@ private fun read(c: Context) = Snapshot(
     days = Store.daysLocked(c),
     since = Store.lockedAt(c),
     blocked = Store.blockedCount(c),
-    dnsMs = SaviorVpnService.dnsAverageMs,
+    dns = SaviorVpnService.dnsHealth,
 )
 
 private fun isXiaomiFamily() = Build.MANUFACTURER.lowercase() in setOf("xiaomi", "redmi", "poco")
@@ -317,12 +317,21 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                 StatusRow("Anti-desinstalación", s.admin, a::enableAdmin)
                 if (s.dnsStrict) StatusRow("DNS privado estricto (esquiva el filtro)", false, a::openNetworkSettings)
                 Text("${s.blocked} sitios bloqueados hasta hoy", style = MaterialTheme.typography.bodySmall)
-                s.dnsMs?.let { ms ->
+                s.dns?.let { dns ->
                     // Menos de ~80 ms no se nota; por encima de ~250 ms el resolutor está lejos o la red va mal.
+                    val slow = dns.averageMs > 250
                     Text(
-                        "DNS: $ms ms de media" + if (ms > 250) " (lento: puede ser la red)" else "",
+                        when {
+                            dns.broken ->
+                                "El DNS no responde (${dns.recentFailed} de las últimas ${dns.recentTotal} consultas). " +
+                                    "Si pasa sólo en una red, esa red bloquea DNS externo (hoteles, trabajo, colegio); " +
+                                    "si pasa en todas, comprueba que Secret Savior tenga acceso a datos y Wi-Fi en " +
+                                    "Seguridad → Uso de datos."
+                            slow -> "DNS: ${dns.averageMs} ms de media (lento: puede ser la red)"
+                            else -> "DNS: ${dns.averageMs} ms de media"
+                        },
                         style = MaterialTheme.typography.bodySmall,
-                        color = if (ms > 250) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                        color = if (dns.broken || slow) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }

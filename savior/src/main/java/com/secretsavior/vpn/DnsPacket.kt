@@ -70,5 +70,57 @@ object DnsPacket {
         return out
     }
 
+    /**
+     * La pregunta de un mensaje (consulta o respuesta) como "nombre/tipo/clase", con el nombre en
+     * minúsculas. Sirve para comprobar que una respuesta es de la consulta que se hizo: el
+     * identificador, de sólo 16 bits, no basta (RFC 5452).
+     */
+    fun questionKey(msg: ByteArray, len: Int = msg.size): String? {
+        if (len < 17 || u16(msg, 4) < 1) return null
+        var pos = 12
+        val name = StringBuilder()
+        while (true) {
+            if (pos >= len) return null
+            val l = msg[pos].toInt() and 0xFF
+            if (l == 0) {
+                pos++
+                break
+            }
+            if (l and 0xC0 != 0) return null
+            if (pos + 1 + l > len) return null
+            if (name.isNotEmpty()) name.append('.')
+            for (i in 0 until l) name.append((msg[pos + 1 + i].toInt() and 0xFF).toChar().lowercaseChar())
+            pos += 1 + l
+        }
+        if (pos + 4 > len) return null
+        return "$name/${u16(msg, pos)}/${u16(msg, pos + 2)}"
+    }
+
+    /** Es una respuesta (QR) y no una consulta que rebota. */
+    fun isResponse(msg: ByteArray, len: Int = msg.size): Boolean = len >= 12 && (msg[2].toInt() and 0x80) != 0
+
+    /** El servidor cortó la respuesta (TC): el resto sólo cabe por TCP. */
+    fun isTruncated(msg: ByteArray): Boolean = msg.size >= 12 && (msg[2].toInt() and 0x02) != 0
+
+    /** Cuánto acepta el cliente por UDP: el tamaño que anuncia en EDNS0, o 512 si no usa EDNS0. */
+    fun ednsSize(query: ByteArray): Int {
+        val q = parseQuestion(query) ?: return 512
+        if (u16(query, 6) != 0 || u16(query, 8) != 0) return 512 // una consulta no lleva respuestas
+        var pos = q.end
+        repeat(u16(query, 10)) {
+            if (pos >= query.size) return 512
+            val l = query[pos].toInt() and 0xFF
+            pos += when {
+                l == 0 -> 1
+                l and 0xC0 == 0xC0 -> 2
+                else -> return 512
+            }
+            if (pos + 10 > query.size) return 512
+            if (u16(query, pos) == 41) return maxOf(512, u16(query, pos + 2)) // OPT: la clase es el tamaño
+            pos += 10 + u16(query, pos + 8)
+        }
+        return 512
+    }
+
     private fun u16(b: ByteArray, o: Int) = ((b[o].toInt() and 0xFF) shl 8) or (b[o + 1].toInt() and 0xFF)
 }

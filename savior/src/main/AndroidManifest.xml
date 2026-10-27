@@ -5,6 +5,9 @@
          lo único que sale del teléfono. -->
     <uses-permission android:name="android.permission.INTERNET" />
 
+    <!-- Mirar las redes en uso para que la subred del túnel no se pise con la real. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
     <!-- Volver a levantar el filtro tras reiniciar. -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 

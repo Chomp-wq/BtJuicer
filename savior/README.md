@@ -82,6 +82,55 @@ Lo que no depende de la app: la primera visita a cada dominio espera la respuest
 CleanBrowsing, que según dónde estés puede estar más lejos que el DNS de tu
 operador. Android guarda las respuestas en caché, así que sólo se nota la primera vez.
 
+## Seguridad de la red: lo que se revisó y se corrigió
+
+Una VPN que se equivoca afecta a todo el teléfono, no sólo a la app. Fallos reales que se
+encontraron y corrigieron (cada uno con su prueba; el primero se reprodujo contra el
+código anterior):
+
+- **Respuestas DNS cruzadas.** Se preguntaba a varios servidores a la vez y las respuestas
+  repetidas llegaban tarde; una podía coincidir con el identificador (16 bits) de OTRA consulta
+  en vuelo y entregarse como suya. El cliente la descarta por no ser su pregunta y espera 5 s a
+  una respuesta que ya nadie le manda: páginas que a veces tardan segundos en abrir. Ahora una
+  respuesta sólo vale si viene de un servidor al que se preguntó, es de la misma pregunta
+  (nombre, tipo y clase, sin distinguir mayúsculas) y todavía hay quien la espera; si no lo es,
+  no gasta la consulta.
+- **Respuestas cortadas (TC).** El túnel no sirve DNS por TCP, así que cuando el resolutor cortaba
+  una respuesta, la búsqueda fallaba. Ahora se repite por TCP contra quien contestó y se entrega
+  completa.
+- **Choque de subredes.** El túnel usaba siempre 10.255.255.0/24; si el Wi-Fi o la red del operador
+  usaba esa subred, el teléfono dejaba de ver a su propio router. Ahora se mira qué redes hay en
+  uso y se elige una libre (10.255.255 → 172.31.255 → 198.18.255 → 192.0.2).
+- **Socket de reenvío roto.** Si el sistema lo cerraba (p. ej. al cambiar de red), el hilo
+  receptor giraba al 100 % de un núcleo y el DNS no volvía. Ahora espera, y crea otro.
+- **Un paquete raro tumbaba la VPN.** Cualquier excepción al leer un paquete cerraba el túnel y
+  lo rehacía, lo que corta todas las conexiones del teléfono. Ahora se descarta el paquete.
+- **Reenviador que no arranca.** Dejaba la VPN activa pero sin DNS, y todas las consultas se
+  perdían. Ahora no se levanta el túnel y se reintenta a los 30 s.
+- **Guardián en Play Store y Ajustes.** Se recorría la ventana en cada desplazamiento. Ahora sólo
+  en los primeros 4 s tras abrir una pantalla, y la tienda ya no se vigila.
+- **Avisos cada minuto.** Si el filtro caía (otra VPN, permiso retirado) la app saltaba encima de
+  lo que se hiciera cada minuto, también en una llamada. Ahora el primer aviso es inmediato y los
+  siguientes se espacian (1, 3, 10 y 30 min).
+
+La pantalla principal muestra el tiempo medio del DNS y avisa cuando más de la mitad de las
+últimas consultas se quedan sin respuesta.
+
+### Límites que no son fallos de código
+
+- **Nombres de la red local.** Todo el DNS va a resolutores públicos, así que lo que sólo
+  resuelve el DNS de la red (`router.lan`, intranets, algunos portales de Wi-Fi) no se encuentra.
+  Las IP directas funcionan. No se reenvía al DNS de la red porque eso abriría un resquicio:
+  sería la forma de saltarse el filtro.
+- **Redes que bloquean DNS externo** (hoteles, trabajo, colegio, algún operador): sin respuesta
+  de los resolutores no hay DNS. Es lo esperado de un bloqueo que «falla cerrado».
+- **Acceso a la red de la app.** El DNS de todo el teléfono pasa por esta app: si se le quita el
+  acceso a datos o a Wi-Fi (p. ej. en Seguridad → Uso de datos), esa red se queda sin DNS.
+- **Otra VPN.** Sólo cabe una a la vez. Con otra activa, los navegadores se cierran hasta
+  recuperar el filtro.
+- **Conexiones largas.** Cada vez que el sistema mata la app y la VPN se rehace, las conexiones
+  abiertas (llamadas, descargas) se cortan un instante; por eso se evita todo reinicio evitable.
+
 ## Instalar
 
 CI publica `Secret-Savior.apk` en la release `latest`. En Android 13+, si lo

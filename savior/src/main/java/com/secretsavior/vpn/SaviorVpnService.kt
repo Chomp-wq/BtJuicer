@@ -3,6 +3,8 @@ package com.secretsavior.vpn
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
@@ -16,6 +18,7 @@ import com.secretsavior.guard.Watchdog
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
+import java.net.Inet4Address
 import java.net.InetSocketAddress
 
 /**
@@ -35,6 +38,10 @@ class SaviorVpnService : VpnService() {
     @Volatile
     private var forwarder: DnsForwarder? = null
     private val writeLock = Any()
+
+    /** Los bytes de la dirección del "servidor DNS" de este túnel (la subred se elige al arrancar). */
+    @Volatile
+    private var dnsBytes = Subnets.CANDIDATES.first().dnsBytes
 
     /** Lo destruye el sistema: el hilo lector no debe llamar a stopSelf sobre un servicio ya relanzado. */
     @Volatile
@@ -70,15 +77,16 @@ class SaviorVpnService : VpnService() {
     private fun start() {
         if (running) return
         DnsFilter.extra = Store.extraDomains(this)
+        val subnet = chooseSubnet()
         val builder = Builder()
             .setSession("Secret Savior")
             .setMtu(1500)
             // Por defecto el descriptor del túnel es no bloqueante: read() devuelve 0 al
             // instante si no hay nada y el bucle lector giraría sin parar con un núcleo al 100 %.
             .setBlocking(true)
-            .addAddress(ADDRESS, 24)
-            .addDnsServer(DNS)
-            .addRoute(SUBNET, 24)
+            .addAddress(subnet.address, 24)
+            .addDnsServer(subnet.dns)
+            .addRoute(subnet.network, 24)
             .setConfigureIntent(
                 PendingIntent.getActivity(
                     this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
@@ -96,17 +104,61 @@ class SaviorVpnService : VpnService() {
             stopSelf()
             return
         }
-        failures = 0
-        forwarder = try {
-            DnsForwarder(PRIMARY, FALLBACK, protect = { protect(it) })
+        val fwd = try {
+            DnsForwarder(PRIMARY, FALLBACK, protect = { protect(it) }, protectTcp = { protect(it) })
         } catch (e: IOException) {
-            Log.w(TAG, "sin socket de reenvío", e)
             null
         }
+        if (fwd == null) {
+            // Un túnel sin reenviador se tragaría todas las consultas y el teléfono se quedaría sin
+            // DNS con la VPN "activa". Mejor no levantarlo y reintentar más tarde.
+            Log.w(TAG, "sin socket de reenvío")
+            try {
+                pfd.close()
+            } catch (e: IOException) {
+                // ya estaba cerrado
+            }
+            failures++
+            stopSelf()
+            return
+        }
+        failures = 0
+        forwarder = fwd
+        dnsBytes = subnet.dnsBytes
         tun = pfd
         current = this
         running = true
         reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
+    }
+
+    /**
+     * La subred del túnel no puede coincidir con la de la red real: con el túnel encima, el
+     * teléfono dejaría de ver a su propio router (y sin él, sin Wi-Fi). Se elige una que no se
+     * pise con ninguna red en uso; casi siempre es la de siempre.
+     */
+    private fun chooseSubnet(): Subnets.Candidate {
+        val used = ArrayList<Pair<Int, Int>>()
+        try {
+            val cm = getSystemService(ConnectivityManager::class.java) ?: return Subnets.CANDIDATES.first()
+            @Suppress("DEPRECATION")
+            for (network in cm.allNetworks) {
+                // Las VPN no cuentan: la nuestra de antes (si la hay) se sustituye, y otra se revoca.
+                if (cm.getNetworkCapabilities(network)?.hasTransport(NetworkCapabilities.TRANSPORT_VPN) == true) continue
+                val lp = cm.getLinkProperties(network) ?: continue
+                for (la in lp.linkAddresses) {
+                    (la.address as? Inet4Address)?.let { used += Subnets.toInt(it.address) to la.prefixLength }
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    for (r in lp.routes) {
+                        val d = r.destination
+                        (d.address as? Inet4Address)?.let { used += Subnets.toInt(it.address) to d.prefixLength }
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "no se pudo mirar las redes", e)
+        }
+        return Subnets.pick(used)
     }
 
     private fun loop(pfd: ParcelFileDescriptor) {
@@ -117,7 +169,17 @@ class SaviorVpnService : VpnService() {
             while (!Thread.currentThread().isInterrupted) {
                 val n = input.read(buf)
                 if (n < 0) break
-                if (n > 0) handle(buf, n, output) else Thread.sleep(IDLE_MS) // por si acaso
+                if (n > 0) {
+                    try {
+                        handle(buf, n, output)
+                    } catch (e: Exception) {
+                        // Un paquete raro no puede tumbar el túnel: se rehace con un parón de
+                        // todas las conexiones del teléfono (cada VPN nueva las corta).
+                        Log.w(TAG, "paquete descartado", e)
+                    }
+                } else {
+                    Thread.sleep(IDLE_MS) // por si acaso
+                }
             }
         } catch (e: InterruptedException) {
             // onDestroy: salir
@@ -133,7 +195,8 @@ class SaviorVpnService : VpnService() {
         if (n < 28 || (buf[0].toInt() and 0xF0) shr 4 != 4) return
         val ihl = (buf[0].toInt() and 0x0F) * 4
         if (n < ihl + 8) return
-        for (i in 0..3) if (buf[16 + i] != DNS_BYTES[i]) return
+        val dns = dnsBytes
+        for (i in 0..3) if (buf[16 + i] != dns[i]) return
 
         when (buf[9].toInt() and 0xFF) {
             IpPacket.PROTO_UDP -> {
@@ -163,7 +226,12 @@ class SaviorVpnService : VpnService() {
             write(out, IpPacket.udpReply(header, ihl, DnsPacket.blocked(query, q)))
             return
         }
-        val fwd = forwarder ?: return
+        val fwd = forwarder
+        if (fwd == null) {
+            // No debería pasar; si pasa, un error al momento es mejor que 5 s de espera por consulta.
+            q?.let { write(out, IpPacket.udpReply(header, ihl, DnsPacket.servfail(query, it))) }
+            return
+        }
         fwd.query(query) { response ->
             val reply = response ?: q?.let { DnsPacket.servfail(query, it) }
             if (reply != null) write(out, IpPacket.udpReply(header, ihl, reply))
@@ -211,12 +279,6 @@ class SaviorVpnService : VpnService() {
         private const val TAG = "SecretSavior"
         private const val IDLE_MS = 20L
 
-        /** Subred del túnel. El "servidor DNS" es .1 y el teléfono es .2. */
-        private const val SUBNET = "10.255.255.0"
-        private const val ADDRESS = "10.255.255.2"
-        private const val DNS = "10.255.255.1"
-        private val DNS_BYTES = byteArrayOf(10, -1, -1, 1)
-
         /**
          * CleanBrowsing "Adult Filter": bloquea pornografía y contenido explícito y fuerza
          * búsqueda segura en Google y Bing. Deja pasar sitios mixtos como Reddit (para eso
@@ -237,9 +299,16 @@ class SaviorVpnService : VpnService() {
             dns("2606:4700:4700::1113"), dns("2606:4700:4700::1003"),
         )
 
-        /** Tiempo medio de respuesta del DNS en ms, o null si el filtro no corre. */
-        val dnsAverageMs: Long?
-            get() = current?.forwarder?.takeIf { it.answered > 0 }?.averageMs
+        /** Cómo va el DNS, o null si el filtro no corre o aún no ha contestado nada. */
+        val dnsHealth: DnsHealth?
+            get() = current?.forwarder?.let {
+                if (it.recentTotal == 0) null else DnsHealth(it.averageMs, it.recentTotal, it.recentFailed)
+            }
+
+        data class DnsHealth(val averageMs: Long, val recentTotal: Int, val recentFailed: Int) {
+            /** Más de la mitad de las últimas consultas sin respuesta: algo impide llegar a los resolutores. */
+            val broken get() = recentTotal >= 10 && recentFailed * 2 >= recentTotal
+        }
 
         @Volatile
         private var current: SaviorVpnService? = null

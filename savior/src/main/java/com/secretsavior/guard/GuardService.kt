@@ -28,6 +28,8 @@ class GuardService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var lastBlock = 0L
     private var lastNag = 0L
+    private var nags = 0
+    private var surfaceOpenedAt = 0L
 
     // Comprobación diferida: como mucho una cada SETTLE_MS mientras la pantalla cambia.
     private var deferredPkg: String? = null
@@ -79,9 +81,16 @@ class GuardService : AccessibilityService() {
         if (!Store.isLocked(this)) return
         val vpnOk = Watchdog.ensure(this)
         val broken = !vpnOk || !Status.isAdminActive(this)
+        if (!broken) {
+            nags = 0
+            return
+        }
+        // Abrir la app encima de lo que se esté haciendo (una llamada, un vídeo) cada minuto es
+        // insufferable: el primer aviso es inmediato y los siguientes se van espaciando.
         val now = SystemClock.elapsedRealtime()
-        if (broken && now - lastNag > NAG_MS) {
+        if (now - lastNag > NAG_STEPS_MS[minOf(nags, NAG_STEPS_MS.lastIndex)]) {
             lastNag = now
+            nags++
             Watchdog.nag(this)
         }
     }
@@ -118,6 +127,19 @@ class GuardService : AccessibilityService() {
         // contenido sin parar mientras analizan o limpian. Se miran sólo al abrir una pantalla
         // nueva, nunca durante el trabajo: si no, se las frena justo cuando más lo necesitan.
         if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+
+        // Cada comprobación recorre la ventana de otra app nodo a nodo, y cada nodo es una
+        // consulta a esa app. En Ajustes lo peligroso aparece al abrir una pantalla; después,
+        // sólo hay desplazamientos, que no hace falta mirar. Los navegadores sí cambian de
+        // dirección sin abrir ventana nueva, y para ellos la comprobación es barata (una consulta).
+        val now = SystemClock.elapsedRealtime()
+        if (pkg !in BROWSERS) {
+            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+                surfaceOpenedAt = now
+            } else if (now - surfaceOpenedAt > SCAN_WINDOW_MS) {
+                return
+            }
+        }
 
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             handler.removeCallbacks(deferred)
@@ -429,10 +451,11 @@ class GuardService : AccessibilityService() {
         const val EVENTS_WATCHING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         val NEUTRAL_HINTS = listOf("inputmethod", "keyboard", "swiftkey", "com.baidu.input", "honeyboard")
-        const val NAG_MS = 60_000L
+        val NAG_STEPS_MS = longArrayOf(60_000L, 180_000L, 600_000L, 1_800_000L)
         const val TOAST_MS = 3_000L
-        const val MAX_NODES = 400
+        const val MAX_NODES = 250
         const val SETTLE_MS = 500L
+        const val SCAN_WINDOW_MS = 4_000L
         const val RETRY_ID_MS = 60_000L
 
         /** Cómo se llama la app en pantalla, y su paquete (algunas capas del sistema lo muestran). */
@@ -460,9 +483,9 @@ class GuardService : AccessibilityService() {
             "fournisseur de dns privé", "dns-anbieters",
         )
 
-        /** Ajustes, instalador, permisos, VPN y tienda: aquí nombrar a la app ya basta para cerrar. */
+        /** Ajustes, instalador, permisos y VPN: aquí nombrar a la app ya basta para cerrar. */
         val SYSTEM_SURFACES = listOf(
-            "settings", "packageinstaller", "permissioncontroller", "vpndialogs", "vending",
+            "settings", "packageinstaller", "permissioncontroller", "vpndialogs",
         )
 
         /** Seguridad y optimización de cada fabricante: sólo se cierra su ficha de desinstalar. */
