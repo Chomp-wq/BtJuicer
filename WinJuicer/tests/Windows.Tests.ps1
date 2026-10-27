@@ -165,6 +165,22 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         }
     }
 
+    It 'activa el mantenimiento de juegos: copia protegida, tarea, y la copia funciona' {
+        Register-JuicerUpkeep
+        try {
+            Test-JuicerUpkeep | Should -BeTrue
+            $copy = Join-Path (Get-JuicerInstallDir) 'WinJuicer.ps1'
+            Test-Path -LiteralPath $copy | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path (Get-JuicerInstallDir) 'src\Upkeep.ps1') | Should -BeTrue
+            & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $copy -Mantener | Out-Null
+            $LASTEXITCODE | Should -Be 0
+        } finally {
+            Unregister-JuicerUpkeep
+        }
+        Test-JuicerUpkeep | Should -BeFalse
+        Test-Path -LiteralPath (Get-JuicerInstallDir) | Should -BeFalse
+    }
+
     It 'mide arranque, procesos, servicios, memoria y espacio' {
         $m = Get-JuicerMetrics
         $m.Processes | Should -BeGreaterThan 10

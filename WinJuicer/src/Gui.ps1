@@ -313,6 +313,7 @@ $script:GuiXaml = @'
               <Button x:Name="BtnGamesAdd" Content="Añadir otro juego (.exe)…"/>
               <Button x:Name="BtnGamesRefresh" Content="Volver a buscar"/>
             </WrapPanel>
+            <CheckBox x:Name="ChkUpkeep" Content="Mantenerlos optimizados solo: al iniciar sesión, optimizar los juegos nuevos y recalcular los límites si cambia el monitor" ToolTip="Copia Win Juicer a Program Files (sólo administradores pueden cambiarlo) y crea una tarea de inicio de sesión. Desmárcalo para quitar las dos cosas." IsEnabled="False"/>
             <StackPanel x:Name="GamesPanel" Margin="0,4,0,0"/>
             <StackPanel x:Name="GameTipsPanel" Margin="0,6,0,0"/>
             <TextBlock Text="Limitador de FPS" Style="{StaticResource Head}"/>
@@ -581,7 +582,11 @@ $script:GuiWork = @{
         $Sync.Status = 'Leyendo el monitor y los límites de FPS…'
         $lim = Get-JuicerGuiLimiter
         $Sync.Status = 'Buscando tus juegos…'
-        @{ Libraries = $libs; Limiter = $lim; Games = @(Get-JuicerGuiGameList) }
+        @{ Libraries = $libs; Limiter = $lim; Games = @(Get-JuicerGuiGameList); Upkeep = (Test-JuicerUpkeep) }
+    }
+    Upkeep     = {
+        if ($A.On) { $Sync.Status = 'Copiando Win Juicer a Program Files y creando la tarea…'; Register-JuicerUpkeep } else { Unregister-JuicerUpkeep }
+        @{ Upkeep = (Test-JuicerUpkeep) }
     }
     GameTips   = {
         @{ Tips = @(Get-JuicerGameTipsHere $A.Game) }
@@ -1124,7 +1129,7 @@ function Start-JuicerGuiFineTune {
 }
 
 function Start-JuicerGuiGames {
-    Start-JuicerGuiTask 'Buscando tus juegos…' 'Games' @{} { param($r) Show-JuicerGuiGames $r.Libraries; Show-JuicerGuiLimiter $r.Limiter; Show-JuicerGuiGameList $r.Games } -First
+    Start-JuicerGuiTask 'Buscando tus juegos…' 'Games' @{} { param($r) Show-JuicerGuiGames $r.Libraries; Show-JuicerGuiLimiter $r.Limiter; Show-JuicerGuiGameList $r.Games; Set-JuicerGuiUpkeep $r.Upkeep } -First
 }
 
 # The detected games with what each has, plus measured games that are in no
@@ -1186,6 +1191,13 @@ function Start-JuicerGuiGameTips {
         $p.BringIntoView()
         Set-JuicerGuiStatus 'Consejos debajo de la lista de juegos.'
     } -First
+}
+
+# Showing the state is not the user changing it.
+function Set-JuicerGuiUpkeep {
+    param([bool]$On)
+    $script:Gui.SettingUpkeep = $true
+    try { $script:Gui.C.ChkUpkeep.IsChecked = $On; $script:Gui.C.ChkUpkeep.IsEnabled = $true } finally { $script:Gui.SettingUpkeep = $false }
 }
 
 function Get-JuicerGuiCheckedGames {
@@ -1520,6 +1532,15 @@ function Register-JuicerGuiHandlers {
             })
     }
     $c.SearchBox.Add_TextChanged({ Set-JuicerGuiSearch })
+    $c.ChkUpkeep.Add_Click({
+            if ($script:Gui.SettingUpkeep) { return }
+            $on = [bool]$script:Gui.C.ChkUpkeep.IsChecked
+            Start-JuicerGuiTask $(if ($on) { 'Activando el mantenimiento de juegos…' } else { 'Quitando el mantenimiento de juegos…' }) 'Upkeep' @{ On = $on } {
+                param($r)
+                Set-JuicerGuiUpkeep ([bool]$r.Upkeep)
+                Set-JuicerGuiStatus $(if ($r.Upkeep) { 'Activado: los juegos que instales se optimizarán solos al iniciar sesión.' } else { 'Mantenimiento de juegos quitado.' })
+            }
+        })
     $c.MonitorMode.Add_SelectionChanged({
             if ($script:Gui.SettingMode) { return }
             $item = $script:Gui.C.MonitorMode.SelectedItem

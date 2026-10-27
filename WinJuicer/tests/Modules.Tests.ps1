@@ -905,3 +905,44 @@ Describe 'Consejos por juego' {
         Find-JuicerGameTip 'notepad.exe' | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Mantener los juegos optimizados' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        $M.Backend.State.FpsBackend = 'nvidia'
+        Remove-Item -LiteralPath (Get-JuicerUpkeepPath) -ErrorAction SilentlyContinue
+        $script:Mon = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true; MonitorId = '\\?\DISPLAY#AUS27B1#x#{y}'; Monitor = 'VG27AQ' }; Info = @{ Name = 'VG27AQ' }; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' }; Mode = 'Automatico' }
+        Mock -ModuleName WinJuicer Get-JuicerPrimaryMonitor { $script:Mon }
+        Mock -ModuleName WinJuicer Get-JuicerGames {
+            @((New-JuicerGame 'Steam' '1' 'Viejo' 'C:\J\Viejo' 'C:\J\Viejo\viejo.exe'), (New-JuicerGame 'Steam' '2' 'Nuevo' 'C:\J\Nuevo' 'C:\J\Nuevo\nuevo.exe')) |
+                ForEach-Object { $_.ExeName = (Split-Path -Leaf $_.Exe).ToLowerInvariant(); $_ }
+        }
+    }
+
+    It 'sabe qué es nuevo y cuándo recalcular' {
+        $g = @(@{ Id = 'a' }, @{ Id = 'b' })
+        @((Get-JuicerUpkeepPlan $g @('a') 'x' 'x' $true).New).Count | Should -Be 1
+        (Get-JuicerUpkeepPlan $g @('a', 'b') '165|VRR|m' '144|VRR|m' $true).Recalc | Should -BeTrue
+        (Get-JuicerUpkeepPlan $g @('a', 'b') '165|VRR|m' '144|VRR|m' $false).Recalc | Should -BeFalse
+        (Get-JuicerUpkeepPlan $g @('a', 'b') '165|VRR|m' '' $true).Recalc | Should -BeFalse
+        Get-JuicerLimitSignature $Mon | Should -Be '165|VRR|AUS27B1|VG27AQ'
+    }
+
+    It 'optimiza sólo los juegos nuevos y sigue al monitor' {
+        Save-JuicerUpkeepState @{ Seen = @('steam:1'); Signature = (Get-JuicerLimitSignature $Mon) }
+        @(Invoke-JuicerUpkeep -Quiet | Where-Object { $_.Outcome -eq 'Aplicado' }).Count | Should -BeGreaterThan 0
+        $M.Backend.State.FpsLimits['nuevo.exe'] | Should -Be 157
+        $M.Backend.State.FpsLimits.ContainsKey('viejo.exe') | Should -BeFalse
+        # Nothing new and the same monitor: nothing to do.
+        @(Invoke-JuicerUpkeep -Quiet).Count | Should -Be 0
+        # The monitor goes to 240 Hz: the limit follows.
+        $script:Mon.Display.Hz = 240
+        [void](Invoke-JuicerUpkeep -Quiet)
+        $M.Backend.State.FpsLimits['nuevo.exe'] | Should -Be 224
+        (Read-JuicerUpkeepState).Signature | Should -BeLike '240|*'
+    }
+
+    It 'desde la línea de órdenes' {
+        @(Start-Juicer -Mantener -Si 6>$null)[-1] | Should -Be 0
+    }
+}

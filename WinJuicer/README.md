@@ -112,6 +112,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
 .\WinJuicer.ps1 -Juegos                                 # los juegos instalados y lo que tiene cada uno
 .\WinJuicer.ps1 -OptimizarJuegos                        # límite de FPS para tu monitor (y GPU dedicada) a todos
+.\WinJuicer.ps1 -MantenerJuegos Activar                 # optimizar solos los juegos nuevos al iniciar sesión
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # límite recomendado, aplicado solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o el tuyo
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
@@ -329,6 +330,16 @@ Juicer no puede cambiar desde fuera, para tu gráfica, tu monitor y cómo lo usa
   algunos, como que Elden Ring no pasa de 60 FPS. A los demás les da lo general.
 
 Los juegos instalados desde la última vez salen como **nuevos**, ya marcados.
+
+**Mantenerlos optimizados solo** (casilla en la pestaña, o
+`-MantenerJuegos Activar`): al iniciar sesión, sin abrir Win Juicer, optimiza
+los juegos que hayas instalado desde la última vez y recalcula los límites si
+ha cambiado el monitor, sus Hz o cómo lo usas, y te avisa con una
+notificación. Escribir los perfiles del driver de NVIDIA requiere permisos de
+administrador. Por eso Win Juicer se copia a `Program Files`, donde sólo un
+administrador puede cambiarlo, y la tarea ejecuta esa copia, que se actualiza
+cada vez que abres una versión nueva. Al desmarcarlo se quitan la tarea y la
+copia.
 Desde la consola, opción 0 del menú Juegos; desde la línea de órdenes,
 `-Juegos` para listarlos y `-OptimizarJuegos` para optimizarlos todos.
 
@@ -703,6 +714,7 @@ WinJuicer/
   src/Config.ps1          exportar e importar la configuración
   src/Measure.ps1         antes y después: medir y comparar
   src/Library.ps1         los juegos instalados y su .exe, y configurarlos en un paso
+  src/Upkeep.ps1          mantener los juegos optimizados al iniciar sesión
   src/GameTips.ps1        qué poner dentro de cada juego según tu gráfica y tu monitor
   src/Frames.ps1          FPS y frametimes con PresentMon
   src/Monitor.ps1         el monitor: EDID, FreeSync, VRR, HDR y consejos

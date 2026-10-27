@@ -50,6 +50,16 @@
     A todos esos juegos, el límite de FPS recomendado para tu monitor (o -Fps)
     y, si hay dos gráficas, la dedicada.
 
+.PARAMETER Mantener
+    Optimiza los juegos instalados desde la última vez y recalcula los límites
+    de FPS si ha cambiado el monitor o cómo lo usas. Es lo que hace la tarea de
+    inicio de sesión de -MantenerJuegos.
+
+.PARAMETER MantenerJuegos
+    Activar: copia Win Juicer a Program Files (sólo administradores pueden
+    cambiarlo) y crea una tarea que hace -Mantener al iniciar sesión.
+    Desactivar: quita la tarea y la copia.
+
 .PARAMETER LimitarFps
     Juegos (.exe, separados por comas) a los que poner un límite de FPS que se
     aplica solo cada vez que se abren: con NVIDIA, en el driver; si no, con
@@ -141,6 +151,8 @@ param(
     [string[]]$LimitarFps = @(),
     [switch]$Juegos,
     [switch]$OptimizarJuegos,
+    [switch]$Mantener,
+    [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
     [int]$Fps,
     [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
     [switch]$Lista,

@@ -1159,6 +1159,8 @@ function Start-Juicer {
         [string[]]$LimitarFps = @(),
         [switch]$Juegos,
         [switch]$OptimizarJuegos,
+        [switch]$Mantener,
+        [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
         [int]$Fps,
         [string]$ModoMonitor,
         [switch]$Lista,
@@ -1185,9 +1187,11 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
+    # The protected copy the sign-in task runs follows this version.
+    if ((Test-JuicerWindows) -and -not $Mantener) { Update-JuicerCopy }
     if (-not $cli) {
         $script:Screen = $true
         $script:Interactive = $true
@@ -1229,6 +1233,12 @@ function Start-Juicer {
         }
         if ($LimitarFps.Count -eq 0) { return 0 }
     }
+    if ($Mantener) {
+        $r = @(Invoke-JuicerUpkeep)
+        return $(if (@($r | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
+    }
+    if ($MantenerJuegos -eq 'Activar') { Register-JuicerUpkeep; Write-Host '  Activado: al iniciar sesión, los juegos nuevos se optimizan solos y los límites siguen a tu monitor.'; return 0 }
+    if ($MantenerJuegos -eq 'Desactivar') { Unregister-JuicerUpkeep; Write-Host '  Desactivado.'; return 0 }
     if ($Juegos -or $OptimizarJuegos) {
         $games = @(Get-JuicerGameStatus @(Get-JuicerGames))
         if ($OptimizarJuegos) {
