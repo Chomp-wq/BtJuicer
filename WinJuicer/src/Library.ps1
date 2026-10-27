@@ -209,7 +209,15 @@ function Get-JuicerGames {
     foreach ($g in $state.Custom) { [void]$found.Add($g) }
     $seen = @{}
     $out = @()
-    foreach ($g in ($found | Sort-Object { $_.Name })) {
+    # By name; for the same game in two launchers, the one already known (so
+    # its id, and the .exe chosen for it, stay the same) and then always the
+    # same one: Sort-Object is not stable on every PowerShell.
+    $order = @(
+        @{ Expression = { $_.Name } }
+        @{ Expression = { if ($state.Known -contains $_.Id -or $state.Exe.ContainsKey($_.Id)) { 0 } else { 1 } } }
+        @{ Expression = { $_.Id } }
+    )
+    foreach ($g in ($found | Sort-Object -Property $order)) {
         if ($seen.ContainsKey($g.Id)) { continue }
         $chosen = [string]$state.Exe[$g.Id]
         if ($chosen -and (Test-JuicerGameFile $chosen)) { $g.Exe = $chosen }

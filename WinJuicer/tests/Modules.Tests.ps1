@@ -813,6 +813,10 @@ Describe 'Tus juegos' {
         $g = @(Get-JuicerGames -Collectors @($two) -FindExe $find)
         $g.Count | Should -Be 2
         @($g | Where-Object { $_.New })[0].Name | Should -Be 'Otro juego'
+        # The game already known keeps its id, whichever launcher lists it first.
+        @($g | Where-Object { $_.Name -eq 'Cyberpunk 2077' })[0].Id | Should -Be 'steam:1091500'
+        $rev = { @((New-JuicerGame 'Epic Games' 'cp' 'Cyberpunk 2077' $d (Join-Path $d 'Cyberpunk2077.exe')), (New-JuicerGame 'Steam' '1091500' 'Cyberpunk 2077' $d)) }.GetNewClosure()
+        @(Get-JuicerGames -Collectors @($rev) -FindExe $find -KeepNew | Where-Object { $_.Name -eq 'Cyberpunk 2077' })[0].Id | Should -Be 'steam:1091500'
         # Picking another .exe sticks.
         Set-JuicerGameExe 'steam:1091500' (Join-Path $d 'Other.exe')
         @(Get-JuicerGames -Collectors @($one) -FindExe $find | Where-Object { $_.Id -eq 'steam:1091500' })[0].ExeName | Should -Be 'other.exe'
