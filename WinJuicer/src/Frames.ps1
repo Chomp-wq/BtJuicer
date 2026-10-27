@@ -95,6 +95,14 @@ function Get-JuicerPercentile {
 # percentile frame time: the slowest 1 % and 0.1 % of frames, which is what
 # a stutter feels like. A stutter is a frame that takes twice the median and
 # at least 8 ms more.
+#
+# And how even the pace is, which is what the frame pacer is judged by:
+# Steady, the share of frames within 4 % (at least 0.3 ms) of the median;
+# JitterMs, how much one frame time differs from the next, on average;
+# WorkMs95, the 95th percentile of the time the processor or the graphics
+# card was actually busy on a frame (the rest of the frame time is the cap
+# waiting), so under a cap it tells how much faster the game could go; and
+# AnimErrorMs, how far the motion shown strays from the time it took.
 function Measure-JuicerFrames {
     param([object[]]$Rows)
     $rows = @($Rows)
@@ -104,6 +112,10 @@ function Measure-JuicerFrames {
     if (-not $ftCol) { return $null }
     $gpuCol = Get-JuicerFrameColumn $cols 'GPUBusy', 'MsGPUBusy'
     $latCol = Get-JuicerFrameColumn $cols 'DisplayLatency', 'MsDisplayLatency', 'MsUntilDisplayed'
+    $cpuCol = Get-JuicerFrameColumn $cols 'CPUBusy', 'MsCPUBusy'
+    $animCol = Get-JuicerFrameColumn $cols 'AnimationError', 'MsAnimationError'
+    $work = New-Object System.Collections.Generic.List[double]
+    $anim = New-Object System.Collections.Generic.List[double]
 
     $ft = New-Object System.Collections.Generic.List[double]
     $gpuBound = 0; $gpuKnown = 0; $tearing = 0; $vsync = 0; $generated = 0
@@ -113,10 +125,16 @@ function Measure-JuicerFrames {
         $t = ConvertTo-JuicerNumber $r.$ftCol
         if ($null -eq $t -or $t -le 0) { continue }
         $ft.Add($t)
+        $g = $null
         if ($gpuCol) {
             $g = ConvertTo-JuicerNumber $r.$gpuCol
             if ($null -ne $g) { $gpuKnown++; if ($g -ge 0.85 * $t) { $gpuBound++ } }
         }
+        if ($cpuCol -and $null -ne $g) {
+            $c = ConvertTo-JuicerNumber $r.$cpuCol
+            if ($null -ne $c) { $work.Add([Math]::Max($c, $g)) }
+        }
+        if ($animCol) { $a = ConvertTo-JuicerNumber $r.$animCol; if ($null -ne $a) { $anim.Add([Math]::Abs($a)) } }
         if ($latCol) { $l = ConvertTo-JuicerNumber $r.$latCol; if ($null -ne $l -and $l -gt 0) { $latency.Add($l) } }
         if ([string]$r.AllowsTearing -eq '1') { $tearing++ }
         if ((ConvertTo-JuicerNumber $r.SyncInterval) -ge 1) { $vsync++ }
@@ -132,13 +150,24 @@ function Measure-JuicerFrames {
     $stutters = 0
     foreach ($t in $ft) { if ($t -ge 2 * $median -and $t -ge $median + 8) { $stutters++ } }
     $p90 = Get-JuicerPercentile $sorted 0.9
+    $p95 = Get-JuicerPercentile $sorted 0.95
+    $tol = [Math]::Max(0.3, 0.04 * $median)
+    $steady = 0; $jitter = 0.0
+    for ($i = 0; $i -lt $n; $i++) {
+        if ([Math]::Abs($ft[$i] - $median) -le $tol) { $steady++ }
+        if ($i -gt 0) { $jitter += [Math]::Abs($ft[$i] - $ft[$i - 1]) }
+    }
+    $workP95 = if ($work.Count -ge 20) { Get-JuicerPercentile ([double[]]($work.ToArray() | Sort-Object)) 0.95 } else { $null }
     $p99 = Get-JuicerPercentile $sorted 0.99
     $p999 = Get-JuicerPercentile $sorted 0.999
     $mode = if ($modes.Count -gt 0) { @($modes.GetEnumerator() | Sort-Object Value -Descending)[0].Key } else { '' }
     @{
         Application = [string]$rows[0].Application; Frames = $n; Seconds = [Math]::Round($total / 1000, 1)
         AvgFps = [Math]::Round(1000 * $n / $total, 1); Low1 = [Math]::Round(1000 / $p99, 1); Low01 = [Math]::Round(1000 / $p999, 1); Fps90 = [Math]::Round(1000 / $p90, 1)
-        MedianMs = [Math]::Round($median, 2); P99Ms = [Math]::Round($p99, 2); Stutters = $stutters
+        MedianMs = [Math]::Round($median, 2); P95Ms = [Math]::Round($p95, 2); P99Ms = [Math]::Round($p99, 2); Stutters = $stutters
+        Fps95 = [Math]::Round(1000 / $p95, 1); Steady = [Math]::Round(100 * $steady / $n); JitterMs = [Math]::Round($jitter / ($n - 1), 2)
+        WorkMs95 = $(if ($null -ne $workP95) { [Math]::Round($workP95, 2) } else { $null })
+        AnimErrorMs = $(if ($anim.Count -gt 0) { $s = 0.0; foreach ($a in $anim) { $s += $a }; [Math]::Round($s / $anim.Count, 2) } else { $null })
         GpuBound = $(if ($gpuKnown -gt 0) { [Math]::Round(100 * $gpuBound / $gpuKnown) } else { $null })
         Latency = $(if ($latency.Count -gt 0) { $s = 0.0; foreach ($l in $latency) { $s += $l }; [Math]::Round($s / $latency.Count, 1) } else { $null })
         Tearing = [Math]::Round(100 * $tearing / $n); VSync = [Math]::Round(100 * $vsync / $n); Generated = [Math]::Round(100 * $generated / $n)
@@ -361,8 +390,12 @@ function Invoke-JuicerFrameCapture {
             $cap = Get-JuicerRecommendedFps $result.Application
             if ($cap) {
                 $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq ([string]$result.Application).ToLowerInvariant() })
-                $state = if ($now.Count -gt 0 -and $now[0].Fps) { " Ahora está limitado a $($now[0].Fps)." } else { ' Añádelo en Juegos > Limitador de FPS y se aplicará solo cada vez que lo abras.' }
-                New-JuicerFinding "Juego: $($result.Application)" 'Info' "Límite recomendado para este juego: $($cap.Fps) FPS" ($cap.Why + $state)
+                if ($now.Count -gt 0 -and $now[0].Fps) {
+                    # Under the frame pacer: how well it holds the pace.
+                    Get-JuicerPacerFindings $result ([int]$now[0].Fps) ([double]$now[0].Exact)
+                } else {
+                    New-JuicerFinding "Juego: $($result.Application)" 'Info' "Ritmo recomendado para este juego: $($cap.Fps) FPS" ($cap.Why + ' Añádelo en Juegos > Frame pacer y se aplicará solo cada vez que lo abras.')
+                }
             }
         } catch {
             Write-JuicerLog "Sin límite recomendado: $_"

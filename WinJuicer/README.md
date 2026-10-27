@@ -66,7 +66,7 @@ para copiar la orden de una línea.
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
-| **Juegos** | La lista de tus juegos, que encuentra solo, para optimizarlos en un clic; medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), limitador de FPS por juego, GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
+| **Juegos** | La lista de tus juegos, que encuentra solo, para optimizarlos en un clic; medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), frame pacer por juego (con calibración), GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
 | **No hacemos** | Los «trucos» que circulan, y por qué no. |
@@ -111,13 +111,15 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -MedirJuego 60                          # FPS y frametimes de lo que juegues (empieza en 10 s)
 .\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
 .\WinJuicer.ps1 -Juegos                                 # los juegos instalados y lo que tiene cada uno
-.\WinJuicer.ps1 -OptimizarJuegos                        # límite de FPS para tu monitor (y GPU dedicada) a todos
+.\WinJuicer.ps1 -OptimizarJuegos                        # frame pacer para tu monitor (y GPU dedicada) a todos
 .\WinJuicer.ps1 -MantenerJuegos Activar                 # optimizar solos los juegos nuevos al iniciar sesión
-.\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # límite recomendado, aplicado solo cada vez que los abras
-.\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o el tuyo
+.\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # frame pacer al ritmo recomendado, solo cada vez que los abras
+.\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o al tuyo
+.\WinJuicer.ps1 -CalibrarJuego cs2.exe                  # lo mide con su ritmo y lo ajusta a lo que sostiene
+.\WinJuicer.ps1 -MotorPacer rtss                        # RivaTuner en vez del driver (admite décimas)
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
 .\WinJuicer.ps1 -OlvidarAjuste
-.\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el límite va exacto a los Hz
+.\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el ritmo va exacto a los Hz
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
@@ -306,12 +308,12 @@ tienda o, si no lo dice, el `*-Win64-Shipping.exe` de los juegos Unreal o el
 ejecutable principal con su nombre, nunca un desinstalador, un lanzador o un
 informe de errores. Lo recuerda, y con «Cambiar .exe…» eliges otro.
 
-Cada fila dice lo que tiene el juego (límite de FPS con su frametime, GPU
+Cada fila dice lo que tiene el juego (frame pacer con su frametime, GPU
 dedicada, prioridad alta). Para configurarlos, márcalos y pulsa:
-- **Optimizar los marcados**: el límite de FPS recomendado para tu monitor y su
-  modo, con la receta de baja latencia en NVIDIA, y la GPU dedicada si tienes
+- **Optimizar los marcados**: el frame pacer al ritmo recomendado para tu
+  monitor y su modo, con la receta de baja latencia en NVIDIA, y la GPU dedicada si tienes
   dos gráficas. Se aplica solo cada vez que abras el juego.
-- **Sólo límite de FPS** (el recomendado o el que escribas), **GPU dedicada**,
+- **Sólo frame pacer** (el ritmo recomendado o el que escribas), **GPU dedicada**,
   **Prioridad alta** o **Quitar lo de Win Juicer**.
 
 **Consejos**, en cada fila: lo que hay que poner dentro del juego, que Win
@@ -333,7 +335,7 @@ Los juegos instalados desde la última vez salen como **nuevos**, ya marcados.
 
 **Mantenerlos optimizados solo** (casilla en la pestaña, o
 `-MantenerJuegos Activar`): al iniciar sesión, sin abrir Win Juicer, optimiza
-los juegos que hayas instalado desde la última vez y recalcula los límites si
+los juegos que hayas instalado desde la última vez y recalcula el frame pacer si
 ha cambiado el monitor, sus Hz o cómo lo usas, y te avisa con una
 notificación. Escribir los perfiles del driver de NVIDIA requiere permisos de
 administrador. Por eso Win Juicer se copia a `Program Files`, donde sólo un
@@ -360,7 +362,7 @@ segundos. Al acabar dice:
 - **Qué limita**: si la gráfica va al máximo (para más FPS, calidad o
   DLSS/FSR/XeSS: ningún ajuste de Windows sube eso) o si **el procesador es el
   límite** y la gráfica espera (bajar gráficos no sirve; sí cerrar lo que gaste
-  CPU, la RAM con XMP, el plan de energía y un límite de FPS).
+  CPU, la RAM con XMP, el plan de energía y el frame pacer).
 - **Qué gastaba CPU en segundo plano** mientras jugabas: navegador, lanzadores,
   Defender o Windows Update trabajando justo entonces.
 - **Cómo llega la imagen a la pantalla**: directa (Independent Flip), compuesta
@@ -370,12 +372,14 @@ segundos. Al acabar dice:
   de fotogramas y, con NVIDIA, la temperatura y si la gráfica bajó de frecuencia.
 - **Comparado con la medida anterior del mismo juego**: así ves si el último
   cambio dio FPS o sólo lo parecía.
-- **El límite de FPS que le conviene a ese juego**, para el limitador.
+- **Si el juego tiene frame pacer, cómo de bien lo cumple** (ver abajo); si
+  no, el ritmo que le conviene.
 
-### Limitador de FPS
+### Frame pacer
 
-Un límite por juego, pensado para frametimes planos **sin sumar latencia**, que
-se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
+Un ritmo de fotogramas por juego, por frametime, pensado para frametimes
+planos **sin sumar latencia**, que se aplica solo cada vez que abres el juego,
+con Win Juicer cerrado:
 
 - **Dónde**: con NVIDIA, en el limitador del propio driver («Velocidad máxima
   de fotogramas»), en el perfil de ese `.exe`, por NVAPI, la API oficial de
@@ -386,7 +390,7 @@ se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
   DyAc o similar encendido, así que lo eliges una vez por monitor en «Cómo usas
   tu monitor» (o con `-ModoMonitor`): Automático, Frecuencia variable,
   Estroboscopio sin VRR, Estroboscopio con VRR (ELMB Sync, Aim Stabilizer
-  Sync) o Frecuencia fija. «Recalcular los límites» los vuelve a poner con el
+  Sync) o Frecuencia fija. «Recalcular los ritmos» los vuelve a poner con el
   modo nuevo.
 - **Cuánto**, como objetivo de frametime:
   - con frecuencia variable (con o sin estroboscopio), **Hz − Hz²/3600**, la
@@ -417,6 +421,36 @@ se aplica solo cada vez que abres el juego, con Win Juicer cerrado:
   bajarle la frecuencia en escenas ligeras, y el siguiente fotograma pesado
   llegaría tarde. El modo «Ultra» no tiene un identificador público y no se
   toca.
+- **Cómo de bien lo cumple.** Al medir un juego con frame pacer, la medida dice
+  qué parte de los fotogramas cae en su sitio (a ±4 % del objetivo), cuánto
+  cambia el frametime de un fotograma al siguiente, el error de animación de
+  PresentMon (lo que el movimiento se desvía del tiempo real) y cuánto
+  trabajaron de verdad el procesador y la gráfica en cada fotograma, que es el
+  margen que queda. Si va por encima del objetivo, avisa de que el frame pacer
+  no está actuando (RivaTuner cerrado, otro `.exe`).
+- **Calibrar** (un juego de la lista, o `-CalibrarJuego`): lo mide 60 segundos
+  con su ritmo y lo ajusta a lo que sostiene de verdad. Si el 5 % más lento de
+  los fotogramas no llega, lo baja a ese ritmo, sin salir nunca del rango VRR.
+  Si sobra trabajo de procesador y gráfica para bastante más, lo sube (hasta
+  el máximo de tu monitor, dejando un 15 % de margen para los picos). Con
+  estroboscopio sin VRR no baja nunca: te dice a qué frecuencia bajar el
+  monitor. Lo recuerda por juego mientras el monitor, sus Hz y cómo lo usas
+  sigan iguales; «Olvidar calibraciones» vuelve al ritmo recomendado.
+- **Los Hz de verdad.** Windows dice 180 Hz, pero la pantalla suele ir a
+  179,96. Win Juicer lee la fracción exacta (`QueryDisplayConfig`). Con
+  estroboscopio y sincronización vertical eso importa: un ritmo de 180 es un
+  pelo más rápido que la pantalla, la cola de la sincronización vertical se
+  llena y vuelve un fotograma de latencia. RivaTuner admite décimas
+  (`LimitDenominator`), así que con él el ritmo va 0,01 por debajo del
+  refresco real («low-lag VSync»). El driver de NVIDIA sólo admite enteros, y
+  Win Juicer te lo avisa.
+- **Motor**: Automático (el driver si hay NVIDIA, si no RivaTuner), Driver de
+  NVIDIA o RivaTuner (o `-MotorPacer`). Al cambiarlo, cada juego pasa al nuevo
+  motor y se quita del anterior, y la receta de baja latencia sigue en su
+  perfil de NVIDIA.
+- **Dos limitadores a la vez**: avisa si RivaTuner tiene un límite en su perfil
+  Global o en el de un juego que ya tiene el ritmo del driver, si el panel de
+  NVIDIA tiene un límite global, o si el motor es RivaTuner y no está abierto.
 - Con RivaTuner, en su Setup: «Front edge sync» da la menor latencia y «Back
   edge sync» los frametimes más planos.
 - Se deshace como todo lo demás, devolviendo el límite que tuviera el juego.
@@ -477,7 +511,7 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
   sólo si el juego no baja nunca de los Hz, según tus medidas. Esto no viaja en
   el EDID: Win Juicer no puede saber si tu modelo la tiene ni si está
   encendida, por eso le dices cómo usas el monitor. Si usas el estroboscopio,
-  los consejos cambian: el límite exacto a los Hz, que suele funcionar sólo a
+  los consejos cambian: el ritmo exacto a los Hz, que suele funcionar sólo a
   ciertas frecuencias, el overdrive que va con él, y qué juegos de tus medidas
   no llegan a los Hz y a qué frecuencia bajar para ellos.
 - El overdrive en su nivel intermedio, y si su HDR merece la pena o es de
@@ -718,7 +752,7 @@ WinJuicer/
   src/GameTips.ps1        qué poner dentro de cada juego según tu gráfica y tu monitor
   src/Frames.ps1          FPS y frametimes con PresentMon
   src/Monitor.ps1         el monitor: EDID, FreeSync, VRR, HDR y consejos
-  src/Limiter.ps1         limitador de FPS por juego
+  src/Limiter.ps1         frame pacer por juego: ritmo, calibración, conflictos
   src/FineTune.ps1        undervolt de CPU y overclock de GPU: recetas, registro y vigilancia
   src/Version.ps1         aviso de versión nueva
   src/Startup.ps1         programas de inicio

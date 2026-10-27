@@ -47,12 +47,12 @@
     Ubisoft, Battle.net, Riot…) con lo que tiene cada uno.
 
 .PARAMETER OptimizarJuegos
-    A todos esos juegos, el límite de FPS recomendado para tu monitor (o -Fps)
-    y, si hay dos gráficas, la dedicada.
+    A todos esos juegos, el frame pacer al ritmo recomendado para tu monitor
+    (o -Fps) y, si hay dos gráficas, la dedicada.
 
 .PARAMETER Mantener
-    Optimiza los juegos instalados desde la última vez y recalcula los límites
-    de FPS si ha cambiado el monitor o cómo lo usas. Es lo que hace la tarea de
+    Optimiza los juegos instalados desde la última vez y recalcula el frame
+    pacer si ha cambiado el monitor o cómo lo usas. Es lo que hace la tarea de
     inicio de sesión de -MantenerJuegos.
 
 .PARAMETER MantenerJuegos
@@ -61,15 +61,27 @@
     Desactivar: quita la tarea y la copia.
 
 .PARAMETER LimitarFps
-    Juegos (.exe, separados por comas) a los que poner un límite de FPS que se
-    aplica solo cada vez que se abren: con NVIDIA, en el driver; si no, con
-    RivaTuner Statistics Server. Sin -Fps, el recomendado para tu monitor.
+    Juegos (.exe, separados por comas) a los que poner el frame pacer: un
+    ritmo de fotogramas que se aplica solo cada vez que se abren, con NVIDIA
+    en el driver y si no con RivaTuner Statistics Server. Sin -Fps, el
+    recomendado para tu monitor.
+
+.PARAMETER CalibrarJuego
+    Mide ese juego (.exe) con su frame pacer durante 60 segundos (o los de
+    -MedirJuego), empezando a los 10, y ajusta su ritmo a lo que sostiene de
+    verdad: lo baja si no llega, lo sube si le sobra margen.
+
+.PARAMETER MotorPacer
+    Con qué marca el ritmo el frame pacer: Auto (el driver si hay NVIDIA),
+    nvidia o rtss (RivaTuner, que admite décimas: con estrobo, el ritmo va
+    justo por debajo del refresco real). Los juegos que ya lo tienen pasan al
+    nuevo motor.
 
 .PARAMETER Fps
-    Con -LimitarFps, el límite (de 20 a 1000).
+    Con -LimitarFps, el ritmo (de 20 a 1000).
 
 .PARAMETER ModoMonitor
-    Cómo usas tu monitor, que su EDID no dice y decide el límite de FPS:
+    Cómo usas tu monitor, que su EDID no dice y decide el ritmo del frame pacer:
     Automatico, VRR, Estrobo (ELMB, DyAc… sin VRR), EstroboSync (ELMB Sync…)
     o Fijo. Se guarda para ese monitor; con -LimitarFps, se usa ya.
 
@@ -149,6 +161,8 @@ param(
     [int]$MedirJuego,
     [string]$Juego,
     [string[]]$LimitarFps = @(),
+    [string]$CalibrarJuego,
+    [ValidateSet('Auto', 'nvidia', 'rtss')][string]$MotorPacer,
     [switch]$Juegos,
     [switch]$OptimizarJuegos,
     [switch]$Mantener,

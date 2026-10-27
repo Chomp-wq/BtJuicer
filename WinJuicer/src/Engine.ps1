@@ -312,7 +312,8 @@ function Format-JuicerAction {
         'Feature' { return 'Característica de Windows {0}: {1}' -f $Action.Name, $(if ($Action.Enabled) { 'activada' } else { 'desactivada' }) }
         'FpsLimit' {
             $by = @{ nvidia = 'driver de NVIDIA'; rtss = 'RivaTuner' }[[string](& (Get-JuicerBackend).FpsBackend)]
-            return 'Límite de FPS de {0}: {1} ({2:N2} ms por fotograma){3}' -f $Action.Exe, $Action.Fps, (1000 / [Math]::Max(1, $Action.Fps)), $(if ($by) { ", $by" } else { '' })
+            $fps = if ($Action.Exact -gt 0 -and $by -eq 'RivaTuner') { $Action.Exact } else { $Action.Fps }
+            return 'Frame pacer de {0}: {1} FPS ({2:N3} ms por fotograma){3}' -f $Action.Exe, $fps, (1000 / [Math]::Max(1, $fps)), $(if ($by) { ", $by" } else { '' })
         }
         'NvSetting' { return '{0}, perfil de NVIDIA de {1}' -f $Action.Label, $Action.Exe }
     }
@@ -363,6 +364,7 @@ function Test-JuicerAction {
         'FpsLimit' {
             $f = & $b.FpsRead $Action.Exe
             if ($null -eq $f) { return $true }
+            if ($f.Backend -eq 'rtss' -and $Action.Exact -gt 0) { return ([Math]::Abs([double]$f.Exact - [double]$Action.Exact) -lt 0.005) }
             return ([int]$f.Fps -eq [int]$Action.Fps)
         }
         'NvSetting' {
@@ -428,8 +430,8 @@ function Save-JuicerActionState {
         }
         'FpsLimit' {
             $f = & $b.FpsRead $Action.Exe
-            if ($null -eq $f) { throw 'No hay limitador de FPS en este equipo.' }
-            $c.Exe = $Action.Exe; $c.Backend = $f.Backend; $c.Old = $f.Fps; $c.Existed = [bool]$f.Existed
+            if ($null -eq $f) { throw 'No hay con qué aplicar el frame pacer en este equipo.' }
+            $c.Exe = $Action.Exe; $c.Backend = $f.Backend; $c.Old = $f.Fps; $c.OldExact = [double]$f.Exact; $c.Existed = [bool]$f.Existed
         }
         'NvSetting' {
             $f = & $b.NvRead $Action.Exe $Action.Id
@@ -471,7 +473,7 @@ function Invoke-JuicerAction {
         'Appx' { if ($Capture.Exists) { & $b.AppxRemove $Action.Name } }
         'Dns' { & $b.DnsSet $Action.Interface ([string[]]@($Action.V4)) ([string[]]@($Action.V6)) }
         'Feature' { if ($Capture.Exists) { & $b.FeatSet $Action.Name ([bool]$Action.Enabled) } }
-        'FpsLimit' { & $b.FpsWrite $Action.Exe $Action.Fps $Capture.Backend }
+        'FpsLimit' { & $b.FpsWrite $Action.Exe $Action.Fps $Capture.Backend -Exact ([double]$Action.Exact) }
         'NvSetting' { & $b.NvWrite $Action.Exe $Action.Id $Action.Value }
         'Custom' { & $Action.Apply $Capture.State }
     }
@@ -518,7 +520,7 @@ function Restore-JuicerActionState {
             if ($f -and [bool]$f.Enabled -ne [bool]$c.Enabled) { & $b.FeatSet $c.Name ([bool]$c.Enabled) }
         }
         'FpsLimit' {
-            if ($c.Existed) { & $b.FpsWrite $c.Exe $c.Old $c.Backend } else { & $b.FpsWrite $c.Exe $null $c.Backend -Remove }
+            if ($c.Existed) { & $b.FpsWrite $c.Exe $c.Old $c.Backend -Exact ([double]$c.OldExact) } else { & $b.FpsWrite $c.Exe $null $c.Backend -Remove }
         }
         'NvSetting' { & $b.NvWrite $c.Exe $c.SettingId $c.Old }
         'Custom' {
