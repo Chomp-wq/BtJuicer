@@ -150,6 +150,37 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         Test-JuicerTuneWatch | Should -BeFalse
     }
 
+    It 'busca los juegos instalados y el .exe de una carpeta de verdad' {
+        $g = @(Get-JuicerGames)
+        foreach ($x in $g) { Write-Host "    $($x.Launcher): $($x.Name) -> $($x.ExeName)" }
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-juego-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $dir 'Binaries\Win64') -Force | Out-Null
+        [IO.File]::WriteAllBytes((Join-Path $dir 'MiJuego.exe'), [byte[]]::new(1KB))
+        [IO.File]::WriteAllBytes((Join-Path $dir 'unins000.exe'), [byte[]]::new(2MB))
+        [IO.File]::WriteAllBytes((Join-Path $dir 'Binaries\Win64\MiJuego-Win64-Shipping.exe'), [byte[]]::new(4MB))
+        try {
+            Find-JuicerGameExe $dir 'Mi Juego' | Should -Be (Join-Path $dir 'Binaries\Win64\MiJuego-Win64-Shipping.exe')
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force
+        }
+    }
+
+    It 'activa el mantenimiento de juegos: copia protegida, tarea, y la copia funciona' {
+        Register-JuicerUpkeep
+        try {
+            Test-JuicerUpkeep | Should -BeTrue
+            $copy = Join-Path (Get-JuicerInstallDir) 'WinJuicer.ps1'
+            Test-Path -LiteralPath $copy | Should -BeTrue
+            Test-Path -LiteralPath (Join-Path (Get-JuicerInstallDir) 'src\Upkeep.ps1') | Should -BeTrue
+            & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $copy -Mantener | Out-Null
+            $LASTEXITCODE | Should -Be 0
+        } finally {
+            Unregister-JuicerUpkeep
+        }
+        Test-JuicerUpkeep | Should -BeFalse
+        Test-Path -LiteralPath (Get-JuicerInstallDir) | Should -BeFalse
+    }
+
     It 'mide arranque, procesos, servicios, memoria y espacio' {
         $m = Get-JuicerMetrics
         $m.Processes | Should -BeGreaterThan 10

@@ -748,3 +748,201 @@ Describe 'Limitador de FPS' {
         @(Start-Juicer -ModoMonitor 'Estrobo' -Si 6>$null)[-1] | Should -Be $(if (Get-JuicerPrimaryMonitor) { 0 } else { 1 })
     }
 }
+
+Describe 'Tus juegos' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        $M.Backend.State.FpsBackend = 'nvidia'
+        Remove-Item -LiteralPath (Get-JuicerLibraryPath) -ErrorAction SilentlyContinue
+        $script:Dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-games-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $Dir | Out-Null
+        foreach ($f in 'Cyberpunk2077.exe', 'Other.exe', 'EldenRing.exe') { Set-Content -LiteralPath (Join-Path $Dir $f) -Value 'x' }
+    }
+    AfterEach { Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue }
+
+    It 'lee los manifiestos de Steam y la configuración de Xbox' {
+        $a = ConvertFrom-JuicerAcf "`"AppState`"`n{`n`t`"appid`"`t`t`"1091500`"`n`t`"name`"`t`t`"Cyberpunk 2077`"`n`t`"installdir`"`t`t`"Cyberpunk 2077`"`n}"
+        $a.AppId | Should -Be '1091500'
+        $a.Name | Should -Be 'Cyberpunk 2077'
+        $a.InstallDir | Should -Be 'Cyberpunk 2077'
+        ConvertFrom-JuicerAcf 'nada' | Should -BeNullOrEmpty
+        Test-JuicerNotAGame 'Steamworks Common Redistributables' | Should -BeTrue
+        Test-JuicerNotAGame 'Proton 9.0' | Should -BeTrue
+        Test-JuicerNotAGame 'Counter-Strike 2' | Should -BeFalse
+        $x = ConvertFrom-JuicerXboxConfig '<Game configVersion="1"><Executables><Executable Name="Forza.exe" Id="Game"/></Executables><ShellVisuals DefaultDisplayName="Forza Horizon 5"/></Game>'
+        $x.Exe | Should -Be 'Forza.exe'
+        $x.Name | Should -Be 'Forza Horizon 5'
+    }
+
+    It 'elige el .exe que de verdad ejecuta el juego' {
+        $files = @(
+            @{ Path = 'Cyberpunk 2077\unins000.exe'; Size = 3MB }
+            @{ Path = 'REDprelauncher.exe'; Size = 5MB }
+            @{ Path = 'bin\x64\Cyberpunk2077.exe'; Size = 60MB }
+            @{ Path = 'bin\x64\CrashReporter\CrashReporter.exe'; Size = 2MB }
+        )
+        Select-JuicerGameExe $files 'Cyberpunk 2077' | Should -Be 'bin\x64\Cyberpunk2077.exe'
+        $unreal = @(
+            @{ Path = 'VALORANT.exe'; Size = 1MB }
+            @{ Path = 'ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe'; Size = 90MB }
+            @{ Path = 'Engine\Binaries\ThirdParty\CEF3\Win64\UnrealCEFSubProcess.exe'; Size = 1MB }
+        )
+        Select-JuicerGameExe $unreal 'VALORANT' | Should -Be 'ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe'
+        Select-JuicerGameExe @(@{ Path = 'unins000.exe'; Size = 1MB }, @{ Path = 'vc_redist.x64.exe'; Size = 20MB }) 'Juego' | Should -BeNullOrEmpty
+    }
+
+    It 'reconoce juegos de EA, Ubisoft, Battle.net y Riot, y no sus lanzadores' {
+        (Get-JuicerPublisherGame 'Battlefield 2042' 'Electronic Arts' 'C:\EA Games\Battlefield 2042').Launcher | Should -Be 'EA'
+        (Get-JuicerPublisherGame 'VALORANT' 'Riot Games, Inc' 'C:\Riot Games\VALORANT\live').Launcher | Should -Be 'Riot'
+        (Get-JuicerPublisherGame 'Overwatch' 'Blizzard Entertainment' 'C:\Overwatch').Launcher | Should -Be 'Battle.net'
+        Get-JuicerPublisherGame 'EA app' 'Electronic Arts' 'C:\EA app' | Should -BeNullOrEmpty
+        Get-JuicerPublisherGame 'Ubisoft Connect' 'Ubisoft' 'C:\Ubisoft' | Should -BeNullOrEmpty
+        Get-JuicerPublisherGame 'Notepad++' 'Notepad++ Team' 'C:\npp' | Should -BeNullOrEmpty
+    }
+
+    It 'junta los juegos de todas las tiendas, sin repetir, y marca los nuevos' {
+        $d = $Dir
+        $one = { @((New-JuicerGame 'Steam' '1091500' 'Cyberpunk 2077' $d), (New-JuicerGame 'GOG' '1' 'Elden Ring' $d (Join-Path $d 'EldenRing.exe'))) }.GetNewClosure()
+        $find = { param($Folder, $Name) Join-Path $Folder 'Cyberpunk2077.exe' }
+        $g = @(Get-JuicerGames -Collectors @($one) -FindExe $find)
+        $g.Count | Should -Be 2
+        ($g | Where-Object { $_.Name -eq 'Cyberpunk 2077' }).ExeName | Should -Be 'cyberpunk2077.exe'
+        @($g | Where-Object { $_.New }).Count | Should -Be 0 -Because 'la primera vez no hay nada «nuevo»'
+        # The same .exe listed by two launchers is one game.
+        $two = { @((New-JuicerGame 'Steam' '1091500' 'Cyberpunk 2077' $d), (New-JuicerGame 'Epic Games' 'cp' 'Cyberpunk 2077' $d (Join-Path $d 'Cyberpunk2077.exe')), (New-JuicerGame 'Steam' '9' 'Otro juego' $d (Join-Path $d 'Other.exe'))) }.GetNewClosure()
+        $g = @(Get-JuicerGames -Collectors @($two) -FindExe $find)
+        $g.Count | Should -Be 2
+        @($g | Where-Object { $_.New })[0].Name | Should -Be 'Otro juego'
+        # The game already known keeps its id, whichever launcher lists it first.
+        @($g | Where-Object { $_.Name -eq 'Cyberpunk 2077' })[0].Id | Should -Be 'steam:1091500'
+        $rev = { @((New-JuicerGame 'Epic Games' 'cp' 'Cyberpunk 2077' $d (Join-Path $d 'Cyberpunk2077.exe')), (New-JuicerGame 'Steam' '1091500' 'Cyberpunk 2077' $d)) }.GetNewClosure()
+        @(Get-JuicerGames -Collectors @($rev) -FindExe $find -KeepNew | Where-Object { $_.Name -eq 'Cyberpunk 2077' })[0].Id | Should -Be 'steam:1091500'
+        # Picking another .exe sticks.
+        Set-JuicerGameExe 'steam:1091500' (Join-Path $d 'Other.exe')
+        @(Get-JuicerGames -Collectors @($one) -FindExe $find | Where-Object { $_.Id -eq 'steam:1091500' })[0].ExeName | Should -Be 'other.exe'
+        $c = Add-JuicerCustomGame (Join-Path $d 'EldenRing.exe')
+        @(Get-JuicerGames -Collectors @() -FindExe $find | Where-Object { $_.Id -eq $c.Id }).Count | Should -Be 1
+    }
+
+    It 'optimiza los marcados en un paso y lo quita igual' {
+        $d = $Dir
+        $g = @(Get-JuicerGames -Collectors @({ New-JuicerGame 'Steam' '1' 'Cyberpunk 2077' $d (Join-Path $d 'Cyberpunk2077.exe') }.GetNewClosure()))
+        $g.Count | Should -Be 1
+        # Without a screen to size the limit, it says so for that game and goes on.
+        Mock -ModuleName WinJuicer Get-JuicerPrimaryMonitor { $null }
+        $r = @(Invoke-JuicerGameSetup $g 'Recomendado' 0 -GpuCount 2)
+        $r[0].Outcome | Should -Be 'Error'
+        $r[0].Message | Should -BeLike '*pantalla*'
+        Undo-JuicerTweak ('juego:gpu:' + $g[0].Exe.ToLowerInvariant()) | Out-Null
+        $vrr = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' }; Mode = 'Automatico' }
+        $r = @(Invoke-JuicerGameSetup $g 'Recomendado' 0 -GpuCount 2 -Monitor $vrr)
+        @($r | Where-Object { $_.Outcome -eq 'Aplicado' }).Count | Should -Be 2
+        $M.Backend.State.FpsLimits['cyberpunk2077.exe'] | Should -BeGreaterThan 0
+        $s = @(Get-JuicerGameStatus $g)[0]
+        $s.Gpu | Should -BeTrue
+        (Format-JuicerGameStatus $s) | Should -BeLike '* FPS (*ms) · GPU dedicada'
+        @(Invoke-JuicerGameSetup $g 'Quitar').Count | Should -Be 2
+        $M.Backend.State.FpsLimits.ContainsKey('cyberpunk2077.exe') | Should -BeFalse
+        Format-JuicerGameStatus @(Get-JuicerGameStatus $g)[0] | Should -Be 'sin configurar'
+        # With one graphics card there is no GPU to choose.
+        @(Invoke-JuicerGameSetup $g 'Recomendado' 120 -GpuCount 1).Count | Should -Be 1
+        $M.Backend.State.FpsLimits['cyberpunk2077.exe'] | Should -Be 120
+    }
+
+    It 'desde la línea de órdenes' {
+        @(Start-Juicer -Juegos 6>$null)[-1] | Should -Be 0
+        @(Start-Juicer -OptimizarJuegos -Si 6>$null)[-1] | Should -Be 0
+    }
+}
+
+Describe 'Diario con varias entradas' {
+    It 'los límites de FPS y las apps quitadas se leen bien con más cosas en el diario' {
+        $m = New-NetMachine
+        $m.Backend.State.FpsBackend = 'nvidia'
+        $m.Backend.State.Appx['Microsoft.BingNews'] = @{ Installed = $true; Provisioned = $false }
+        [void](Invoke-JuicerTweak (Find-JuicerTweak 'juegos.modo'))
+        [void](Invoke-JuicerTweak (New-JuicerFpsLimitTweak 'a.exe' 100))
+        [void](Invoke-JuicerTweak (New-JuicerAppxTweak (Find-JuicerDebloatApp 'Microsoft.BingNews')))
+        [void](Invoke-JuicerTweak (New-JuicerFpsLimitTweak 'b.exe' 120))
+        $l = @(Get-JuicerFpsLimits)
+        $l.Count | Should -Be 2
+        ($l | Where-Object { $_.Exe -eq 'b.exe' }).Fps | Should -Be 120
+        $a = @(Get-JuicerRemovedApps)
+        $a.Count | Should -Be 1
+        $a[0].Id | Should -Be 'app:Microsoft.BingNews'
+    }
+}
+
+Describe 'Consejos por juego' {
+    It 'CS2 con NVIDIA, VRR y el procesador limitando: Reflex con Boost y qué bajar' {
+        $f = @(Get-JuicerGameTips -ExeName 'cs2.exe' -GpuVendor 'NVIDIA' -Use 'VRR' -Measured @{ GpuBound = 30; AvgFps = 300; Low1 = 200 } -Hz 165)
+        $f[0].Area | Should -Be 'Consejos: Counter-Strike 2'
+        @($f | Where-Object { $_.Title -eq 'NVIDIA Reflex: actívalo' })[0].Detail | Should -BeLike '*Activado + Boost*procesador limita*'
+        @($f | Where-Object { $_.Title -like 'Sincronización vertical del juego: desactivada' })[0].Detail | Should -BeLike '*perfil de NVIDIA*'
+        @($f | Where-Object { $_.Title -like 'El limitador de FPS del juego: desactivado' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like '*el procesador limita*' })[0].Severity | Should -Be 'Medio'
+    }
+
+    It 'CS2 con AMD: Anti-Lag 2 del propio juego; otro juego: el del panel' {
+        @(Get-JuicerGameTips -ExeName 'cs2.exe' -GpuVendor 'AMD' | Where-Object { $_.Title -like 'AMD Anti-Lag 2*' }).Count | Should -Be 1
+        @(Get-JuicerGameTips -ExeName 'r5apex.exe' -GpuVendor 'AMD' | Where-Object { $_.Title -like 'Radeon Anti-Lag*' }).Count | Should -Be 1
+    }
+
+    It 'con ELMB, VSync del driver y aviso si el juego no sostiene los Hz' {
+        $f = @(Get-JuicerGameTips -ExeName 'valorant-win64-shipping.exe' -GpuVendor 'NVIDIA' -Use 'Estrobo' -Measured @{ GpuBound = 90; AvgFps = 190; Low1 = 150 } -Hz 180)
+        @($f | Where-Object { $_.Title -like 'Sincronización vertical: la del driver*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Title -like 'Con el estroboscopio no sostiene 180 FPS*' })[0].Severity | Should -Be 'Medio'
+        @($f | Where-Object { $_.Title -like '*la gráfica limita*' }).Count | Should -Be 1
+    }
+
+    It 'conoce lo particular de algunos juegos y da lo general a los demás' {
+        @(Get-JuicerGameTips -ExeName 'eldenring.exe' -GpuVendor 'NVIDIA' | Where-Object { $_.Title -like '*limitado a 60 FPS' }).Count | Should -Be 1
+        $u = @(Get-JuicerGameTips -ExeName 'otro.exe' -Title 'Otro juego' -GpuVendor 'NVIDIA' -Use 'Fijo')
+        $u[0].Area | Should -Be 'Consejos: Otro juego'
+        @($u | Where-Object { $_.Title -eq 'Si tiene NVIDIA Reflex, actívalo' }).Count | Should -Be 1
+        @($u | Where-Object { $_.Title -like 'Mídelo*' }).Count | Should -Be 1
+        (Find-JuicerGameTip 'FortniteClient-Win64-Shipping.exe').Name | Should -Be 'Fortnite'
+        Find-JuicerGameTip 'notepad.exe' | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Mantener los juegos optimizados' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        $M.Backend.State.FpsBackend = 'nvidia'
+        Remove-Item -LiteralPath (Get-JuicerUpkeepPath) -ErrorAction SilentlyContinue
+        $script:Mon = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true; MonitorId = '\\?\DISPLAY#AUS27B1#x#{y}'; Monitor = 'VG27AQ' }; Info = @{ Name = 'VG27AQ' }; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' }; Mode = 'Automatico' }
+        Mock -ModuleName WinJuicer Get-JuicerPrimaryMonitor { $script:Mon }
+        Mock -ModuleName WinJuicer Get-JuicerGames {
+            @((New-JuicerGame 'Steam' '1' 'Viejo' 'C:\J\Viejo' 'C:\J\Viejo\viejo.exe'), (New-JuicerGame 'Steam' '2' 'Nuevo' 'C:\J\Nuevo' 'C:\J\Nuevo\nuevo.exe')) |
+                ForEach-Object { $_.ExeName = (Split-Path -Leaf $_.Exe).ToLowerInvariant(); $_ }
+        }
+    }
+
+    It 'sabe qué es nuevo y cuándo recalcular' {
+        $g = @(@{ Id = 'a' }, @{ Id = 'b' })
+        @((Get-JuicerUpkeepPlan $g @('a') 'x' 'x' $true).New).Count | Should -Be 1
+        (Get-JuicerUpkeepPlan $g @('a', 'b') '165|VRR|m' '144|VRR|m' $true).Recalc | Should -BeTrue
+        (Get-JuicerUpkeepPlan $g @('a', 'b') '165|VRR|m' '144|VRR|m' $false).Recalc | Should -BeFalse
+        (Get-JuicerUpkeepPlan $g @('a', 'b') '165|VRR|m' '' $true).Recalc | Should -BeFalse
+        Get-JuicerLimitSignature $Mon | Should -Be '165|VRR|AUS27B1|VG27AQ'
+    }
+
+    It 'optimiza sólo los juegos nuevos y sigue al monitor' {
+        Save-JuicerUpkeepState @{ Seen = @('steam:1'); Signature = (Get-JuicerLimitSignature $Mon) }
+        @(Invoke-JuicerUpkeep -Quiet | Where-Object { $_.Outcome -eq 'Aplicado' }).Count | Should -BeGreaterThan 0
+        $M.Backend.State.FpsLimits['nuevo.exe'] | Should -Be 157
+        $M.Backend.State.FpsLimits.ContainsKey('viejo.exe') | Should -BeFalse
+        # Nothing new and the same monitor: nothing to do.
+        @(Invoke-JuicerUpkeep -Quiet).Count | Should -Be 0
+        # The monitor goes to 240 Hz: the limit follows.
+        $script:Mon.Display.Hz = 240
+        [void](Invoke-JuicerUpkeep -Quiet)
+        $M.Backend.State.FpsLimits['nuevo.exe'] | Should -Be 224
+        (Read-JuicerUpkeepState).Signature | Should -BeLike '240|*'
+    }
+
+    It 'desde la línea de órdenes' {
+        @(Start-Juicer -Mantener -Si 6>$null)[-1] | Should -Be 0
+    }
+}

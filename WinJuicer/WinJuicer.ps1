@@ -42,6 +42,24 @@
     Con -MedirJuego, el .exe que medir (por ejemplo cs2.exe). Sin él, el que
     más fotogramas presente.
 
+.PARAMETER Juegos
+    Lista los juegos instalados que encuentra (Steam, Epic, GOG, Xbox, EA,
+    Ubisoft, Battle.net, Riot…) con lo que tiene cada uno.
+
+.PARAMETER OptimizarJuegos
+    A todos esos juegos, el límite de FPS recomendado para tu monitor (o -Fps)
+    y, si hay dos gráficas, la dedicada.
+
+.PARAMETER Mantener
+    Optimiza los juegos instalados desde la última vez y recalcula los límites
+    de FPS si ha cambiado el monitor o cómo lo usas. Es lo que hace la tarea de
+    inicio de sesión de -MantenerJuegos.
+
+.PARAMETER MantenerJuegos
+    Activar: copia Win Juicer a Program Files (sólo administradores pueden
+    cambiarlo) y crea una tarea que hace -Mantener al iniciar sesión.
+    Desactivar: quita la tarea y la copia.
+
 .PARAMETER LimitarFps
     Juegos (.exe, separados por comas) a los que poner un límite de FPS que se
     aplica solo cada vez que se abren: con NVIDIA, en el driver; si no, con
@@ -131,6 +149,10 @@ param(
     [int]$MedirJuego,
     [string]$Juego,
     [string[]]$LimitarFps = @(),
+    [switch]$Juegos,
+    [switch]$OptimizarJuegos,
+    [switch]$Mantener,
+    [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
     [int]$Fps,
     [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
     [switch]$Lista,

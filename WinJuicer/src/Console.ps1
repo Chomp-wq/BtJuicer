@@ -516,6 +516,7 @@ function Show-JuicerGames {
     while ($true) {
         Write-JuicerHeader 'Juegos'
         Write-JuicerMenu @(
+            @('0', 'Tus juegos', 'los encuentra solos: límite de FPS y GPU en un paso'),
             @('1', 'Exclusiones de Defender', 'cargas más rápidas en tus bibliotecas (Extremo)'),
             @('2', 'Configurar un juego', 'GPU potente y prioridad alta para un .exe'),
             @('3', 'Juegos configurados', 'ver y deshacer'),
@@ -524,6 +525,7 @@ function Show-JuicerGames {
         )
         $c = Read-JuicerChoice 'Elige, Intro para volver'
         switch ($c) {
+            '0' { Show-JuicerGameList }
             '1' { Show-JuicerDefenderLibraries }
             '2' { Show-JuicerConfigureGame }
             '3' { Show-JuicerConfiguredGames }
@@ -531,6 +533,57 @@ function Show-JuicerGames {
             '5' { Show-JuicerLimiter }
             '' { return }
         }
+    }
+}
+
+function Write-JuicerGameList {
+    param([object[]]$Games)
+    $n = 0
+    foreach ($g in $Games) {
+        $n++
+        Write-Host ('  {0,3}. ' -f $n) -NoNewline
+        Write-Host ('{0,-34} ' -f $(if ($g.Name.Length -gt 34) { $g.Name.Substring(0, 33) + '…' } else { $g.Name })) -ForegroundColor White -NoNewline
+        Write-Host ('{0,-12} ' -f $g.Launcher) -ForegroundColor DarkGray -NoNewline
+        $st = Format-JuicerGameStatus $g
+        Write-Host $st -ForegroundColor $(if ($st -eq 'sin configurar') { 'DarkGray' } else { 'Green' }) -NoNewline
+        if ($g.New) { Write-Host '  nuevo' -ForegroundColor Yellow -NoNewline }
+        Write-Host ''
+    }
+}
+
+function Show-JuicerGameList {
+    while ($true) {
+        Write-JuicerHeader 'Tus juegos'
+        Write-Host '  Buscando juegos…' -ForegroundColor DarkGray
+        $games = @(Get-JuicerGameStatus @(Get-JuicerGames))
+        Write-JuicerHeader 'Tus juegos'
+        if ($games.Count -eq 0) { Write-JuicerWrapped 'No he encontrado juegos de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net ni Riot.' 2 'Yellow'; Wait-JuicerKey; return }
+        Write-JuicerGameList $games
+        Write-Host ''
+        Write-JuicerWrapped 'Elige juegos por número (1,3,5-8, o «t» para todos) y luego qué hacer. «Optimizar» pone el límite de FPS para tu monitor y, con dos gráficas, la dedicada; se aplica solo cada vez que los abras.' 2 'Gray'
+        $pick = Read-JuicerChoice 'Juegos (Intro para volver)'
+        if (-not $pick) { return }
+        $nums = if ($pick -match '^[tT]') { 1..$games.Count } else { Get-JuicerNumbers $pick $games.Count }
+        if (@($nums).Count -eq 0) { continue }
+        $sel = @($nums | ForEach-Object { $games[$_ - 1] })
+        Write-JuicerMenu @(
+            @('O', 'Optimizar', 'límite de FPS recomendado y GPU dedicada si hay dos'),
+            @('F', 'Sólo límite de FPS', 'el recomendado o el que digas'),
+            @('P', 'Prioridad alta', ''),
+            @('Q', 'Quitar lo de Win Juicer', 'límite, GPU y prioridad'),
+            @('C', 'Consejos', 'qué poner dentro de cada juego para tu gráfica y tu monitor')
+        )
+        $key = (Read-JuicerChoice).ToUpperInvariant()
+        if ($key -eq 'C') {
+            foreach ($g in $sel) { Write-Host ''; Write-JuicerFindings @(Get-JuicerGameTipsHere $g) }
+            Wait-JuicerKey
+            continue
+        }
+        $what = @{ O = 'Recomendado'; F = 'Fps'; P = 'Prioridad'; Q = 'Quitar' }[$key]
+        if (-not $what) { continue }
+        $fps = 0
+        if ($what -eq 'Fps') { $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'; if ($f -match '^\d+$') { $fps = [int]$f } }
+        Show-JuicerResults @(Invoke-JuicerGameSetup $sel $what $fps)
     }
 }
 
@@ -871,7 +924,8 @@ function Show-JuicerDebloat {
 
 function Show-JuicerReinstallApps {
     Write-JuicerHeader 'Reinstalar apps quitadas'
-    $removed = @(Get-JuicerRemovedApps) + @(Read-JuicerJournal | Where-Object { $_.Id -eq 'apps.onedrive' })
+    $journal = Read-JuicerJournal
+    $removed = @(Get-JuicerRemovedApps) + @($journal | Where-Object { $_.Id -eq 'apps.onedrive' })
     if ($removed.Count -eq 0) { Write-Host '  Win Juicer no ha quitado ninguna app.' -ForegroundColor DarkGray; Wait-JuicerKey; return }
     $n = 0
     foreach ($e in $removed) { $n++; Write-Host ('  {0,3}  {1}' -f $n, ($e.Title -replace '^Quitar ', '')) }
@@ -1103,6 +1157,10 @@ function Start-Juicer {
         [int]$MedirJuego,
         [string]$Juego,
         [string[]]$LimitarFps = @(),
+        [switch]$Juegos,
+        [switch]$OptimizarJuegos,
+        [switch]$Mantener,
+        [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
         [int]$Fps,
         [string]$ModoMonitor,
         [switch]$Lista,
@@ -1129,9 +1187,11 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
+    # The protected copy the sign-in task runs follows this version.
+    if ((Test-JuicerWindows) -and -not $Mantener) { Update-JuicerCopy }
     if (-not $cli) {
         $script:Screen = $true
         $script:Interactive = $true
@@ -1172,6 +1232,22 @@ function Start-Juicer {
             return 1
         }
         if ($LimitarFps.Count -eq 0) { return 0 }
+    }
+    if ($Mantener) {
+        $r = @(Invoke-JuicerUpkeep)
+        return $(if (@($r | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
+    }
+    if ($MantenerJuegos -eq 'Activar') { Register-JuicerUpkeep; Write-Host '  Activado: al iniciar sesión, los juegos nuevos se optimizan solos y los límites siguen a tu monitor.'; return 0 }
+    if ($MantenerJuegos -eq 'Desactivar') { Unregister-JuicerUpkeep; Write-Host '  Desactivado.'; return 0 }
+    if ($Juegos -or $OptimizarJuegos) {
+        $games = @(Get-JuicerGameStatus @(Get-JuicerGames))
+        if ($OptimizarJuegos) {
+            $results = @(Invoke-JuicerGameSetup $games 'Recomendado' $Fps)
+            Show-JuicerResults $results
+            return $(if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
+        }
+        Write-JuicerGameList $games
+        return 0
     }
     if ($LimitarFps.Count -gt 0) {
         if ($Fps -and ($Fps -lt 20 -or $Fps -gt 1000)) { Write-Host '  -Fps va de 20 a 1000.' -ForegroundColor Yellow; return 2 }
