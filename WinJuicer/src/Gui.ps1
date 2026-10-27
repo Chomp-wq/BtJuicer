@@ -299,9 +299,9 @@ $script:GuiXaml = @'
             <TextBlock Text="Tus juegos" Style="{StaticResource Head}"/>
             <TextBlock x:Name="GamesNote" Style="{StaticResource Note}" Text="Buscando los juegos de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net, Riot…"/>
             <WrapPanel>
-              <Button x:Name="BtnGamesOptimize" Content="Optimizar los marcados" Style="{StaticResource Accent}" ToolTip="El límite de FPS recomendado para tu monitor (con la receta de baja latencia en NVIDIA) y, si tienes dos gráficas, la dedicada"/>
-              <Button x:Name="BtnGamesLimit" Content="Sólo límite de FPS"/>
-              <TextBox x:Name="LimitFps" Width="60" Margin="3" VerticalContentAlignment="Center" ToolTip="Déjalo vacío para usar el límite recomendado"/>
+              <Button x:Name="BtnGamesOptimize" Content="Optimizar los marcados" Style="{StaticResource Accent}" ToolTip="El frame pacer al ritmo recomendado para tu monitor (con la receta de baja latencia en NVIDIA) y, si tienes dos gráficas, la dedicada"/>
+              <Button x:Name="BtnGamesLimit" Content="Sólo frame pacer"/>
+              <TextBox x:Name="LimitFps" Width="60" Margin="3" VerticalContentAlignment="Center" ToolTip="Déjalo vacío para usar el ritmo recomendado"/>
               <TextBlock Text="FPS (vacío: el recomendado)" VerticalAlignment="Center" Foreground="#9A9AA5" Margin="0,0,8,0"/>
               <Button x:Name="BtnGamesGpu" Content="GPU dedicada"/>
               <Button x:Name="BtnGamesPrio" Content="Prioridad alta"/>
@@ -313,16 +313,29 @@ $script:GuiXaml = @'
               <Button x:Name="BtnGamesAdd" Content="Añadir otro juego (.exe)…"/>
               <Button x:Name="BtnGamesRefresh" Content="Volver a buscar"/>
             </WrapPanel>
-            <CheckBox x:Name="ChkUpkeep" Content="Mantenerlos optimizados solo: al iniciar sesión, optimizar los juegos nuevos y recalcular los límites si cambia el monitor" ToolTip="Copia Win Juicer a Program Files (sólo administradores pueden cambiarlo) y crea una tarea de inicio de sesión. Desmárcalo para quitar las dos cosas." IsEnabled="False"/>
+            <CheckBox x:Name="ChkUpkeep" Content="Mantenerlos optimizados solo: al iniciar sesión, optimizar los juegos nuevos y recalcular el frame pacer si cambia el monitor" ToolTip="Copia Win Juicer a Program Files (sólo administradores pueden cambiarlo) y crea una tarea de inicio de sesión. Desmárcalo para quitar las dos cosas." IsEnabled="False"/>
             <StackPanel x:Name="GamesPanel" Margin="0,4,0,0"/>
             <StackPanel x:Name="GameTipsPanel" Margin="0,6,0,0"/>
-            <TextBlock Text="Limitador de FPS" Style="{StaticResource Head}"/>
-            <TextBlock x:Name="LimitNote" Style="{StaticResource Note}" Text="Un límite por juego que se aplica solo cada vez que lo abres, sin inyectar nada en el juego (los anti-trampas no tienen nada que objetar)."/>
+            <TextBlock Text="Frame pacer" Style="{StaticResource Head}"/>
+            <TextBlock x:Name="LimitNote" Style="{StaticResource Note}" Text="Un ritmo de fotogramas por juego, por frametime, que se aplica solo cada vez que lo abres, sin inyectar nada en el juego (los anti-trampas no tienen nada que objetar)."/>
             <WrapPanel>
               <TextBlock Text="Cómo usas tu monitor:" VerticalAlignment="Center" Margin="4,0,6,0" Foreground="#9A9AA5"/>
-              <ComboBox x:Name="MonitorMode" Width="430" Margin="3" ToolTip="El monitor no dice si tienes ELMB, DyAc o similar encendido: dilo aquí y el límite se ajusta"/>
-              <Button x:Name="BtnLimitRecalc" Content="Recalcular los límites"/>
+              <ComboBox x:Name="MonitorMode" Width="430" Margin="3" ToolTip="El monitor no dice si tienes ELMB, DyAc o similar encendido: dilo aquí y el ritmo se ajusta"/>
+              <Button x:Name="BtnLimitRecalc" Content="Recalcular los ritmos"/>
             </WrapPanel>
+            <WrapPanel>
+              <TextBlock Text="Motor:" VerticalAlignment="Center" Margin="4,0,6,0" Foreground="#9A9AA5"/>
+              <ComboBox x:Name="PacerEngine" Width="250" Margin="3" IsEnabled="False" ToolTip="Con estrobo, RivaTuner admite décimas y puede ir justo por debajo del refresco real; el driver de NVIDIA, sólo números enteros">
+                <ComboBoxItem Content="Automático (el driver si hay NVIDIA)" Tag="Auto"/>
+                <ComboBoxItem Content="Driver de NVIDIA" Tag="nvidia"/>
+                <ComboBoxItem Content="RivaTuner (admite décimas)" Tag="rtss"/>
+              </ComboBox>
+              <TextBlock Text="Calibrar:" VerticalAlignment="Center" Margin="10,0,6,0" Foreground="#9A9AA5"/>
+              <ComboBox x:Name="PacerGame" Width="220" Margin="3" IsEnabled="False" ToolTip="Los juegos con frame pacer"/>
+              <Button x:Name="BtnPacerCalibrate" Content="Calibrar (empieza en 10 s)" IsEnabled="False" ToolTip="Mide el juego 60 s con su ritmo y lo ajusta a lo que sostiene de verdad: lo baja si no llega, lo sube si sobra margen"/>
+              <Button x:Name="BtnPacerForget" Content="Olvidar calibraciones" IsEnabled="False"/>
+            </WrapPanel>
+            <StackPanel x:Name="PacerPanel"/>
             <TextBlock Text="Medir FPS y frametimes" Style="{StaticResource Head}"/>
             <TextBlock Style="{StaticResource Note}" Text="Con PresentMon de Intel (se descarga la primera vez). Pulsa, vuelve al juego en 10 segundos y juega una escena que puedas repetir: media, 1 % y 0,1 % bajos, tirones, si limita el procesador o la gráfica y qué gastaba CPU en segundo plano. Cada medida se compara con la anterior del mismo juego, así sabes si un ajuste dio FPS de verdad."/>
             <WrapPanel>
@@ -579,7 +592,7 @@ $script:GuiWork = @{
         $libs = @(foreach ($l in @(Get-JuicerGameLibraries)) {
                 @{ Path = $l.Path; Launcher = $l.Launcher; State = (Get-JuicerTweakState (New-JuicerDefenderTweak $l.Path $l.Launcher) $journal).State }
             })
-        $Sync.Status = 'Leyendo el monitor y los límites de FPS…'
+        $Sync.Status = 'Leyendo el monitor y el frame pacer…'
         $lim = Get-JuicerGuiLimiter
         $Sync.Status = 'Buscando tus juegos…'
         @{ Libraries = $libs; Limiter = $lim; Games = @(Get-JuicerGuiGameList); Upkeep = (Test-JuicerUpkeep) }
@@ -610,10 +623,16 @@ $script:GuiWork = @{
     }
     Limiter    = {
         $r = @()
-        if ($A.Recalc) { $Sync.Status = 'Recalculando los límites…'; $r += @(Update-JuicerFpsLimits) }
-        foreach ($exe in @($A.Add)) { $Sync.Status = "Limitando $exe…"; $r += Add-JuicerFpsLimit $exe ([int]$A.Fps) }
+        if ($A.Engine) { $Sync.Status = 'Cambiando el motor del frame pacer…'; $r += @(Set-JuicerPacerEngine $A.Engine) }
+        if ($A.Forget) { Clear-JuicerPacerCalibration; $A.Recalc = $true }
+        if ($A.Recalc) { $Sync.Status = 'Recalculando los ritmos…'; $r += @(Update-JuicerFpsLimits) }
+        foreach ($exe in @($A.Add)) { $Sync.Status = "Poniendo el frame pacer a $exe…"; $r += Add-JuicerFpsLimit $exe ([int]$A.Fps) }
         foreach ($id in @($A.Remove)) { $Sync.Status = "Quitando $id…"; $r += Undo-JuicerTweak $id }
         @{ Limiter = (Get-JuicerGuiLimiter); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
+    }
+    Calibrate  = {
+        $f = @(Invoke-JuicerPacerCalibration -Exe $A.Exe -Seconds 60 -Delay 10 -OnStatus { param($t) $Sync.Status = $t })
+        @{ Findings = $f; Limiter = (Get-JuicerGuiLimiter) }
     }
     MonitorMode = {
         $m = Get-JuicerPrimaryMonitor
@@ -1243,15 +1262,21 @@ function Select-JuicerGuiGameExe {
     if ($d.ShowDialog()) { Start-JuicerGuiGameSetup 'SetExe' @{ Id = $Id; Exe = $d.FileName } }
 }
 
-# What the limiter section shows, read in the background.
+# What the frame pacer section shows, read in the background.
 function Get-JuicerGuiLimiter {
     $m = $null
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
-    $cap = if ($m) { Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) } else { $null }
+    $cap = if ($m) { Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) @() ([double]$m.Display.ExactHz) } else { $null }
+    $pacer = Read-JuicerPacer
+    $limits = @(Get-JuicerFpsLimits)
+    $state = $null
+    try { $state = & (Get-JuicerBackend).PacerState } catch { Write-JuicerLog "Sin estado del frame pacer: $_" }
     @{
         Backend = (Get-JuicerFpsBackend); Monitor = $(if ($m) { Format-JuicerMonitor $m } else { '' }); Cap = $cap
         Mode = $(if ($m) { $m.Mode } else { '' })
-        Limits = @(Get-JuicerFpsLimits)
+        Limits = $limits
+        Engine = $pacer.Engine; Engines = @(Get-JuicerPacerEngines); Calibrated = @($pacer.Calibrated.Keys)
+        Conflicts = @(Get-JuicerPacerConflicts $state (Get-JuicerFpsBackend) $limits $m)
     }
 }
 
@@ -1269,31 +1294,50 @@ function Show-JuicerGuiLimiter {
     param([hashtable]$L)
     if (-not $L) { return }
     $c = $script:Gui.C
-    $lines = @("Limita con: $(Format-JuicerFpsBackend $L.Backend).")
+    $lines = @("Marca el ritmo con: $(Format-JuicerFpsBackend $L.Backend).")
     if ($L.Monitor) { $lines += "Tu pantalla: $($L.Monitor)." }
-    if ($L.Cap) { $lines += "Límite recomendado: $($L.Cap.Fps) FPS. $($L.Cap.Why) Si mediste un juego y sus frametimes oscilan, a ese juego le pone el que sostiene." }
+    if ($L.Cap) { $lines += "Ritmo recomendado: $($L.Cap.Fps) FPS$(if ($L.Cap.Exact -gt 0 -and $L.Backend -eq 'rtss') { ' ({0:N2} con RivaTuner)' -f $L.Cap.Exact }). $($L.Cap.Why) «Calibrar» mide un juego con su ritmo y lo ajusta a lo que sostiene de verdad." }
     $c.LimitNote.Text = $lines -join ' '
+    $p = $c.PacerPanel
+    $p.Children.Clear()
+    foreach ($f in @($L.Conflicts)) { [void]$p.Children.Add((New-JuicerFindingCard $f)) }
     # Filling the list or choosing the saved mode is not the user changing it.
     $script:Gui.SettingMode = $true
     try {
         Initialize-JuicerGuiMonitorModes
         $c.MonitorMode.IsEnabled = [bool]$L.Mode
         foreach ($it in $c.MonitorMode.Items) { if ([string]$it.Tag -eq [string]$L.Mode) { $c.MonitorMode.SelectedItem = $it } }
+        foreach ($it in $c.PacerEngine.Items) {
+            $it.IsEnabled = [string]$it.Tag -eq 'Auto' -or @($L.Engines) -contains [string]$it.Tag
+            if ([string]$it.Tag -eq [string]$L.Engine) { $c.PacerEngine.SelectedItem = $it }
+        }
+        $c.PacerEngine.IsEnabled = @($L.Engines).Count -gt 0
+        $keep = if ($c.PacerGame.SelectedItem) { [string]$c.PacerGame.SelectedItem.Tag } else { '' }
+        $c.PacerGame.Items.Clear()
+        foreach ($g in @($L.Limits)) {
+            $label = if ($g.Fps) { '{0} ({1} FPS{2})' -f $g.Exe, $g.Fps, $(if (@($L.Calibrated) -contains $g.Exe) { ', calibrado' } else { '' }) } else { $g.Exe }
+            $it = New-JuicerUi ComboBoxItem @{ Content = $label; Tag = $g.Exe }
+            [void]$c.PacerGame.Items.Add($it)
+            if ($g.Exe -eq $keep -or -not $c.PacerGame.SelectedItem) { $c.PacerGame.SelectedItem = $it }
+        }
     } finally {
         $script:Gui.SettingMode = $false
     }
     $c.BtnLimitRecalc.IsEnabled = @($L.Limits).Count -gt 0
+    $c.PacerGame.IsEnabled = @($L.Limits).Count -gt 0
+    $c.BtnPacerCalibrate.IsEnabled = @($L.Limits).Count -gt 0
+    $c.BtnPacerForget.IsEnabled = @($L.Calibrated).Count -gt 0
 }
 
 function Start-JuicerGuiLimiter {
-    param([string[]]$Add = @(), [string[]]$Remove = @(), [switch]$Recalc)
-    Start-JuicerGuiTask 'Aplicando el limitador…' 'Limiter' @{ Add = $Add; Remove = $Remove; Fps = 0; Recalc = [bool]$Recalc } {
+    param([string[]]$Add = @(), [string[]]$Remove = @(), [switch]$Recalc, [string]$Engine = '', [switch]$Forget)
+    Start-JuicerGuiTask 'Aplicando el frame pacer…' 'Limiter' @{ Add = $Add; Remove = $Remove; Fps = 0; Recalc = [bool]$Recalc; Engine = $Engine; Forget = [bool]$Forget } {
         param($r)
         Show-JuicerGuiLimiter $r.Limiter
         $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica' })
         if ($bad.Count -gt 0) { Show-JuicerGuiMessage (($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message }) -join "`n") 'Warning' | Out-Null }
         Show-JuicerGuiUndo
-        Set-JuicerGuiStatus 'Limitador actualizado: se aplica solo cada vez que abras esos juegos.'
+        Set-JuicerGuiStatus 'Frame pacer actualizado: se aplica solo cada vez que abras esos juegos.'
         if ($script:Gui.GamesLoaded) { Start-JuicerGuiGameSetup 'Refresh' }
     }
 }
@@ -1368,6 +1412,22 @@ function Register-JuicerGuiHandlers {
         }
         BtnLibRefresh         = { Start-JuicerGuiGames }
         BtnLimitRecalc        = { Start-JuicerGuiLimiter -Recalc }
+        BtnPacerCalibrate     = {
+            $item = $script:Gui.C.PacerGame.SelectedItem
+            if (-not $item) { return }
+            Start-JuicerGuiTask 'Preparando la calibración…' 'Calibrate' @{ Exe = [string]$item.Tag } {
+                param($r)
+                Show-JuicerGuiLimiter $r.Limiter
+                $p = $script:Gui.C.PacerPanel
+                foreach ($f in @($r.Findings)) { [void]$p.Children.Add((New-JuicerFindingCard $f)) }
+                Show-JuicerGuiUndo
+                Set-JuicerGuiStatus 'Calibración terminada: el resultado está en Juegos > Frame pacer.'
+            }
+        }
+        BtnPacerForget        = {
+            if (-not (Confirm-JuicerGui '¿Olvidar lo que encontró la calibración y volver al ritmo recomendado para tu monitor?')) { return }
+            Start-JuicerGuiLimiter -Forget
+        }
         BtnGamesOptimize      = { Start-JuicerGuiGameSetup 'Recomendado' }
         BtnGamesLimit         = { Start-JuicerGuiGameSetup 'Fps' }
         BtnGamesGpu           = { Start-JuicerGuiGameSetup 'Gpu' }
@@ -1548,12 +1608,18 @@ function Register-JuicerGuiHandlers {
             Start-JuicerGuiTask 'Guardando cómo usas el monitor…' 'MonitorMode' @{ Mode = [string]$item.Tag } {
                 param($r)
                 Show-JuicerGuiLimiter $r.Limiter
-                if (@($r.Limiter.Limits).Count -gt 0 -and (Confirm-JuicerGui '¿Recalcular con este modo los límites de los juegos que ya tienes limitados?')) {
+                if (@($r.Limiter.Limits).Count -gt 0 -and (Confirm-JuicerGui '¿Recalcular con este modo el ritmo de los juegos que ya tienen frame pacer?')) {
                     Start-JuicerGuiLimiter -Recalc
                 } else {
-                    Set-JuicerGuiStatus 'Guardado. Los juegos que limites a partir de ahora usarán este modo.'
+                    Set-JuicerGuiStatus 'Guardado. Los juegos a los que pongas el frame pacer usarán este modo.'
                 }
             }
+        })
+    $c.PacerEngine.Add_SelectionChanged({
+            if ($script:Gui.SettingMode) { return }
+            $item = $script:Gui.C.PacerEngine.SelectedItem
+            if (-not $item) { return }
+            Start-JuicerGuiLimiter -Engine ([string]$item.Tag)
         })
     $c.Tabs.Add_SelectionChanged({
             # $_ is the event: the ComboBox inside a tab raises it too.

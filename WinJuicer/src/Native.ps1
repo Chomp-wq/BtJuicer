@@ -27,6 +27,7 @@ namespace WinJuicer {
         public int[] RefreshRates;
         public int NativeWidth;
         public int NativeHeight;
+        public double ExactHz;
     }
 
     public static class Native {
@@ -76,10 +77,62 @@ namespace WinJuicer {
         [DllImport("user32.dll", CharSet = CharSet.Unicode)]
         static extern bool EnumDisplaySettings(string device, int mode, ref DEVMODE dm);
 
+        // QueryDisplayConfig: the refresh rate as the fraction the display
+        // really runs at (179.96 Hz, not 180), by GDI name (\\.\DISPLAY1).
+        [StructLayout(LayoutKind.Sequential)] struct LUID { public uint Low; public int High; }
+        [StructLayout(LayoutKind.Sequential)] struct RATIONAL { public uint Num; public uint Den; }
+        [StructLayout(LayoutKind.Sequential)] struct PATH_SOURCE { public LUID adapterId; public uint id; public uint modeInfoIdx; public uint statusFlags; }
+        [StructLayout(LayoutKind.Sequential)] struct PATH_TARGET {
+            public LUID adapterId; public uint id; public uint modeInfoIdx; public int outputTechnology; public int rotation; public int scaling;
+            public RATIONAL refreshRate; public int scanLineOrdering; public int targetAvailable; public uint statusFlags;
+        }
+        [StructLayout(LayoutKind.Sequential)] struct PATH_INFO { public PATH_SOURCE sourceInfo; public PATH_TARGET targetInfo; public uint flags; }
+        // DISPLAYCONFIG_MODE_INFO: 16 bytes of header, then the target mode's
+        // video signal (vSyncFreq at 32) or the source mode, in 48.
+        [StructLayout(LayoutKind.Explicit, Size = 64)] struct MODE_INFO {
+            [FieldOffset(0)] public int infoType;
+            [FieldOffset(32)] public uint vSyncNum;
+            [FieldOffset(36)] public uint vSyncDen;
+        }
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)] struct SOURCE_NAME {
+            public int type; public int size; public LUID adapterId; public uint id;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string viewGdiDeviceName;
+        }
+
+        [DllImport("user32.dll")] static extern int GetDisplayConfigBufferSizes(uint flags, out uint numPaths, out uint numModes);
+        [DllImport("user32.dll")] static extern int QueryDisplayConfig(uint flags, ref uint numPaths, [Out] PATH_INFO[] paths, ref uint numModes, [Out] MODE_INFO[] modes, IntPtr topology);
+        [DllImport("user32.dll")] static extern int DisplayConfigGetDeviceInfo(ref SOURCE_NAME info);
+
+        public static Dictionary<string, double> GetExactRefresh() {
+            var map = new Dictionary<string, double>(StringComparer.OrdinalIgnoreCase);
+            uint np, nm;
+            if (GetDisplayConfigBufferSizes(2, out np, out nm) != 0) return map;   // QDC_ONLY_ACTIVE_PATHS
+            var paths = new PATH_INFO[np];
+            var modes = new MODE_INFO[nm];
+            if (QueryDisplayConfig(2, ref np, paths, ref nm, modes, IntPtr.Zero) != 0) return map;
+            for (int i = 0; i < np; i++) {
+                var p = paths[i];
+                var name = new SOURCE_NAME();
+                name.type = 1;   // DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME
+                name.size = Marshal.SizeOf(name);
+                name.adapterId = p.sourceInfo.adapterId;
+                name.id = p.sourceInfo.id;
+                if (DisplayConfigGetDeviceInfo(ref name) != 0) continue;
+                double hz = 0;
+                uint t = p.targetInfo.modeInfoIdx;
+                if (t < nm && modes[t].infoType == 2 && modes[t].vSyncDen != 0) hz = (double)modes[t].vSyncNum / modes[t].vSyncDen;
+                else if (p.targetInfo.refreshRate.Den != 0) hz = (double)p.targetInfo.refreshRate.Num / p.targetInfo.refreshRate.Den;
+                if (hz > 0 && !map.ContainsKey(name.viewGdiDeviceName)) map[name.viewGdiDeviceName] = hz;
+            }
+            return map;
+        }
+
         // Current mode of every display attached to the desktop, plus the
         // highest refresh rate the driver offers at that same resolution.
         public static Display[] GetDisplays() {
             var list = new List<Display>();
+            Dictionary<string, double> exact;
+            try { exact = GetExactRefresh(); } catch { exact = new Dictionary<string, double>(); }
             for (uint i = 0; ; i++) {
                 var dd = new DISPLAY_DEVICE();
                 dd.cb = Marshal.SizeOf(dd);
@@ -120,6 +173,8 @@ namespace WinJuicer {
                 d.Width = cur.dmPelsWidth;
                 d.Height = cur.dmPelsHeight;
                 d.Hz = cur.dmDisplayFrequency;
+                double x;
+                d.ExactHz = exact.TryGetValue(dd.DeviceName, out x) && Math.Abs(x - d.Hz) < 1 ? x : d.Hz;
                 d.MaxHz = max;
                 list.Add(d);
             }
@@ -315,6 +370,7 @@ namespace WinJuicer {
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int SetSettingFn(IntPtr session, IntPtr profile, ref Setting setting);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int GetSettingFn(IntPtr session, IntPtr profile, uint id, ref Setting setting);
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int DeleteSettingFn(IntPtr session, IntPtr profile, uint id);
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)] delegate int BaseProfileFn(IntPtr session, out IntPtr profile);
 
         [DllImport("nvapi64.dll", EntryPoint = "nvapi_QueryInterface", CallingConvention = CallingConvention.Cdecl)]
         static extern IntPtr QueryInterface(uint id);
@@ -391,6 +447,22 @@ namespace WinJuicer {
                 if (r == NotFoundSetting) return -1;
                 Check(r, "GetSetting");
                 if (st.settingLocation != 0 || st.isCurrentPredefined != 0) return -1;
+                return (long)BitConverter.ToUInt32(st.currentValue, 0);
+            } finally { Close(s); }
+        }
+
+        // The same, in the global profile (Manage 3D settings > Global): what
+        // every program without its own value gets.
+        public static long GetGlobalDword(uint id) {
+            IntPtr s = Open();
+            try {
+                IntPtr profile;
+                Check(Fn<BaseProfileFn>(0xDA8466A0)(s, out profile), "GetBaseProfile");
+                var st = NewSetting();
+                int r = Fn<GetSettingFn>(0x73BF8338)(s, profile, id, ref st);
+                if (r == NotFoundSetting) return -1;
+                Check(r, "GetSetting");
+                if (st.isCurrentPredefined != 0) return -1;
                 return (long)BitConverter.ToUInt32(st.currentValue, 0);
             } finally { Close(s); }
         }

@@ -190,6 +190,8 @@ function Format-JuicerMonitor {
     $i = $Monitor.Info; $d = $Monitor.Display
     $name = if ($i -and $i.Name) { "$($i.Brand) $($i.Name)" } elseif ($i) { $i.Brand } elseif ($d.Monitor) { $d.Monitor } else { 'Pantalla' }
     $parts = @("$($d.MaxHz) Hz")
+    # The real rate, when it is not the round number Windows shows.
+    if ($d.ExactHz -gt 0 -and [Math]::Abs([double]$d.ExactHz - [int]$d.Hz) -ge 0.005) { $parts += ('ahora a {0:N3} Hz reales' -f [double]$d.ExactHz) }
     if ($Monitor.Vrr) {
         $r = if ($Monitor.Vrr.Max -gt 0) { " $($Monitor.Vrr.Min)–$($Monitor.Vrr.Max) Hz" + $(if ($Monitor.Vrr.Max -ge 2 * $Monitor.Vrr.Min) { ' con LFC' } else { ' sin LFC' }) } else { '' }
         $parts += "$($Monitor.Vrr.Kind)$r"
@@ -233,9 +235,9 @@ function Get-JuicerMonitorFindings {
         }
         switch ($use) {
             'VRR' {
-                $out += New-JuicerFinding 'Monitor' 'Info' $title ("Lo usas con frecuencia variable: sin cortes ni tirones de VSync aunque los FPS no lleguen a los Hz. $vrrHow Comprueba también que FreeSync/Adaptive-Sync está activado en el menú del propio monitor: muchos vienen con ella apagada. Límite: $($cap.Fps) FPS, para no salir nunca del rango (Juegos > Limitador de FPS lo pone por juego).")
+                $out += New-JuicerFinding 'Monitor' 'Info' $title ("Lo usas con frecuencia variable: sin cortes ni tirones de VSync aunque los FPS no lleguen a los Hz. $vrrHow Comprueba también que FreeSync/Adaptive-Sync está activado en el menú del propio monitor: muchos vienen con ella apagada. Ritmo: $($cap.Fps) FPS, para no salir nunca del rango (Juegos > Frame pacer lo pone por juego).")
                 if (-not $m.Vrr) {
-                    $out += New-JuicerFinding 'Monitor' 'Bajo' 'Has dicho que usas VRR, pero el monitor no la anuncia' 'Por DisplayPort puede funcionar igualmente. Si el panel de la gráfica no ofrece G-SYNC/FreeSync para este monitor, cambia el modo a «Frecuencia fija» en el limitador: el límite y los consejos cambian.'
+                    $out += New-JuicerFinding 'Monitor' 'Bajo' 'Has dicho que usas VRR, pero el monitor no la anuncia' 'Por DisplayPort puede funcionar igualmente. Si el panel de la gráfica no ofrece G-SYNC/FreeSync para este monitor, cambia el modo a «Frecuencia fija» en el frame pacer: el ritmo y los consejos cambian.'
                 }
             }
             'EstroboSync' {
@@ -251,9 +253,9 @@ function Get-JuicerMonitorFindings {
             }
             default {
                 if ($m.Vrr) {
-                    $out += New-JuicerFinding 'Monitor' 'Info' $title "Tiene $($m.Vrr.Kind), pero lo usas a frecuencia fija. Sin VRR, cada fotograma tiene que esperar al siguiente refresco: o VSync con límite a $hz FPS (imagen limpia, algo más de latencia) o sin VSync (menos latencia, con cortes). Si no es a propósito, elige «Frecuencia variable» en el limitador y actívala: $vrrHow"
+                    $out += New-JuicerFinding 'Monitor' 'Info' $title "Tiene $($m.Vrr.Kind), pero lo usas a frecuencia fija. Sin VRR, cada fotograma tiene que esperar al siguiente refresco: o VSync con límite a $hz FPS (imagen limpia, algo más de latencia) o sin VSync (menos latencia, con cortes). Si no es a propósito, elige «Frecuencia variable» en el frame pacer y actívala: $vrrHow"
                 } else {
-                    $out += New-JuicerFinding 'Monitor' 'Info' $title "No anuncia FreeSync ni VRR de HDMI. Si su menú tiene «FreeSync» o «Adaptive-Sync», actívalo (por DisplayPort puede funcionar aunque no lo anuncie) y elige «Frecuencia variable» en el limitador. Sin VRR hay dos opciones: sin VSync y sin límite (menos latencia, con cortes en la imagen) o VSync con un límite de $hz FPS (imagen limpia, algo más de latencia)."
+                    $out += New-JuicerFinding 'Monitor' 'Info' $title "No anuncia FreeSync ni VRR de HDMI. Si su menú tiene «FreeSync» o «Adaptive-Sync», actívalo (por DisplayPort puede funcionar aunque no lo anuncie) y elige «Frecuencia variable» en el frame pacer. Sin VRR hay dos opciones: sin VSync y sin límite (menos latencia, con cortes en la imagen) o VSync con un límite de $hz FPS (imagen limpia, algo más de latencia)."
                 }
             }
         }
@@ -264,7 +266,7 @@ function Get-JuicerMonitorFindings {
         if (-not $oled -and $hz -ge 120 -and $use -in 'VRR', 'Fijo' -and $script:StrobeNames.Contains($i.Brand)) {
             $holds = @($Games | Where-Object { $_.Low1 -ge $hz })
             $tail = if ($holds.Count -gt 0) { " En tus medidas, $(($holds | ForEach-Object { $_.Application }) -join ', ') no baja de $hz FPS: ahí te serviría." } else { '' }
-            $out += New-JuicerFinding 'Monitor' 'Info' "Nitidez en movimiento: busca «$($script:StrobeNames[$i.Brand])» en el menú del monitor" ("Si tu modelo la tiene, hace parpadear la retroiluminación y el movimiento se ve mucho más nítido, a cambio de brillo y, casi siempre, sin frecuencia variable. Vale la pena en shooters donde los FPS no bajan nunca de los Hz; si bajan, mejor la VRR. Si la activas, dilo en el limitador («Cómo usas tu monitor») y el límite se ajusta.$tail")
+            $out += New-JuicerFinding 'Monitor' 'Info' "Nitidez en movimiento: busca «$($script:StrobeNames[$i.Brand])» en el menú del monitor" ("Si tu modelo la tiene, hace parpadear la retroiluminación y el movimiento se ve mucho más nítido, a cambio de brillo y, casi siempre, sin frecuencia variable. Vale la pena en shooters donde los FPS no bajan nunca de los Hz; si bajan, mejor la VRR. Si la activas, dilo en el frame pacer («Cómo usas tu monitor») y el ritmo se ajusta.$tail")
         }
         if ($oled) {
             $out += New-JuicerFinding 'Monitor' 'Info' 'OLED: respuesta casi instantánea' 'No necesita overdrive ni estroboscopio. Con VRR puede parpadear el brillo en menús y pantallas de carga con FPS muy variables: un límite de FPS lo reduce.'

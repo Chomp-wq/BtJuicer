@@ -516,12 +516,12 @@ function Show-JuicerGames {
     while ($true) {
         Write-JuicerHeader 'Juegos'
         Write-JuicerMenu @(
-            @('0', 'Tus juegos', 'los encuentra solos: límite de FPS y GPU en un paso'),
+            @('0', 'Tus juegos', 'los encuentra solos: frame pacer y GPU en un paso'),
             @('1', 'Exclusiones de Defender', 'cargas más rápidas en tus bibliotecas (Extremo)'),
             @('2', 'Configurar un juego', 'GPU potente y prioridad alta para un .exe'),
             @('3', 'Juegos configurados', 'ver y deshacer'),
             @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon'),
-            @('5', 'Limitador de FPS', 'un límite por juego que se aplica solo, según tu monitor')
+            @('5', 'Frame pacer', 'un ritmo por juego que se aplica solo, según tu monitor, y se calibra')
         )
         $c = Read-JuicerChoice 'Elige, Intro para volver'
         switch ($c) {
@@ -589,26 +589,36 @@ function Show-JuicerGameList {
 
 function Show-JuicerLimiter {
     while ($true) {
-        Write-JuicerHeader 'Limitador de FPS'
+        Write-JuicerHeader 'Frame pacer'
         $m = $null
         try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
-        Write-JuicerWrapped ('Limita con: ' + (Format-JuicerFpsBackend (Get-JuicerFpsBackend)) + '.') 2 'Gray'
+        $pacer = Read-JuicerPacer
+        Write-JuicerWrapped ('Marca el ritmo con: ' + (Format-JuicerFpsBackend (Get-JuicerFpsBackend)) + '.') 2 'Gray'
         if ($m) {
-            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 })
-            Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + '. Cómo la usas: ' + (Get-JuicerMonitorModes)[$m.Mode] + ". Límite recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
+            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) @() ([double]$m.Display.ExactHz)
+            Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + '. Cómo la usas: ' + (Get-JuicerMonitorModes)[$m.Mode] + ". Ritmo recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
         }
         $limits = @(Get-JuicerFpsLimits)
         Write-Host ''
         $n = 0
-        foreach ($g in $limits) { $n++; Write-Host ('  {0,2}. {1}: {2}' -f $n, $g.Exe, $(if ($g.Fps) { "$($g.Fps) FPS" } else { 'sin límite ahora' })) }
-        if ($n -eq 0) { Write-Host '  Ningún juego limitado todavía.' -ForegroundColor DarkGray }
+        foreach ($g in $limits) {
+            $n++
+            $fps = if ($g.Exact -gt 0 -and $g.Backend -eq 'rtss') { '{0:N2} FPS' -f $g.Exact } elseif ($g.Fps) { "$($g.Fps) FPS" } else { 'sin ritmo ahora' }
+            Write-Host ('  {0,2}. {1}: {2}{3}' -f $n, $g.Exe, $fps, $(if ($pacer.Calibrated.ContainsKey($g.Exe)) { ' (calibrado)' } else { '' }))
+        }
+        if ($n -eq 0) { Write-Host '  Ningún juego con frame pacer todavía.' -ForegroundColor DarkGray }
+        $conflicts = @(Get-JuicerPacerConflicts (& (Get-JuicerBackend).PacerState) (Get-JuicerFpsBackend) $limits $m)
+        if ($conflicts.Count -gt 0) { Write-Host ''; Write-JuicerFindings $conflicts }
         Write-Host ''
         Write-JuicerMenu @(
-            @('A', 'Añadir un juego', 'por nombre del .exe, con el límite recomendado o el tuyo'),
+            @('A', 'Añadir un juego', 'por nombre del .exe, con el ritmo recomendado o el tuyo'),
             @('M', 'Añadir los juegos medidos', (@(Get-JuicerUnlimitedGames) -join ', ')),
-            @('Q', 'Quitar un límite', 'por número'),
+            @('C', 'Calibrar un juego', 'lo mide 60 s con su ritmo y lo ajusta a lo que sostiene'),
+            @('Q', 'Quitar el frame pacer a un juego', 'por número'),
             @('U', 'Cómo usas tu monitor', 'VRR, ELMB/DyAc u otro estroboscopio, o frecuencia fija'),
-            @('R', 'Recalcular los límites', 'con el modo y la frecuencia de ahora')
+            @('E', 'Motor', "ahora: $($pacer.Engine); con estrobo, RivaTuner admite décimas"),
+            @('O', 'Olvidar las calibraciones', 'volver al ritmo recomendado'),
+            @('R', 'Recalcular los ritmos', 'con el modo y la frecuencia de ahora')
         )
         switch ((Read-JuicerChoice 'Elige, Intro para volver').ToUpperInvariant()) {
             'A' {
@@ -619,6 +629,20 @@ function Show-JuicerLimiter {
                 Show-JuicerResults @(Add-JuicerFpsLimit $exe $fps)
             }
             'M' { Show-JuicerResults @(foreach ($g in @(Get-JuicerUnlimitedGames)) { Add-JuicerFpsLimit $g }) }
+            'C' {
+                $q = Read-JuicerChoice 'Número del juego'
+                if (-not ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count)) { continue }
+                Write-JuicerWrapped 'Abre el juego y prepara una escena exigente que puedas repetir. Tienes 10 segundos para volver al juego; juega con normalidad 60 segundos.' 2 'Gray'
+                try {
+                    $f = @(Invoke-JuicerPacerCalibration -Exe $limits[[int]$q - 1].Exe -OnStatus ${function:Write-JuicerStatusLine} -Monitor $m)
+                    Write-Host ''
+                    Write-JuicerFindings $f
+                } catch {
+                    Write-Host ''
+                    Write-JuicerWrapped "No se pudo calibrar: $_" 2 'Yellow'
+                }
+                Wait-JuicerKey
+            }
             'Q' {
                 $q = Read-JuicerChoice 'Número'
                 if ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count) { Show-JuicerResults @(Undo-JuicerTweak $limits[[int]$q - 1].Id) }
@@ -632,9 +656,21 @@ function Show-JuicerLimiter {
                 $q = Read-JuicerChoice 'Número'
                 if ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $keys.Count) {
                     [void](Set-JuicerMonitorMode $m $keys[[int]$q - 1])
-                    if ($limits.Count -gt 0 -and (Confirm-JuicerAction '¿Recalcular con este modo los límites que ya tienes?')) { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
+                    if ($limits.Count -gt 0 -and (Confirm-JuicerAction '¿Recalcular con este modo el ritmo de los juegos que ya lo tienen?')) { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
                 }
             }
+            'E' {
+                $engines = @(Get-JuicerPacerEngines)
+                Write-Host ''
+                Write-Host '  1. Automático (el driver si hay NVIDIA)'
+                Write-Host ('  2. Driver de NVIDIA{0}' -f $(if ($engines -notcontains 'nvidia') { ' (no disponible)' } else { '' }))
+                Write-Host ('  3. RivaTuner, admite décimas{0}' -f $(if ($engines -notcontains 'rtss') { ' (no instalado)' } else { '' }))
+                $q = Read-JuicerChoice 'Número'
+                $e = @{ '1' = 'Auto'; '2' = 'nvidia'; '3' = 'rtss' }[$q]
+                if (-not $e) { continue }
+                try { Show-JuicerResults @(Set-JuicerPacerEngine $e $m) } catch { Write-JuicerWrapped "$_" 2 'Yellow'; Wait-JuicerKey }
+            }
+            'O' { Clear-JuicerPacerCalibration; Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             'R' { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             '' { return }
         }
@@ -1157,6 +1193,8 @@ function Start-Juicer {
         [int]$MedirJuego,
         [string]$Juego,
         [string[]]$LimitarFps = @(),
+        [string]$CalibrarJuego,
+        [ValidateSet('', 'Auto', 'nvidia', 'rtss')][string]$MotorPacer = '',
         [switch]$Juegos,
         [switch]$OptimizarJuegos,
         [switch]$Mantener,
@@ -1187,7 +1225,7 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     # The protected copy the sign-in task runs follows this version.
@@ -1231,7 +1269,7 @@ function Start-Juicer {
             Write-Host '  No se pudo leer el monitor para guardar cómo lo usas.' -ForegroundColor Yellow
             return 1
         }
-        if ($LimitarFps.Count -eq 0) { return 0 }
+        if ($LimitarFps.Count -eq 0 -and -not $CalibrarJuego -and -not $MotorPacer) { return 0 }
     }
     if ($Mantener) {
         $r = @(Invoke-JuicerUpkeep)
@@ -1248,6 +1286,28 @@ function Start-Juicer {
         }
         Write-JuicerGameList $games
         return 0
+    }
+    if ($MotorPacer) {
+        try {
+            $results = @(Set-JuicerPacerEngine $MotorPacer $monitor)
+        } catch {
+            Write-Host "  $_" -ForegroundColor Yellow
+            return 1
+        }
+        Write-Host "  Motor del frame pacer: $(Format-JuicerFpsBackend (Get-JuicerFpsBackend))."
+        if ($results.Count -gt 0) { Show-JuicerResults $results }
+        if ($LimitarFps.Count -eq 0 -and -not $CalibrarJuego) { return 0 }
+    }
+    if ($CalibrarJuego) {
+        try {
+            $f = @(Invoke-JuicerPacerCalibration -Exe $CalibrarJuego -Seconds $(if ($MedirJuego) { $MedirJuego } else { 60 }) -OnStatus ${function:Write-JuicerStatusLine} -Monitor $monitor)
+            Write-Host ''
+            Write-JuicerFindings $f
+            return 0
+        } catch {
+            Write-Host "  No se pudo calibrar: $_" -ForegroundColor Yellow
+            return 1
+        }
     }
     if ($LimitarFps.Count -gt 0) {
         if ($Fps -and ($Fps -lt 20 -or $Fps -gt 1000)) { Write-Host '  -Fps va de 20 a 1000.' -ForegroundColor Yellow; return 2 }

@@ -120,7 +120,7 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         Write-Host "    $($f[0].Title)"
     }
 
-    It 'lee los monitores y sabe qué limitador de FPS hay' {
+    It 'lee los monitores y con qué marca el ritmo el frame pacer' {
         $m = @(Get-JuicerMonitors)
         foreach ($x in $m) { Write-Host "    $(if ($x.Info) { Format-JuicerMonitor $x } else { $x.Display.Monitor + ' (sin EDID)' })" }
         { Get-JuicerMonitorFindings $m 'NVIDIA' } | Should -Not -Throw
@@ -129,7 +129,15 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         [WinJuicer.NvDrs]::ApplicationVersion | Should -Be 0x4500C
         # The runner has no NVIDIA driver: it must say so, not fail.
         { Get-JuicerFpsBackend } | Should -Not -Throw
-        Write-Host "    Limitador: '$(Get-JuicerFpsBackend)'"
+        Write-Host "    Frame pacer: '$(Get-JuicerFpsBackend)'"
+        # The real refresh rate, from QueryDisplayConfig, next to Windows' round one.
+        foreach ($d in @(Get-JuicerDisplays)) {
+            Write-Host "    $($d.Device): $($d.Hz) Hz, $($d.ExactHz) Hz reales"
+            [Math]::Abs($d.ExactHz - $d.Hz) | Should -BeLessThan 1
+        }
+        { Get-JuicerPacerConflictsHere } | Should -Not -Throw
+        $s = & (Get-JuicerBackend).PacerState
+        $s.Keys | Should -Contain 'RtssGames'
     }
 
     It 'apunta el ajuste fino y crea y quita la tarea que lo vigila' {

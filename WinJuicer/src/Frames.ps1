@@ -95,6 +95,22 @@ function Get-JuicerPercentile {
 # percentile frame time: the slowest 1 % and 0.1 % of frames, which is what
 # a stutter feels like. A stutter is a frame that takes twice the median and
 # at least 8 ms more.
+#
+# And how even the pace is, which is what the frame pacer is judged by:
+# Steady, the share of frames within 4 % (at least 0.3 ms) of the median;
+# JitterMs, how much one frame time differs from the next, on average;
+# WorkMs95, the 95th percentile of the time the processor or the graphics
+# card was actually busy on a frame (the rest of the frame time is the cap
+# waiting), so under a cap it tells how much faster the game could go; and
+# AnimErrorMs, how far the motion shown strays from the time it took.
+#
+# And latency, which a cap can lower or raise: InputLatency, the median time
+# from a keyboard or mouse event to the frame that shows it reaching the
+# screen (PresentMon's AllInputToPhotonLatency, measured in software);
+# LatencyP95, the slow end of start-of-frame-to-display; GpuMs95, the 95th
+# percentile of GPU busy time; and QueueMs, how long a frame waited after the
+# processor was done with it before the graphics card started on it, the
+# median of GPULatency − CPUBusy: the render queue, which is pure latency.
 function Measure-JuicerFrames {
     param([object[]]$Rows)
     $rows = @($Rows)
@@ -104,6 +120,15 @@ function Measure-JuicerFrames {
     if (-not $ftCol) { return $null }
     $gpuCol = Get-JuicerFrameColumn $cols 'GPUBusy', 'MsGPUBusy'
     $latCol = Get-JuicerFrameColumn $cols 'DisplayLatency', 'MsDisplayLatency', 'MsUntilDisplayed'
+    $cpuCol = Get-JuicerFrameColumn $cols 'CPUBusy', 'MsCPUBusy'
+    $animCol = Get-JuicerFrameColumn $cols 'AnimationError', 'MsAnimationError'
+    $inputCol = Get-JuicerFrameColumn $cols 'AllInputToPhotonLatency', 'MsAllInputToPhotonLatency'
+    $gpuLatCol = Get-JuicerFrameColumn $cols 'GPULatency', 'MsGPULatency'
+    $work = New-Object System.Collections.Generic.List[double]
+    $anim = New-Object System.Collections.Generic.List[double]
+    $gpuMs = New-Object System.Collections.Generic.List[double]
+    $inputLat = New-Object System.Collections.Generic.List[double]
+    $queue = New-Object System.Collections.Generic.List[double]
 
     $ft = New-Object System.Collections.Generic.List[double]
     $gpuBound = 0; $gpuKnown = 0; $tearing = 0; $vsync = 0; $generated = 0
@@ -113,11 +138,22 @@ function Measure-JuicerFrames {
         $t = ConvertTo-JuicerNumber $r.$ftCol
         if ($null -eq $t -or $t -le 0) { continue }
         $ft.Add($t)
+        $g = $null
         if ($gpuCol) {
             $g = ConvertTo-JuicerNumber $r.$gpuCol
-            if ($null -ne $g) { $gpuKnown++; if ($g -ge 0.85 * $t) { $gpuBound++ } }
+            if ($null -ne $g) { $gpuKnown++; $gpuMs.Add($g); if ($g -ge 0.85 * $t) { $gpuBound++ } }
         }
+        $c = if ($cpuCol) { ConvertTo-JuicerNumber $r.$cpuCol }
+        if ($null -ne $c -and $null -ne $g) { $work.Add([Math]::Max($c, $g)) }
+        if ($gpuLatCol -and $null -ne $c) {
+            $gl = ConvertTo-JuicerNumber $r.$gpuLatCol
+            if ($null -ne $gl) { $queue.Add([Math]::Max(0, $gl - $c)) }
+        }
+        # NA on frames without input, which are most.
+        if ($inputCol) { $il = ConvertTo-JuicerNumber $r.$inputCol; if ($null -ne $il -and $il -gt 0) { $inputLat.Add($il) } }
+        if ($animCol) { $a = ConvertTo-JuicerNumber $r.$animCol; if ($null -ne $a) { $anim.Add([Math]::Abs($a)) } }
         if ($latCol) { $l = ConvertTo-JuicerNumber $r.$latCol; if ($null -ne $l -and $l -gt 0) { $latency.Add($l) } }
+
         if ([string]$r.AllowsTearing -eq '1') { $tearing++ }
         if ((ConvertTo-JuicerNumber $r.SyncInterval) -ge 1) { $vsync++ }
         if ($r.PSObject.Properties['FrameType'] -and $r.FrameType -and $r.FrameType -notin 'Application', 'NA', '') { $generated++ }
@@ -132,13 +168,30 @@ function Measure-JuicerFrames {
     $stutters = 0
     foreach ($t in $ft) { if ($t -ge 2 * $median -and $t -ge $median + 8) { $stutters++ } }
     $p90 = Get-JuicerPercentile $sorted 0.9
+    $p95 = Get-JuicerPercentile $sorted 0.95
+    $tol = [Math]::Max(0.3, 0.04 * $median)
+    $steady = 0; $jitter = 0.0
+    for ($i = 0; $i -lt $n; $i++) {
+        if ([Math]::Abs($ft[$i] - $median) -le $tol) { $steady++ }
+        if ($i -gt 0) { $jitter += [Math]::Abs($ft[$i] - $ft[$i - 1]) }
+    }
+    $workP95 = if ($work.Count -ge 20) { Get-JuicerPercentile ([double[]]($work.ToArray() | Sort-Object)) 0.95 } else { $null }
+    $pick = {
+        param($List, [double]$Q, [int]$Min = 20)
+        if ($List.Count -lt $Min) { return $null }
+        [Math]::Round((Get-JuicerPercentile ([double[]]($List.ToArray() | Sort-Object)) $Q), 2)
+    }
     $p99 = Get-JuicerPercentile $sorted 0.99
     $p999 = Get-JuicerPercentile $sorted 0.999
     $mode = if ($modes.Count -gt 0) { @($modes.GetEnumerator() | Sort-Object Value -Descending)[0].Key } else { '' }
     @{
         Application = [string]$rows[0].Application; Frames = $n; Seconds = [Math]::Round($total / 1000, 1)
         AvgFps = [Math]::Round(1000 * $n / $total, 1); Low1 = [Math]::Round(1000 / $p99, 1); Low01 = [Math]::Round(1000 / $p999, 1); Fps90 = [Math]::Round(1000 / $p90, 1)
-        MedianMs = [Math]::Round($median, 2); P99Ms = [Math]::Round($p99, 2); Stutters = $stutters
+        MedianMs = [Math]::Round($median, 2); P95Ms = [Math]::Round($p95, 2); P99Ms = [Math]::Round($p99, 2); Stutters = $stutters
+        Fps95 = [Math]::Round(1000 / $p95, 1); Steady = [Math]::Round(100 * $steady / $n); JitterMs = [Math]::Round($jitter / ($n - 1), 2)
+        WorkMs95 = $(if ($null -ne $workP95) { [Math]::Round($workP95, 2) } else { $null })
+        GpuMs95 = (& $pick $gpuMs 0.95); QueueMs = (& $pick $queue 0.5); InputLatency = (& $pick $inputLat 0.5 10); LatencyP95 = (& $pick $latency 0.95)
+        AnimErrorMs = $(if ($anim.Count -gt 0) { $s = 0.0; foreach ($a in $anim) { $s += $a }; [Math]::Round($s / $anim.Count, 2) } else { $null })
         GpuBound = $(if ($gpuKnown -gt 0) { [Math]::Round(100 * $gpuBound / $gpuKnown) } else { $null })
         Latency = $(if ($latency.Count -gt 0) { $s = 0.0; foreach ($l in $latency) { $s += $l }; [Math]::Round($s / $latency.Count, 1) } else { $null })
         Tearing = [Math]::Round(100 * $tearing / $n); VSync = [Math]::Round(100 * $vsync / $n); Generated = [Math]::Round(100 * $generated / $n)
@@ -197,13 +250,13 @@ function Get-JuicerFrameFindings {
     param([Parameter(Mandatory)][hashtable]$Result, [hashtable]$Previous, [int]$RefreshHz, [object[]]$Hogs = @(), [hashtable]$Gpu)
     $area = "Juego: $($Result.Application)"
     $out = @()
-    $out += New-JuicerFinding $area 'Info' ('Media {0:N0} FPS · 1 % bajo {1:N0} · 0,1 % bajo {2:N0}' -f $Result.AvgFps, $Result.Low1, $Result.Low01) ('{0:N0} fotogramas en {1:N0} s. Frametime mediano {2:N1} ms; el 1 % más lento, {3:N1} ms o más.{4}' -f $Result.Frames, $Result.Seconds, $Result.MedianMs, $Result.P99Ms, $(if ($null -ne $Result.Latency) { " Latencia hasta pantalla: $($Result.Latency) ms de media." } else { '' }))
+    $out += New-JuicerFinding $area 'Info' ('Media {0:N0} FPS · 1 % bajo {1:N0} · 0,1 % bajo {2:N0}' -f $Result.AvgFps, $Result.Low1, $Result.Low01) ('{0:N0} fotogramas en {1:N0} s. Frametime mediano {2:N1} ms; el 1 % más lento, {3:N1} ms o más.{4}' -f $Result.Frames, $Result.Seconds, $Result.MedianMs, $Result.P99Ms, ($(if ($null -ne $Result.Latency) { " Latencia hasta pantalla: $($Result.Latency) ms de media." } else { '' }) + $(if ($null -ne $Result.InputLatency) { " De ratón o teclado a pantalla: $($Result.InputLatency) ms (mediana)." } else { '' })))
 
     if ($Previous) {
         $d = if ($Previous.AvgFps -gt 0) { 100 * ($Result.AvgFps - $Previous.AvgFps) / $Previous.AvgFps } else { 0 }
         $dl = if ($Previous.Low1 -gt 0) { 100 * ($Result.Low1 - $Previous.Low1) / $Previous.Low1 } else { 0 }
         $sev = if ($d -ge 3 -or $dl -ge 5) { 'Ok' } elseif ($d -le -3 -or $dl -le -5) { 'Bajo' } else { 'Info' }
-        $out += New-JuicerFinding $area $sev ('Respecto al {0}: media {1:N0} → {2:N0} FPS ({3:+0;-0} %), 1 % bajo {4:N0} → {5:N0} ({6:+0;-0} %)' -f ([datetime]$Previous.Date).ToString('d'), $Previous.AvgFps, $Result.AvgFps, $d, $Previous.Low1, $Result.Low1, $dl) ($(if ($Previous.Latency -and $Result.Latency) { 'Latencia hasta pantalla: {0} → {1} ms. ' -f $Previous.Latency, $Result.Latency } else { '' }) + 'Sólo vale si mediste la misma escena con los mismos ajustes del juego; menos de un 3 % es ruido.')
+        $out += New-JuicerFinding $area $sev ('Respecto al {0}: media {1:N0} → {2:N0} FPS ({3:+0;-0} %), 1 % bajo {4:N0} → {5:N0} ({6:+0;-0} %)' -f ([datetime]$Previous.Date).ToString('d'), $Previous.AvgFps, $Result.AvgFps, $d, $Previous.Low1, $Result.Low1, $dl) ($(if ($Previous.Latency -and $Result.Latency) { 'Latencia hasta pantalla: {0} → {1} ms. ' -f $Previous.Latency, $Result.Latency } else { '' }) + $(if ($Previous.InputLatency -and $Result.InputLatency) { 'De ratón o teclado a pantalla: {0} → {1} ms. ' -f $Previous.InputLatency, $Result.InputLatency } else { '' }) + 'Sólo vale si mediste la misma escena con los mismos ajustes del juego; menos de un 3 % es ruido.')
     }
 
     # Pacing: how far the slow frames are from the average.
@@ -361,8 +414,12 @@ function Invoke-JuicerFrameCapture {
             $cap = Get-JuicerRecommendedFps $result.Application
             if ($cap) {
                 $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq ([string]$result.Application).ToLowerInvariant() })
-                $state = if ($now.Count -gt 0 -and $now[0].Fps) { " Ahora está limitado a $($now[0].Fps)." } else { ' Añádelo en Juegos > Limitador de FPS y se aplicará solo cada vez que lo abras.' }
-                New-JuicerFinding "Juego: $($result.Application)" 'Info' "Límite recomendado para este juego: $($cap.Fps) FPS" ($cap.Why + $state)
+                if ($now.Count -gt 0 -and $now[0].Fps) {
+                    # Under the frame pacer: how well it holds the pace.
+                    Get-JuicerPacerFindings $result ([int]$now[0].Fps) ([double]$now[0].Exact)
+                } else {
+                    New-JuicerFinding "Juego: $($result.Application)" 'Info' "Ritmo recomendado para este juego: $($cap.Fps) FPS" ($cap.Why + ' Añádelo en Juegos > Frame pacer y se aplicará solo cada vez que lo abras.')
+                }
             }
         } catch {
             Write-JuicerLog "Sin límite recomendado: $_"

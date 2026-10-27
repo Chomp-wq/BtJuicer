@@ -1,6 +1,6 @@
 ﻿# Keeping games optimized with Win Juicer closed. At every sign-in a task
 # optimizes the games installed since the last time and, if the monitor, its
-# refresh rate or how it is used changed, recalculates the FPS limits.
+# refresh rate or how it is used changed, recalculates the frame pacer.
 #
 # Writing NVIDIA's driver profiles needs an administrator, so the task runs
 # elevated. That is only safe if what it runs cannot be changed by anyone
@@ -67,7 +67,7 @@ function Invoke-JuicerUpkeep {
     $ok = @($results | Where-Object { $_.Outcome -eq 'Aplicado' })
     $msg = @()
     if ($plan.New.Count -gt 0) { $msg += 'Juegos nuevos optimizados: ' + (($plan.New | ForEach-Object { $_.Name }) -join ', ') + '.' }
-    if ($plan.Recalc) { $msg += 'Ha cambiado tu monitor o cómo lo usas: límites de FPS recalculados.' }
+    if ($plan.Recalc) { $msg += 'Ha cambiado tu monitor o cómo lo usas: frame pacer recalculado.' }
     Write-JuicerLog ('Mantener: {0} nuevos, recalcular {1}, {2} cambios' -f $plan.New.Count, $plan.Recalc, $ok.Count)
     if ($msg.Count -gt 0 -and -not $Quiet) { Show-JuicerToast ($msg -join ' ') }
     $results
@@ -128,7 +128,7 @@ function Register-JuicerUpkeep {
     $trigger.Delay = 'PT2M'
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
-    Register-ScheduledTask -TaskName $script:UpkeepTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Optimiza los juegos nuevos y recalcula los límites de FPS si cambia el monitor (Win Juicer).' -Force | Out-Null
+    Register-ScheduledTask -TaskName $script:UpkeepTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Optimiza los juegos nuevos y recalcula el frame pacer si cambia el monitor (Win Juicer).' -Force | Out-Null
     Write-JuicerLog "Mantenimiento de juegos activado: $dir"
 }
 

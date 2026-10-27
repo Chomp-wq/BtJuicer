@@ -22,7 +22,7 @@ $script:GameTips = @(
     @{ P = '^cyberpunk2077\.exe$'; Name = 'Cyberpunk 2077'; Reflex = $true }
     @{ P = '^ghostoftsushima\.exe$'; Name = 'Ghost of Tsushima'; Reflex = $true; AntiLag2 = $true }
     @{ P = '^eldenring\.exe$'; Name = 'Elden Ring'; Cap60 = $true; Notes = 'El propio juego no pasa de 60 FPS: con una pantalla de más Hz, la frecuencia variable es lo que evita los tirones.' }
-    @{ P = '^league of legends\.exe$'; Name = 'League of Legends'; Notes = 'No tiene Reflex: su limitador de FPS propio, si lo usas, a la misma cifra que el de Win Juicer.' }
+    @{ P = '^league of legends\.exe$'; Name = 'League of Legends'; Notes = 'No tiene Reflex: su limitador de FPS propio, si lo usas, a la misma cifra que el frame pacer de Win Juicer.' }
     @{ P = '^rocketleague\.exe$'; Name = 'Rocket League' }
 )
 
@@ -47,7 +47,7 @@ function Get-JuicerGameTips {
     if ($GpuVendor -eq 'NVIDIA') {
         if ($tip -and $tip.Reflex) {
             $boost = if ($cpuBound) { '«Activado + Boost»: tu medida dice que el procesador limita, y Boost mantiene la gráfica a tope de frecuencia para que no pierda tiempo' } else { '«Activado» (o «Activado + Boost» si notas que el procesador limita)' }
-            $out += New-JuicerFinding $area 'Info' 'NVIDIA Reflex: actívalo' "En las opciones de vídeo, NVIDIA Reflex Low Latency $boost. Con Reflex activo, el límite de FPS del driver que pone Win Juicer se aplica a través de él, y el «Modo de baja latencia» del panel deja de importar."
+            $out += New-JuicerFinding $area 'Info' 'NVIDIA Reflex: actívalo' "En las opciones de vídeo, NVIDIA Reflex Low Latency $boost. Con Reflex activo, el ritmo del frame pacer de Win Juicer (en el driver) se aplica a través de él, y el «Modo de baja latencia» del panel deja de importar."
         } elseif (-not $tip) {
             $out += New-JuicerFinding $area 'Info' 'Si tiene NVIDIA Reflex, actívalo' 'Búscalo en las opciones de vídeo o gráficos: es la mayor reducción de latencia que hay. Si no lo tiene, el modo de baja latencia que Win Juicer pone en su perfil hace ese papel.'
         }
@@ -77,7 +77,7 @@ function Get-JuicerGameTips {
     } elseif ($GpuVendor -eq 'NVIDIA' -and $tip -and $tip.Reflex) {
         $out += New-JuicerFinding $area 'Info' 'El limitador de FPS del juego: desactivado' 'El del driver ya va a través de Reflex con la menor latencia; dos limitadores con cifras distintas sólo suman irregularidad.'
     } else {
-        $out += New-JuicerFinding $area 'Info' 'El limitador de FPS del juego: el suyo o el de Win Juicer, no los dos' 'Si el juego tiene limitador propio, puedes usarlo a la misma cifra en lugar del de Win Juicer: suele dar algo menos de latencia, y el de Win Juicer frametimes más planos. Nunca los dos con cifras distintas.'
+        $out += New-JuicerFinding $area 'Info' 'El limitador de FPS del juego: el suyo o el de Win Juicer, no los dos' 'Si el juego tiene limitador propio, puedes usarlo a la misma cifra en lugar del frame pacer de Win Juicer: suele dar algo menos de latencia, y el frame pacer frametimes más planos. Nunca los dos con cifras distintas.'
     }
     $out += New-JuicerFinding $area 'Info' 'Pantalla completa, o sin bordes con la optimización de Windows' 'Pantalla completa, o «ventana sin bordes» con «Optimizaciones para juegos en ventana» (Win Juicer la activa en Ajustes): así el juego presenta directo a la pantalla, sin pasar por el escritorio.'
 

@@ -433,16 +433,32 @@ function Get-WinRtssDir {
     $null
 }
 
-function Get-WinFpsBackend {
-    if ($null -eq $script:FpsBackendName) {
-        $script:FpsBackendName = ''
+$script:NvApiOk = $null
+
+function Test-WinNvApi {
+    if ($null -eq $script:NvApiOk) {
+        $script:NvApiOk = $false
         try {
             Initialize-JuicerNvApi
-            if ([WinJuicer.NvDrs]::Available()) { $script:FpsBackendName = 'nvidia' }
+            $script:NvApiOk = [WinJuicer.NvDrs]::Available()
         } catch {
             Write-JuicerLog "NVAPI no disponible: $_"
         }
-        if (-not $script:FpsBackendName -and (Get-WinRtssDir)) { $script:FpsBackendName = 'rtss' }
+    }
+    $script:NvApiOk
+}
+
+function Get-WinFpsEngines {
+    @(if (Test-WinNvApi) { 'nvidia' }; if (Get-WinRtssDir) { 'rtss' })
+}
+
+# The driver's when there is one, RivaTuner otherwise, unless the frame
+# pacer was told to use one of them (and it is there).
+function Get-WinFpsBackend {
+    if ($null -eq $script:FpsBackendName) {
+        $engines = @(Get-WinFpsEngines)
+        $want = Get-JuicerPacerEngine
+        $script:FpsBackendName = if ($engines -contains $want) { $want } elseif ($engines.Count -gt 0) { $engines[0] } else { '' }
     }
     $script:FpsBackendName
 }
@@ -450,17 +466,19 @@ function Get-WinFpsBackend {
 function Get-WinRtssProfile { param([string]$Exe) Join-Path (Join-Path (Get-WinRtssDir) 'Profiles') "$Exe.cfg" }
 
 function Read-WinFpsLimit {
-    param([string]$Exe)
-    switch (Get-WinFpsBackend) {
+    param([string]$Exe, [string]$Backend)
+    switch ($(if ($Backend) { $Backend } else { Get-WinFpsBackend })) {
         'nvidia' {
+            if (-not (Test-WinNvApi)) { return $null }
             $v = [WinJuicer.NvDrs]::GetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId)
             return @{ Backend = 'nvidia'; Fps = $(if ($v -gt 0) { $v } else { $null }); Existed = ($v -ge 0) }
         }
         'rtss' {
+            if (-not (Get-WinRtssDir)) { return $null }
             $f = Get-WinRtssProfile $Exe
             if (-not (Test-Path -LiteralPath $f)) { return @{ Backend = 'rtss'; Fps = $null; Existed = $false } }
-            $v = Get-JuicerIniValue ([IO.File]::ReadAllLines($f)) 'Framerate' 'Limit'
-            return @{ Backend = 'rtss'; Fps = $(if ([int]$v -gt 0) { [int]$v } else { $null }); Existed = $true }
+            $v = Get-JuicerRtssLimit ([IO.File]::ReadAllLines($f))
+            return @{ Backend = 'rtss'; Fps = $(if ($v -gt 0) { [int][Math]::Round($v) } else { $null }); Exact = $v; Existed = $true }
         }
     }
     $null
@@ -468,8 +486,10 @@ function Read-WinFpsLimit {
 
 # Fps 0 or null takes the limit away. For RTSS, a new profile starts as a
 # copy of the Global one, as RTSS itself does; Remove deletes it again.
+# Exact, RTSS only: a fractional cap (179.95), for which the driver's
+# whole numbers are not enough.
 function Set-WinFpsLimit {
-    param([string]$Exe, $Fps, [string]$Backend, [switch]$Remove)
+    param([string]$Exe, $Fps, [string]$Backend, [switch]$Remove, [double]$Exact = 0)
     $n = if ($Fps) { [int]$Fps } else { 0 }
     switch ($Backend) {
         'nvidia' { Initialize-JuicerNvApi; [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } else { -1 })) }
@@ -480,17 +500,45 @@ function Set-WinFpsLimit {
                 $global = Join-Path (Split-Path -Parent $f) 'Global'
                 if (Test-Path -LiteralPath $global) { [IO.File]::ReadAllLines($global) } else { @() }
             }
-            [IO.File]::WriteAllLines($f, [string[]](Set-JuicerIniValue $lines 'Framerate' 'Limit' "$n"), (New-Object Text.ASCIIEncoding))
+            [IO.File]::WriteAllLines($f, [string[]](Set-JuicerRtssLimit $lines $n $Exact), (New-Object Text.ASCIIEncoding))
         }
-        default { throw 'No hay limitador de FPS: hace falta una gráfica NVIDIA o RivaTuner Statistics Server.' }
+        default { throw 'El frame pacer necesita una gráfica NVIDIA o RivaTuner Statistics Server.' }
     }
+}
+
+# Whatever else limits frames on this PC, for the frame pacer to warn of
+# two limiters at once: RTSS's Global profile and the games it limits, and
+# the global frame limit of NVIDIA's control panel.
+function Get-WinPacerState {
+    $s = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0 }
+    $dir = Get-WinRtssDir
+    if ($dir) {
+        $s.RtssInstalled = $true
+        $s.RtssRunning = $null -ne (Get-Process -Name 'RTSS' -ErrorAction SilentlyContinue)
+        $profiles = Join-Path $dir 'Profiles'
+        $global = Join-Path $profiles 'Global'
+        if (Test-Path -LiteralPath $global) { $s.RtssGlobal = Get-JuicerRtssLimit ([IO.File]::ReadAllLines($global)) }
+        foreach ($f in @(Get-ChildItem -LiteralPath $profiles -Filter '*.exe.cfg' -File -ErrorAction SilentlyContinue)) {
+            $v = Get-JuicerRtssLimit ([IO.File]::ReadAllLines($f.FullName))
+            if ($v -gt 0) { $s.RtssGames[$f.Name.Substring(0, $f.Name.Length - 4).ToLowerInvariant()] = $v }
+        }
+    }
+    if (Test-WinNvApi) {
+        try {
+            $v = [WinJuicer.NvDrs]::GetGlobalDword([WinJuicer.NvDrs]::FrameRateLimiterId)
+            if ($v -gt 0) { $s.NvGlobal = [int]$v }
+        } catch {
+            Write-JuicerLog "No se pudo leer el perfil global de NVIDIA: $_"
+        }
+    }
+    $s
 }
 
 # Any other DWORD of a program's NVIDIA profile: @{ Value } with null when
 # the user has none.
 function Read-WinNvSetting {
     param([string]$Exe, [uint32]$Id)
-    if ((Get-WinFpsBackend) -ne 'nvidia') { return $null }
+    if (-not (Test-WinNvApi)) { return $null }
     $v = [WinJuicer.NvDrs]::GetDword($Exe, $Id)
     @{ Value = $(if ($v -ge 0) { [uint32]$v } else { $null }) }
 }
@@ -532,10 +580,13 @@ function New-JuicerWindowsBackend {
         FeatRead     = ${function:Read-WinFeature}
         FeatSet      = ${function:Set-WinFeature}
         FpsBackend   = ${function:Get-WinFpsBackend}
+        FpsEngines   = ${function:Get-WinFpsEngines}
+        FpsReset     = { $script:FpsBackendName = $null }
         FpsRead      = ${function:Read-WinFpsLimit}
         FpsWrite     = ${function:Set-WinFpsLimit}
         NvRead       = ${function:Read-WinNvSetting}
         NvWrite      = ${function:Set-WinNvSetting}
+        PacerState   = ${function:Get-WinPacerState}
     }
 }
 
@@ -563,6 +614,9 @@ function New-JuicerMemoryBackend {
         FpsBackend = ''   # 'nvidia', 'rtss' or '' for none
         FpsLimits = @{}   # exe -> fps; an entry with 0 is a profile without a limit
         NvSettings = @{}  # 'exe|id' -> value, the user values of NVIDIA profiles
+        FpsExact = @{}    # exe -> fractional cap (RTSS)
+        FpsEngines = $null  # engines the PC has; null = just FpsBackend
+        Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0 }
         Calls    = New-Object System.Collections.ArrayList
         Run      = $Run
     }
@@ -638,22 +692,32 @@ function New-JuicerMemoryBackend {
             @{ Enabled = $f.Enabled }
         }
         FeatSet     = { param($Name, $Enabled) $script:Mem.Features[$Name].Enabled = [bool]$Enabled }
-        FpsBackend  = { $script:Mem.FpsBackend }
+        # FpsBackend is the engine in use; FpsEngines, what the PC has
+        # (by default just that one), to switch between them.
+        FpsBackend  = {
+            $all = @(if ($null -ne $script:Mem.FpsEngines) { $script:Mem.FpsEngines } elseif ($script:Mem.FpsBackend) { $script:Mem.FpsBackend })
+            $want = Get-JuicerPacerEngine
+            if ($all -contains $want) { $want } else { $script:Mem.FpsBackend }
+        }
+        FpsEngines  = { @(if ($null -ne $script:Mem.FpsEngines) { $script:Mem.FpsEngines } elseif ($script:Mem.FpsBackend) { $script:Mem.FpsBackend }) }
+        FpsReset    = { }
         FpsRead     = {
-            param($Exe)
-            if (-not $script:Mem.FpsBackend) { return $null }
+            param($Exe, $Backend)
+            $by = if ($Backend) { $Backend } else { & (Get-JuicerBackend).FpsBackend }
+            if (-not $by -or @(& (Get-JuicerBackend).FpsEngines) -notcontains $by) { return $null }
             $has = $script:Mem.FpsLimits.ContainsKey($Exe)
             $v = if ($has) { [int]$script:Mem.FpsLimits[$Exe] } else { 0 }
-            @{ Backend = $script:Mem.FpsBackend; Fps = $(if ($v -gt 0) { $v } else { $null }); Existed = $has }
+            @{ Backend = $by; Fps = $(if ($v -gt 0) { $v } else { $null }); Exact = [double]$script:Mem.FpsExact[$Exe]; Existed = $has }
         }
         FpsWrite    = {
-            param($Exe, $Fps, $Backend, [switch]$Remove)
-            if ($Backend -ne $script:Mem.FpsBackend) { throw "Limitador $Backend no disponible" }
+            param($Exe, $Fps, $Backend, [switch]$Remove, [double]$Exact = 0)
+            if (@(& (Get-JuicerBackend).FpsEngines) -notcontains $Backend) { throw "Motor del frame pacer $Backend no disponible" }
             if ($Remove) { $script:Mem.FpsLimits.Remove($Exe) } else { $script:Mem.FpsLimits[$Exe] = $(if ($Fps) { [int]$Fps } else { 0 }) }
+            if ($Exact -gt 0 -and $Backend -eq 'rtss' -and -not $Remove) { $script:Mem.FpsExact[$Exe] = $Exact } else { $script:Mem.FpsExact.Remove($Exe) }
         }
         NvRead      = {
             param($Exe, $Id)
-            if ($script:Mem.FpsBackend -ne 'nvidia') { return $null }
+            if (@(& (Get-JuicerBackend).FpsEngines) -notcontains 'nvidia') { return $null }
             $k = '{0}|{1}' -f $Exe, [uint32]$Id
             @{ Value = $(if ($script:Mem.NvSettings.ContainsKey($k)) { [uint32]$script:Mem.NvSettings[$k] } else { $null }) }
         }
@@ -662,6 +726,7 @@ function New-JuicerMemoryBackend {
             $k = '{0}|{1}' -f $Exe, [uint32]$Id
             if ($null -eq $Value) { $script:Mem.NvSettings.Remove($k) } else { $script:Mem.NvSettings[$k] = [uint32]$Value }
         }
+        PacerState  = { $script:Mem.Pacer }
     }
 }
 

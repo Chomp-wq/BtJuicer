@@ -281,7 +281,7 @@ function Get-JuicerGameStatus {
 function Format-JuicerGameStatus {
     param([hashtable]$Game)
     $p = @()
-    if ($Game.Fps) { $p += '{0} FPS ({1:N2} ms)' -f $Game.Fps, (1000 / $Game.Fps) } elseif ($Game.Limited) { $p += 'límite quitado fuera de Win Juicer' }
+    if ($Game.Fps) { $p += '{0} FPS ({1:N2} ms)' -f $Game.Fps, (1000 / $Game.Fps) } elseif ($Game.Limited) { $p += 'frame pacer quitado fuera de Win Juicer' }
     if ($Game.Gpu) { $p += 'GPU dedicada' }
     if ($Game.Priority) { $p += 'prioridad alta' }
     if ($p.Count -eq 0) { 'sin configurar' } else { $p -join ' · ' }
