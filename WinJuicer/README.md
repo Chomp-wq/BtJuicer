@@ -359,6 +359,9 @@ segundos. Al acabar dice:
 - **Media, 1 % bajo y 0,1 % bajo** (los FPS del 1 % y el 0,1 % de fotogramas
   más lentos: lo que se siente como tirón), el frametime mediano y los
   **tirones por minuto**.
+- **La latencia**: del inicio de cada fotograma a la pantalla y, cuando
+  tocas el ratón o el teclado, de ahí a la pantalla (la mediana; PresentMon la
+  mide por software, sin hardware aparte). Se compara con la medida anterior.
 - **Qué limita**: si la gráfica va al máximo (para más FPS, calidad o
   DLSS/FSR/XeSS: ningún ajuste de Windows sube eso) o si **el procesador es el
   límite** y la gráfica espera (bajar gráficos no sirve; sí cerrar lo que gaste
@@ -428,9 +431,25 @@ con Win Juicer cerrado:
   trabajaron de verdad el procesador y la gráfica en cada fotograma, que es el
   margen que queda. Si va por encima del objetivo, avisa de que el frame pacer
   no está actuando (RivaTuner cerrado, otro `.exe`).
+- **La latencia, primero.** Un ritmo sólo baja la latencia si la gráfica no
+  va al límite: si va, los fotogramas esperan en cola delante de ella, y esa
+  cola es latencia pura. La medida lo ve directamente: cuánto espera cada
+  fotograma entre que el procesador lo termina y la gráfica empieza con él
+  (`GPULatency` − `CPUBusy` de PresentMon), y cuánto trabaja la gráfica de
+  cada frametime. Si hay cola, lo dice, con la latencia de entrada a pantalla,
+  y propone Reflex o Anti-Lag 2 si el juego los tiene (vacían la cola sin
+  bajar el ritmo) o el «Modo de baja latencia: Ultra» del panel de NVIDIA
+  para ese juego. Win Juicer no lo pone solo: ese ajuste no tiene un
+  identificador público.
 - **Calibrar** (un juego de la lista, o `-CalibrarJuego`): lo mide 60 segundos
   con su ritmo y lo ajusta a lo que sostiene de verdad. Si el 5 % más lento de
   los fotogramas no llega, lo baja a ese ritmo, sin salir nunca del rango VRR.
+  Si lo sostiene pero con cola delante de la gráfica, lo baja **por latencia**
+  hasta dejarle a la gráfica un 12 % de cada fotograma: menos fotogramas,
+  pero cada uno llega antes a la pantalla. A frecuencia fija sin VRR ni
+  sincronización vertical, cada fotograma de más es menos latencia, así que
+  si sobra margen lo sube a un múltiplo de los Hz (2, 3 o 4 veces, para que
+  los cortes de imagen se queden quietos).
   Si sobra trabajo de procesador y gráfica para bastante más, lo sube (hasta
   el máximo de tu monitor, dejando un 15 % de margen para los picos). Con
   estroboscopio sin VRR no baja nunca: te dice a qué frecuencia bajar el

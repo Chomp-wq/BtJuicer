@@ -753,14 +753,23 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
     BeforeAll {
         # PresentMon rows with what the pacing numbers need: frame time,
         # processor and graphics card busy time, and animation error.
+        # GpuLat, when given, adds GPULatency (CPU busy + that wait) and
+        # input latency on one frame in ten, as PresentMon writes them.
         function New-PacedRows {
-            param([double[]]$Times, [double]$Work, [string]$App = 'cs2.exe')
+            param([double[]]$Times, [double]$Work, [string]$App = 'cs2.exe', [double]$Wait = -1, [string]$Sync = '1')
             $inv = [Globalization.CultureInfo]::InvariantCulture
+            $i = 0
             foreach ($t in $Times) {
-                [pscustomobject][ordered]@{
-                    Application = $App; ProcessID = '100'; SyncInterval = '1'; AllowsTearing = '0'; PresentMode = 'Hardware: Independent Flip'
+                $o = [ordered]@{
+                    Application = $App; ProcessID = '100'; SyncInterval = $Sync; AllowsTearing = $(if ($Sync -eq '0') { '1' } else { '0' }); PresentMode = 'Hardware: Independent Flip'
                     FrameTime = $t.ToString($inv); CPUBusy = ($Work * 0.8).ToString($inv); GPUBusy = $Work.ToString($inv); AnimationError = '0.05'
                 }
+                if ($Wait -ge 0) {
+                    $o.GPULatency = ($Work * 0.8 + $Wait).ToString($inv)
+                    $o.AllInputToPhotonLatency = $(if ($i % 10 -eq 0) { (2 * $t + $Wait).ToString($inv) } else { 'NA' })
+                }
+                $i++
+                [pscustomobject]$o
             }
         }
     }
@@ -826,6 +835,51 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
         $e.Action | Should -Be 'Estrobo'
         $e.Fps | Should -Be 180
         $e.Why | Should -BeLike '*a 120 Hz*'
+    }
+
+    It 'mide la latencia: de la entrada a la pantalla y la cola delante de la gráfica' {
+        $r = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 400)) 5.7 -Wait 4.0)
+        $r.QueueMs | Should -Be 4
+        $r.GpuMs95 | Should -Be 5.7
+        $r.InputLatency | Should -Be 15.7
+        $f = @(Get-JuicerPacerFindings $r 171)
+        $q = @($f | Where-Object { $_.Title -like 'La gráfica va al límite*' })
+        $q.Count | Should -Be 1
+        $q[0].Severity | Should -Be 'Medio'
+        $q[0].Detail | Should -BeLike '*4?0 ms en cola*15?7 ms (mediana)*'
+        $calm = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 400)) 3.0 -Wait 0.2)
+        @(@(Get-JuicerPacerFindings $calm 171) | Where-Object { $_.Title -like 'Sin cola*' }).Count | Should -Be 1
+        # Without GPULatency, a graphics card busy all of every frame means a queue.
+        Test-JuicerPacerQueue @{ GpuMs95 = 5.7 } 5.85 | Should -BeTrue
+        Test-JuicerPacerQueue @{ GpuMs95 = 4.0 } 5.85 | Should -BeFalse
+        Test-JuicerPacerQueue @{} 5.85 | Should -BeFalse
+    }
+
+    It 'calibra por latencia: deja margen a la gráfica, y sin VRR ni VSync sube a un múltiplo de los Hz' {
+        $q = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 400)) 5.7 -Wait 4.0)
+        $c = Get-JuicerPacerCalibration $q 171 171 'VRR' 48
+        $c.Action | Should -Be 'Bajar'
+        $c.Fps | Should -Be 154
+        $c.Why | Should -BeLike 'Calibrado por latencia*'
+        # Strobing does not go under the refresh, even for latency.
+        $e = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.55) * 400)) 5.4 -Wait 4.0)
+        (Get-JuicerPacerCalibration $e 180 180 'Estrobo').Action | Should -Be 'Estrobo'
+        # Fixed refresh, no VSync, lots of room: up to a multiple of the refresh.
+        $fx = Measure-JuicerFrames @(New-PacedRows ([double[]](@(16.67) * 400)) 4.0 -Wait 0.1 -Sync '0')
+        $u = Get-JuicerPacerCalibration $fx 60 60 'Fijo' 0 @() 60
+        $u.Action | Should -Be 'Subir'
+        $u.Fps | Should -Be 180
+        # With VSync on, more frames than Hz would only queue: it stays.
+        $vs = Measure-JuicerFrames @(New-PacedRows ([double[]](@(16.67) * 400)) 4.0 -Wait 0.1)
+        (Get-JuicerPacerCalibration $vs 60 60 'Fijo' 0 @() 60).Action | Should -Be 'Mantener'
+    }
+
+    It 'a frecuencia fija, lo calibrado puede pasar de los Hz' {
+        $fixed = @{ Display = [pscustomobject]@{ Monitor = 'X'; MonitorId = 'm#X#1'; Hz = 60; MaxHz = 60; Primary = $true }; Info = @{}; Vrr = $null }
+        $state = Read-JuicerPacer
+        $state.Calibrated['game.exe'] = @{ Fps = 180; Why = 'x'; Signature = (Get-JuicerLimitSignature $fixed) }
+        Save-JuicerPacer $state
+        (Get-JuicerRecommendedFps 'game.exe' $fixed).Fps | Should -Be 180
     }
 
     It 'calibrar un juego mide, ajusta, lo recuerda para ese monitor y se puede olvidar' {
