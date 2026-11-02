@@ -184,7 +184,18 @@ function Measure-JuicerFrames {
     $p99 = Get-JuicerPercentile $sorted 0.99
     $p999 = Get-JuicerPercentile $sorted 0.999
     $mode = if ($modes.Count -gt 0) { @($modes.GetEnumerator() | Sort-Object Value -Descending)[0].Key } else { '' }
+    # For the chart: at most 240 points, each the slowest frame of its
+    # stretch, so that no spike is averaged away.
+    $buckets = [Math]::Min(240, $n)
+    $series = New-Object 'double[]' $buckets
+    for ($b = 0; $b -lt $buckets; $b++) {
+        $from = [int][Math]::Floor($b * $n / $buckets); $to = [int][Math]::Floor(($b + 1) * $n / $buckets)
+        $top = 0.0
+        for ($i = $from; $i -lt [Math]::Max($to, $from + 1); $i++) { if ($ft[$i] -gt $top) { $top = $ft[$i] } }
+        $series[$b] = [Math]::Round($top, 2)
+    }
     @{
+        Series = $series
         Application = [string]$rows[0].Application; Frames = $n; Seconds = [Math]::Round($total / 1000, 1)
         AvgFps = [Math]::Round(1000 * $n / $total, 1); Low1 = [Math]::Round(1000 / $p99, 1); Low01 = [Math]::Round(1000 / $p999, 1); Fps90 = [Math]::Round(1000 / $p90, 1)
         MedianMs = [Math]::Round($median, 2); P95Ms = [Math]::Round($p95, 2); P99Ms = [Math]::Round($p99, 2); Stutters = $stutters
@@ -256,7 +267,7 @@ function Get-JuicerFrameFindings {
         $d = if ($Previous.AvgFps -gt 0) { 100 * ($Result.AvgFps - $Previous.AvgFps) / $Previous.AvgFps } else { 0 }
         $dl = if ($Previous.Low1 -gt 0) { 100 * ($Result.Low1 - $Previous.Low1) / $Previous.Low1 } else { 0 }
         $sev = if ($d -ge 3 -or $dl -ge 5) { 'Ok' } elseif ($d -le -3 -or $dl -le -5) { 'Bajo' } else { 'Info' }
-        $out += New-JuicerFinding $area $sev ('Respecto al {0}: media {1:N0} → {2:N0} FPS ({3:+0;-0} %), 1 % bajo {4:N0} → {5:N0} ({6:+0;-0} %)' -f ([datetime]$Previous.Date).ToString('d'), $Previous.AvgFps, $Result.AvgFps, $d, $Previous.Low1, $Result.Low1, $dl) ($(if ($Previous.Latency -and $Result.Latency) { 'Latencia hasta pantalla: {0} → {1} ms. ' -f $Previous.Latency, $Result.Latency } else { '' }) + $(if ($Previous.InputLatency -and $Result.InputLatency) { 'De ratón o teclado a pantalla: {0} → {1} ms. ' -f $Previous.InputLatency, $Result.InputLatency } else { '' }) + 'Sólo vale si mediste la misma escena con los mismos ajustes del juego; menos de un 3 % es ruido.')
+        $out += New-JuicerFinding $area $sev ('Respecto al {0}: media {1:N0} → {2:N0} FPS ({3:+0;-0} %), 1 % bajo {4:N0} → {5:N0} ({6:+0;-0} %)' -f ([datetime]$Previous.Date).ToString('d'), $Previous.AvgFps, $Result.AvgFps, $d, $Previous.Low1, $Result.Low1, $dl) ($(if ($Previous.Latency -and $Result.Latency) { 'Latencia hasta pantalla: {0} → {1} ms. ' -f $Previous.Latency, $Result.Latency } else { '' }) + $(if ($Previous.InputLatency -and $Result.InputLatency) { 'De ratón o teclado a pantalla: {0} → {1} ms. ' -f $Previous.InputLatency, $Result.InputLatency } else { '' }) + $(if ($null -ne $Previous.Steady -and $null -ne $Result.Steady) { 'Ritmo: {0} → {1} % de los fotogramas en su sitio; de un fotograma al siguiente, {2:N2} → {3:N2} ms. ' -f $Previous.Steady, $Result.Steady, $Previous.JitterMs, $Result.JitterMs } else { '' }) + $(if ($null -ne $Previous.QueueMs -and $null -ne $Result.QueueMs) { 'Cola delante de la gráfica: {0:N1} → {1:N1} ms. ' -f $Previous.QueueMs, $Result.QueueMs } else { '' }) + 'Sólo vale si mediste la misma escena con los mismos ajustes del juego; menos de un 3 % es ruido.')
     }
 
     # Pacing: how far the slow frames are from the average.
@@ -315,6 +326,38 @@ function Get-JuicerFrameFindings {
         $out += New-JuicerFinding $area 'Bajo' ('En segundo plano mientras jugabas: ' + ((@($Hogs) | Select-Object -First 4 | ForEach-Object { '{0} {1} %' -f $_.Name, $_.Pct }) -join ', ')) 'Porcentaje de todo el procesador. Si es un navegador o un lanzador, ciérralo antes de jugar; si es MsMpEng (Defender) o TiWorker (Windows Update), estaban trabajando justo entonces.'
     }
     $out
+}
+
+# The frame times of a measurement as a chart: the GUI draws it, the console
+# prints it as a line of blocks. TargetMs, the frame pacer's, if it has one.
+function New-JuicerFrameChartFinding {
+    param([hashtable]$Result, [double[]]$Series, [double]$TargetMs = 0)
+    if (@($Series).Count -lt 2) { return }
+    $max = ($Series | Measure-Object -Maximum).Maximum
+    $what = if ($TargetMs -gt 0) { 'la línea discontinua es el objetivo del frame pacer ({0:N2} ms)' -f $TargetMs } else { 'la línea discontinua es el frametime mediano ({0:N2} ms)' -f $Result.MedianMs }
+    $f = New-JuicerFinding "Juego: $($Result.Application)" 'Info' 'Frametimes de la medida' ('De izquierda a derecha, toda la medida; cada punto es el fotograma más lento de su tramo, para que ningún pico se pierda. Arriba, {0:N1} ms; {1}. Una línea plana pegada a ella es un ritmo clavado.' -f $max, $what)
+    $f.Chart = @{ Series = [double[]]$Series; TargetMs = $(if ($TargetMs -gt 0) { [Math]::Round($TargetMs, 3) } else { [double]$Result.MedianMs }); MaxMs = $max }
+    $f
+}
+
+# A line of block characters for the console: Width points, scaled from 0
+# to the highest frame time (or 1.5 times the target, whichever is more).
+function Format-JuicerSparkline {
+    param([double[]]$Series, [double]$TargetMs = 0, [int]$Width = 60)
+    $s = @($Series)
+    if ($s.Count -eq 0) { return '' }
+    $top = [Math]::Max(($s | Measure-Object -Maximum).Maximum, 1.5 * $TargetMs)
+    if ($top -le 0) { return '' }
+    $blocks = [char[]]@(0x2581, 0x2582, 0x2583, 0x2584, 0x2585, 0x2586, 0x2587, 0x2588)
+    $w = [Math]::Min($Width, $s.Count)
+    $sb = New-Object Text.StringBuilder
+    for ($i = 0; $i -lt $w; $i++) {
+        $from = [int][Math]::Floor($i * $s.Count / $w); $to = [Math]::Max($from + 1, [int][Math]::Floor(($i + 1) * $s.Count / $w))
+        $v = 0.0
+        for ($j = $from; $j -lt $to; $j++) { if ($s[$j] -gt $v) { $v = $s[$j] } }
+        [void]$sb.Append($blocks[[Math]::Min(7, [int][Math]::Floor(8 * $v / $top - 0.0001))])
+    }
+    $sb.ToString()
 }
 
 # --- History -----------------------------------------------------------------
@@ -407,16 +450,22 @@ function Invoke-JuicerFrameCapture {
         $hogs = if ($before) { @(Get-JuicerCpuHogs $before $after $sampled ([int]$hw.Cpu.Threads) $result.Application) } else { @() }
         $gpu = if (Test-Path -LiteralPath $smiOut) { ConvertFrom-JuicerGpuSamples ([IO.File]::ReadAllLines($smiOut)) } else { $null }
         $previous = Get-JuicerPreviousFrameResult $result.Application
+        # The chart is shown now, not kept: the history stays small.
+        $series = $result.Series
+        $result.Remove('Series')
         Save-JuicerFrameResult $result
         Write-JuicerLog ('FPS {0}: media {1}, 1 % {2}, 0,1 % {3}' -f $result.Application, $result.AvgFps, $result.Low1, $result.Low01)
         Get-JuicerFrameFindings $result $previous $refresh $hogs $gpu
+        $now = @()
+        try { $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq ([string]$result.Application).ToLowerInvariant() -and $_.Fps }) } catch { Write-JuicerLog "Sin frame pacer: $_" }
+        $targetMs = if ($now.Count -gt 0) { 1000 / $(if ($now[0].Exact -gt 0 -and $now[0].Backend -eq 'rtss') { [double]$now[0].Exact } else { [double]$now[0].Fps }) } else { 0 }
+        New-JuicerFrameChartFinding $result $series $targetMs
         try {
             $cap = Get-JuicerRecommendedFps $result.Application
             if ($cap) {
-                $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq ([string]$result.Application).ToLowerInvariant() })
-                if ($now.Count -gt 0 -and $now[0].Fps) {
+                if ($now.Count -gt 0) {
                     # Under the frame pacer: how well it holds the pace.
-                    Get-JuicerPacerFindings $result ([int]$now[0].Fps) ([double]$now[0].Exact)
+                    Get-JuicerPacerFindings $result ([int]$now[0].Fps) ([double]$now[0].Exact) ([string]$now[0].Backend)
                 } else {
                     New-JuicerFinding "Juego: $($result.Application)" 'Info' "Ritmo recomendado para este juego: $($cap.Fps) FPS" ($cap.Why + ' Añádelo en Juegos > Frame pacer y se aplicará solo cada vez que lo abras.')
                 }

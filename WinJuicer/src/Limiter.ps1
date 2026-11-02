@@ -41,17 +41,19 @@ function Get-JuicerFpsBackend { [string](& (Get-JuicerBackend).FpsBackend) }
 
 # --- What the frame pacer remembers ------------------------------------------
 # Engine: Auto, nvidia or rtss. Calibrated: exe -> @{ Fps; Why; Signature; Date }.
+# Games: exe -> @{ Priority = Fluidez | Latencia }.
 
 function Get-JuicerPacerPath { Join-Path (Get-JuicerHome) 'frame-pacer.json' }
 
 function Read-JuicerPacer {
     $p = Get-JuicerPacerPath
-    $s = @{ Engine = 'Auto'; Calibrated = @{} }
+    $s = @{ Engine = 'Auto'; Calibrated = @{}; Games = @{} }
     if (Test-Path -LiteralPath $p) {
         try {
             $d = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($p) | ConvertFrom-Json)
             if ($d.Engine -in 'Auto', 'nvidia', 'rtss') { $s.Engine = [string]$d.Engine }
             if ($d.Calibrated -is [hashtable]) { $s.Calibrated = $d.Calibrated }
+            if ($d.Games -is [hashtable]) { $s.Games = $d.Games }
         } catch {
             Write-JuicerLog "frame-pacer.json dañado, se ignora: $_"
         }
@@ -65,6 +67,30 @@ function Save-JuicerPacer {
 }
 
 function Get-JuicerPacerEngine { [string](Read-JuicerPacer).Engine }
+
+# What a game's frame pacer puts first. Fluidez: the steadiest pace that
+# stays inside what the monitor shows whole (under the refresh with VRR,
+# exactly the refresh with strobing). Latencia: the same until it is
+# calibrated; then, if the game has room, a multiple of the refresh (two
+# times or more, up to 1000 FPS) with VSync forced off: every frame more
+# reaches the screen sooner, at the price of tearing. For competitive games.
+function Get-JuicerPacerPriority {
+    param([string]$Exe)
+    $g = (Read-JuicerPacer).Games[(ConvertTo-JuicerExeName $Exe)]
+    if ($g -and [string]$g.Priority -eq 'Latencia') { 'Latencia' } else { 'Fluidez' }
+}
+
+# Saves it and, if the game already has the frame pacer, sets it again.
+function Set-JuicerPacerPriority {
+    param([Parameter(Mandatory)][string]$Exe, [ValidateSet('Fluidez', 'Latencia')][string]$Priority, [hashtable]$Monitor)
+    $exe = ConvertTo-JuicerExeName $Exe
+    $state = Read-JuicerPacer
+    if ($Priority -eq 'Fluidez') { $state.Games.Remove($exe) } else { $state.Games[$exe] = @{ Priority = $Priority } }
+    # A calibration made for the other priority does not hold for this one.
+    $state.Calibrated.Remove($exe)
+    Save-JuicerPacer $state
+    if (@(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe }).Count -gt 0) { Add-JuicerFpsLimit $exe 0 $Monitor }
+}
 
 # Which engines this PC has: nvidia, rtss, both or none.
 function Get-JuicerPacerEngines { @(& (Get-JuicerBackend).FpsEngines) }
@@ -215,7 +241,7 @@ function ConvertTo-JuicerExeName {
 # VSync forces vertical sync in the game's NVIDIA profile; Use (from
 # Resolve-JuicerMonitorUse) only words it.
 function New-JuicerFpsLimitTweak {
-    param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][int]$Fps, [string]$Why = '', [switch]$VSync, [string]$Use = 'Fijo', [double]$Exact = 0)
+    param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][int]$Fps, [string]$Why = '', [switch]$VSync, [string]$Use = 'Fijo', [double]$Exact = 0, [switch]$NoVSync)
     $exe = ConvertTo-JuicerExeName $Exe
     # The NVIDIA parts do nothing (and count as done) without an NVIDIA driver.
     # Exact only reaches RivaTuner; the driver keeps Fps.
@@ -229,11 +255,17 @@ function New-JuicerFpsLimitTweak {
         # Only for this game, so the desktop still idles low (PREFERRED_PSTATE_PREFER_MAX).
         @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x1057EB71; Value = [uint32]1; Label = 'Modo de energía: preferir rendimiento máximo (sin bajadas de frecuencia que den picos de frametime)' }
     )
-    if ($VSync) {
+    # Always one of the three, so that changing the mode or the priority
+    # never leaves behind the VSync of the previous one (VSYNCMODE_*).
+    if ($NoVSync) {
+        $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x08416747; Label = 'Sincronización vertical: desactivada (el ritmo pasa de los Hz: sin la espera ni la cola de VSync)' }
+    } elseif ($VSync) {
         $label = if ($Use -eq 'Estrobo') { 'Sincronización vertical: forzada (un fotograma por destello del estroboscopio)' } else { 'Sincronización vertical: forzada (con G-SYNC y el límite por debajo de los Hz)' }
         $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x47814940; Label = $label }
+    } else {
+        $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x60925292; Label = 'Sincronización vertical: la que diga el juego' }
     }
-    $sync = if (-not $VSync) { '.' } elseif ($Use -eq 'Estrobo') { ' y con la sincronización vertical que el estroboscopio necesita.' } else { ' y con la sincronización vertical que G-SYNC necesita.' }
+    $sync = if ($NoVSync) { ' y sin sincronización vertical, que con un ritmo por encima de los Hz sólo añadiría espera.' } elseif (-not $VSync) { '.' } elseif ($Use -eq 'Estrobo') { ' y con la sincronización vertical que el estroboscopio necesita.' } else { ' y con la sincronización vertical que G-SYNC necesita.' }
     @{
         Id = "fps:$exe"; Category = 'Juegos'; Level = 1; Impact = 'Medio'; Reboot = 'No'
         Title = 'Frame pacer a {0} FPS ({1:N2} ms): {2}' -f $Fps, (1000 / [Math]::Max(1, $Fps)), $exe
@@ -261,12 +293,17 @@ function Get-JuicerRecommendedFps {
     # A calibration on this same screen, used the same way, knows better
     # than one measurement: it was taken under the cap.
     $cal = (Read-JuicerPacer).Calibrated[$exe]
-    if ($cap -and $cal -and $use -ne 'Estrobo' -and [string]$cal.Signature -eq (Get-JuicerLimitSignature $Monitor) -and [int]$cal.Fps -gt 0) {
-        # At a fixed refresh, calibrating may go up to four times the refresh.
-        $max = if ($use -eq 'Fijo') { 4 * $hz } else { (Get-JuicerFpsCap $hz $use $null $vrrMin).Fps }
+    $latency = (Get-JuicerPacerPriority $exe) -eq 'Latencia'
+    if ($cap) { $cap.Priority = $(if ($latency) { 'Latencia' } else { 'Fluidez' }) }
+    if ($cap -and $cal -and ($use -ne 'Estrobo' -or $latency) -and [string]$cal.Signature -eq (Get-JuicerLimitSignature $Monitor) -and [int]$cal.Fps -gt 0) {
+        # At a fixed refresh, calibrating may go up to four times the refresh;
+        # putting latency first, up to the driver's 1000.
+        $max = if ($latency) { 1000 } elseif ($use -eq 'Fijo') { 4 * $hz } else { (Get-JuicerFpsCap $hz $use $null $vrrMin).Fps }
         $cap.Fps = [Math]::Min($max, [int]$cal.Fps)
         $cap.Why = [string]$cal.Why
         $cap.Calibrated = $true
+        # The fraction under the refresh is only for a pace at the refresh.
+        if ($cap.Fps -ne $hz) { $cap.Exact = 0 }
     }
     if ($cap -and $cap.Warn) { $cap.Why = "$($cap.Why) $($cap.Warn)" }
     $cap
@@ -284,7 +321,11 @@ function Add-JuicerFpsLimit {
         if (-not $cap) { throw 'No se pudo leer la pantalla para calcular el ritmo: indícalo a mano.' }
         $Fps = $cap.Fps; $why = $cap.Why; $exact = [double]$cap.Exact
     }
-    Invoke-JuicerTweak (New-JuicerFpsLimitTweak $Exe $Fps $why -VSync:($use -in 'VRR', 'EstroboSync', 'Estrobo') -Use $use -Exact $exact)
+    # Above the refresh, forcing VSync would hold every frame for the next
+    # refresh: what the pace saved, the wait gives back, with a queue.
+    $hz = if ($Monitor -and $Monitor.Display) { [int]$Monitor.Display.Hz } else { 0 }
+    $over = $hz -gt 0 -and $Fps -gt $hz
+    Invoke-JuicerTweak (New-JuicerFpsLimitTweak $Exe $Fps $why -VSync:(-not $over -and $use -in 'VRR', 'EstroboSync', 'Estrobo') -NoVSync:$over -Use $use -Exact $(if ($over) { 0 } else { $exact }))
 }
 
 # Every game already limited, again with today's recommended cap: after
@@ -341,7 +382,7 @@ function Test-JuicerPacerQueue {
 # A measurement of a game under its frame pacer, against its target. Cap is
 # the FPS set; Exact, the fractional one RivaTuner uses, if any.
 function Get-JuicerPacerFindings {
-    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [double]$Exact = 0)
+    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [double]$Exact = 0, [string]$Backend = '')
     $area = "Frame pacer: $($Result.Application)"
     $target = if ($Exact -gt 0) { $Exact } else { $Cap }
     $ms = 1000 / $target
@@ -362,16 +403,35 @@ function Get-JuicerPacerFindings {
     $lat = @()
     if ($null -ne $Result.InputLatency) { $lat += 'De ratón o teclado a pantalla: {0:N1} ms (mediana).' -f $Result.InputLatency }
     if ($null -ne $Result.Latency) { $lat += 'Del inicio del fotograma a pantalla: {0:N1} ms de media{1}.' -f $Result.Latency, $(if ($null -ne $Result.LatencyP95) { ', {0:N1} ms en el 5 % peor' -f $Result.LatencyP95 } else { '' }) }
-    if (Test-JuicerPacerQueue $Result $ms) {
+    if ($Result.Generated -lt 30 -and (Test-JuicerPacerQueue $Result $ms)) {
         $wait = if ($null -ne $Result.QueueMs) { '; cada fotograma espera {0:N1} ms en cola antes de que la gráfica empiece con él' -f $Result.QueueMs } else { '' }
         $out += New-JuicerFinding $area 'Medio' 'La gráfica va al límite incluso con el ritmo: hay cola de fotogramas' (('Su trabajo llega a {0:N2} ms de los {1:N2} ms de cada fotograma{2}. Esa cola es latencia pura. «Calibrar» baja el ritmo hasta dejarle un 12 % de margen y la cola desaparece. Si el juego tiene NVIDIA Reflex o AMD Anti-Lag 2, actívalo: vacía la cola sin bajar el ritmo; si no, con NVIDIA, «Modo de baja latencia: Ultra» para este juego en el panel. ' -f $Result.GpuMs95, $ms, $wait) + ($lat -join ' '))
     } elseif ($lat.Count -gt 0) {
         $out += New-JuicerFinding $area 'Ok' 'Sin cola delante de la gráfica: la latencia es la mínima para este ritmo' ($lat -join ' ')
     }
-    if ($null -ne $Result.WorkMs95 -and $Result.WorkMs95 -gt 0 -and $Result.WorkMs95 * 1.15 -lt 1000 / ($target + 3)) {
+    if ($Result.Generated -ge 30) {
+        $fg = 'Con generación de fotogramas (el {0} % son generados), el ritmo cuenta también los generados: el juego calcula la mitad, y el ratón responde a ese ritmo. Calibrar sólo baja el ritmo si no se cumple; la cola y el margen no se pueden leer bien con fotogramas generados.' -f $Result.Generated
+        if ($Backend -eq 'rtss') { $out += New-JuicerFinding $area 'Medio' 'Generación de fotogramas con RivaTuner como motor' "$fg RivaTuner limita los fotogramas que el juego presenta y se pelea con la generación (tirones): para este juego, mejor el driver de NVIDIA como motor, o el limitador del propio juego." }
+        else { $out += New-JuicerFinding $area 'Info' 'Generación de fotogramas activa' $fg }
+    }
+    if ($Result.Generated -lt 30 -and $null -ne $Result.WorkMs95 -and $Result.WorkMs95 -gt 0 -and $Result.WorkMs95 * 1.15 -lt 1000 / ($target + 3)) {
         $out += New-JuicerFinding $area 'Info' ('Hay margen: el trabajo de cada fotograma da para unos {0:N0} FPS' -f (1000 / ($Result.WorkMs95 * 1.15))) 'Si el ritmo está por debajo de lo que el monitor permite, «Calibrar» lo sube. Si ya está en su máximo, ese margen es lo que mantiene la latencia baja: la gráfica nunca llega al 100 %.'
     }
     $out
+}
+
+# A multiple of the refresh, two times or more, if the game holds it with
+# room: at a fixed refresh without VSync (measured), or putting latency
+# first (VSync is then forced off). Null when it does not apply.
+function Get-JuicerPacerMultiple {
+    param([hashtable]$Result, [int]$Cap, [int]$Hz, [string]$Use, [bool]$Latency, [bool]$Unreadable)
+    if ($Unreadable -or $Hz -le 0 -or $null -eq $Result.WorkMs95 -or $Result.WorkMs95 -le 0 -or $Result.Steady -lt 85) { return $null }
+    if (-not ($Latency -or ($Use -eq 'Fijo' -and $Result.VSync -lt 50))) { return $null }
+    $kMax = if ($Latency) { [int][Math]::Floor(1000 / $Hz) } else { 4 }
+    $k = [Math]::Min($kMax, [int][Math]::Floor(1000 / ($Result.WorkMs95 * 1.15) / $Hz))
+    if ($k -lt 2 -or $k * $Hz -le $Cap) { return $null }
+    $tail = if ($Latency) { ' Prioridad latencia: la sincronización vertical va desactivada; desactívala también en el juego.' } else { '' }
+    @{ Fps = $k * $Hz; Action = 'Subir'; Why = ('Calibrado por latencia: por encima de los Hz y sin sincronización vertical, cada fotograma de más llega antes a la pantalla. Sostiene {0} FPS con margen ({1} veces tus {2} Hz, para que los cortes de imagen se queden quietos en vez de recorrer la pantalla): {3:N2} ms por fotograma.{4}' -f ($k * $Hz), $k, $Hz, (1000 / ($k * $Hz)), $tail) }
 }
 
 # What a measurement under the cap says the cap should be. Max is the
@@ -386,15 +446,19 @@ function Get-JuicerPacerFindings {
 # frame more, so up to a multiple of the refresh (two to four times: the
 # tear lines stay put) when the game holds it with room.
 function Get-JuicerPacerCalibration {
-    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [int]$Max = 0, [string]$Use = 'Fijo', [int]$VrrMin = 0, [int[]]$Rates = @(), [int]$Hz = 0)
+    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [int]$Max = 0, [string]$Use = 'Fijo', [int]$VrrMin = 0, [int[]]$Rates = @(), [int]$Hz = 0, [string]$Priority = 'Fluidez')
     if ($Max -le 0) { $Max = $Cap }
     $ms = 1000 / $Cap
     if ($Result.AvgFps -gt $Cap * 1.04) {
         return @{ Fps = $Cap; Action = 'NoActua'; Why = ('El juego iba a {0:N0} FPS, por encima del ritmo: el frame pacer no estaba actuando, así que esta medida no sirve para calibrar.' -f $Result.AvgFps) }
     }
     $misses = $Result.P95Ms -gt $ms * 1.03
-    $queued = Test-JuicerPacerQueue $Result $ms
+    # With generated frames, busy times and the queue are not the game's.
+    $generated = $Result.Generated -ge 30
+    $queued = -not $generated -and (Test-JuicerPacerQueue $Result $ms)
+    $latency = $Priority -eq 'Latencia'
     if ($Use -eq 'Estrobo') {
+        if (-not $misses -and $latency) { $m = Get-JuicerPacerMultiple $Result $Cap $Hz $Use $latency ($generated -or $queued); if ($m) { return $m } }
         if (-not $misses -and $queued) { return @{ Fps = $Cap; Action = 'Estrobo'; Why = "Sostiene $Cap FPS, pero con la gráfica al límite y fotogramas en cola, que es latencia. Con estrobo el ritmo no baja de los Hz: baja algo la calidad gráfica para dejarle margen, o activa Reflex o Anti-Lag 2 si el juego lo tiene." } }
         if (-not $misses) { return @{ Fps = $Cap; Action = 'Mantener'; Why = "Sostiene $Cap FPS: un fotograma nuevo en cada destello del estroboscopio." } }
         $c = Get-JuicerFpsCap $Cap 'Estrobo' @{ Low1 = $Result.Fps95; AvgFps = $Result.AvgFps } 0 $Rates
@@ -416,13 +480,9 @@ function Get-JuicerPacerCalibration {
             return @{ Fps = $new; Action = 'Bajar'; Why = ('Calibrado por latencia: a {0} FPS la gráfica trabajaba {1:N2} ms de cada {2:N2}{3}. A {4} FPS le queda un 12 % de margen, la cola desaparece y cada fotograma llega antes a la pantalla, aunque haya menos.' -f $Cap, $Result.GpuMs95, $ms, $wait, $new) }
         }
     }
-    # Fixed refresh, no VSync: more frames, less latency, up to a multiple.
-    if ($Use -eq 'Fijo' -and $Hz -gt 0 -and $Result.VSync -lt 50 -and -not $queued -and $null -ne $Result.WorkMs95 -and $Result.WorkMs95 -gt 0 -and $Result.Steady -ge 85) {
-        $k = [Math]::Min(4, [int][Math]::Floor(1000 / ($Result.WorkMs95 * 1.15) / $Hz))
-        if ($k -ge 2 -and $k * $Hz -gt $Cap) {
-            return @{ Fps = $k * $Hz; Action = 'Subir'; Why = ('Calibrado por latencia: sin VRR ni sincronización vertical, cada fotograma de más llega antes a la pantalla. Sostiene {0} FPS con margen ({1} veces tus {2} Hz, para que los cortes de imagen se queden quietos en vez de recorrer la pantalla): {3:N2} ms por fotograma.' -f ($k * $Hz), $k, $Hz, (1000 / ($k * $Hz))) }
-        }
-    }
+    $m = Get-JuicerPacerMultiple $Result $Cap $Hz $Use $latency ($generated -or $queued)
+    if ($m) { return $m }
+    if ($generated) { return @{ Fps = $Cap; Action = 'Mantener'; Why = "Sostiene $Cap FPS. Con generación de fotogramas no se sube el ritmo: el margen de cada fotograma no se puede leer bien." } }
     if ($Cap -lt $Max -and -not $queued -and $null -ne $Result.WorkMs95 -and $Result.WorkMs95 -gt 0 -and $Result.Steady -ge 85) {
         $can = [int][Math]::Floor(1000 / ($Result.WorkMs95 * 1.15))
         $new = [Math]::Min($Max, $can)
@@ -452,7 +512,7 @@ function Invoke-JuicerPacerCalibration {
     $use = Resolve-JuicerMonitorUse $Monitor
     $vrrMin = if ($Monitor.Vrr) { [int]$Monitor.Vrr.Min } else { 0 }
     $max = (Get-JuicerFpsCap ([int]$Monitor.Display.Hz) $use $null $vrrMin).Fps
-    $c = Get-JuicerPacerCalibration $result $cap $max $use $vrrMin @($Monitor.Display.RefreshRates | Where-Object { $_ }) ([int]$Monitor.Display.Hz)
+    $c = Get-JuicerPacerCalibration $result $cap $max $use $vrrMin @($Monitor.Display.RefreshRates | Where-Object { $_ }) ([int]$Monitor.Display.Hz) (Get-JuicerPacerPriority $exe)
     $area = "Frame pacer: $exe"
     if ($c.Action -in 'Bajar', 'Subir') {
         $state = Read-JuicerPacer
@@ -503,6 +563,20 @@ function Get-JuicerPacerConflicts {
     if ($Backend -eq 'nvidia' -and $State.NvGlobal -gt 0) {
         $low = @($Limits | Where-Object { $_.Fps -and $_.Fps -gt $State.NvGlobal })
         $out += New-JuicerFinding $area $(if ($low.Count -gt 0) { 'Medio' } else { 'Bajo' }) ('El panel de NVIDIA tiene un límite global de {0} FPS' -f $State.NvGlobal) ('Los juegos del frame pacer usan el suyo; el resto, ese. Si no lo pusiste a propósito, quítalo en Administrar la configuración 3D > Configuración global > Velocidad máxima de fotogramas.')
+    }
+    # G-SYNC as NVIDIA's panel has it, when the monitor is used with VRR.
+    if ($Monitor -and (Resolve-JuicerMonitorUse $Monitor) -in 'VRR', 'EstroboSync') {
+        if ($State.NvVrrMode -eq 0) {
+            $out += New-JuicerFinding $area 'Medio' 'G-SYNC está desactivado en el panel de NVIDIA' 'Usas el monitor con frecuencia variable, pero el driver la tiene apagada: sin ella, el ritmo por debajo de los Hz da tirones de VSync. Panel de control de NVIDIA > Configurar G-SYNC > Activar G-SYNC, G-SYNC Compatible.'
+        } elseif ($State.NvVrrMode -eq 1) {
+            $out += New-JuicerFinding $area 'Bajo' 'G-SYNC sólo en pantalla completa' 'Los juegos en «ventana sin bordes» se quedan sin frecuencia variable. Panel de control de NVIDIA > Configurar G-SYNC > «Activar para el modo ventana y pantalla completa». Si ves parpadeos en algún programa de escritorio, se le quita en su perfil.'
+        }
+    }
+    # Stutter no pace can fix: shaders compiled again every time.
+    if ($State.NvShaderCache -eq 0) {
+        $out += New-JuicerFinding $area 'Alto' 'La caché de sombreadores de NVIDIA está desactivada' 'Cada vez que juegas, el juego vuelve a compilar sus sombreadores y eso da tirones que ningún ritmo arregla. Suele ser cosa de otro «optimizador». Panel de control de NVIDIA > Administrar la configuración 3D > Tamaño de la caché del sombreador: «Predeterminado del controlador».'
+    } elseif ($State.NvShaderCacheMb -gt 0 -and $State.NvShaderCacheMb -lt 4096) {
+        $out += New-JuicerFinding $area 'Medio' ('Caché de sombreadores de NVIDIA de sólo {0} MB' -f $State.NvShaderCacheMb) 'Los juegos actuales llenan varios GB: con tan poca, se borran sombreadores y se vuelven a compilar en mitad de la partida (tirones). Panel de control de NVIDIA > Administrar la configuración 3D > Tamaño de la caché del sombreador: «Predeterminado del controlador» o 10 GB.'
     }
     if ($Monitor -and (Resolve-JuicerMonitorUse $Monitor) -eq 'Estrobo') {
         $hz = [int]$Monitor.Display.Hz

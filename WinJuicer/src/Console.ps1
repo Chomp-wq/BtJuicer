@@ -296,6 +296,7 @@ function Write-JuicerFindings {
         Write-Host "  $tag " -ForegroundColor $script:SeverityColors[$f.Severity] -NoNewline
         Write-Host $f.Title -ForegroundColor $(if ($f.Severity -in 'Info', 'Ok') { 'Gray' } else { 'White' })
         if ($f.Detail -and $f.Severity -ne 'Ok') { Write-JuicerWrapped $f.Detail 5 'DarkGray' }
+        if ($f.Chart) { Write-Host ('     ' + (Format-JuicerSparkline $f.Chart.Series $f.Chart.TargetMs)) -ForegroundColor Cyan }
     }
 }
 
@@ -604,7 +605,7 @@ function Show-JuicerLimiter {
         foreach ($g in $limits) {
             $n++
             $fps = if ($g.Exact -gt 0 -and $g.Backend -eq 'rtss') { '{0:N2} FPS' -f $g.Exact } elseif ($g.Fps) { "$($g.Fps) FPS" } else { 'sin ritmo ahora' }
-            Write-Host ('  {0,2}. {1}: {2}{3}' -f $n, $g.Exe, $fps, $(if ($pacer.Calibrated.ContainsKey($g.Exe)) { ' (calibrado)' } else { '' }))
+            Write-Host ('  {0,2}. {1}: {2}{3}{4}' -f $n, $g.Exe, $fps, $(if ($pacer.Calibrated.ContainsKey($g.Exe)) { ' (calibrado)' } else { '' }), $(if ((Get-JuicerPacerPriority $g.Exe) -eq 'Latencia') { ' [latencia]' } else { '' }))
         }
         if ($n -eq 0) { Write-Host '  Ningún juego con frame pacer todavía.' -ForegroundColor DarkGray }
         $conflicts = @(Get-JuicerPacerConflicts (& (Get-JuicerBackend).PacerState) (Get-JuicerFpsBackend) $limits $m)
@@ -614,6 +615,7 @@ function Show-JuicerLimiter {
             @('A', 'Añadir un juego', 'por nombre del .exe, con el ritmo recomendado o el tuyo'),
             @('M', 'Añadir los juegos medidos', (@(Get-JuicerUnlimitedGames) -join ', ')),
             @('C', 'Calibrar un juego', 'lo mide 60 s con su ritmo y lo ajusta a lo que sostiene'),
+            @('P', 'Prioridad de un juego', 'fluidez, o latencia mínima (por encima de los Hz al calibrar)'),
             @('Q', 'Quitar el frame pacer a un juego', 'por número'),
             @('U', 'Cómo usas tu monitor', 'VRR, ELMB/DyAc u otro estroboscopio, o frecuencia fija'),
             @('E', 'Motor', "ahora: $($pacer.Engine); con estrobo, RivaTuner admite décimas"),
@@ -642,6 +644,13 @@ function Show-JuicerLimiter {
                     Write-JuicerWrapped "No se pudo calibrar: $_" 2 'Yellow'
                 }
                 Wait-JuicerKey
+            }
+            'P' {
+                $q = Read-JuicerChoice 'Número del juego'
+                if (-not ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count)) { continue }
+                Write-JuicerWrapped 'Fluidez: el ritmo más estable dentro de lo que el monitor enseña entero. Latencia: al calibrar, si el juego da para el doble de los Hz o más, sube ahí sin sincronización vertical (con cortes de imagen); para juegos competitivos.' 2 'Gray'
+                $p = @{ 'F' = 'Fluidez'; 'L' = 'Latencia' }[(Read-JuicerChoice 'F = fluidez, L = latencia').ToUpperInvariant()]
+                if ($p) { Show-JuicerResults @(Set-JuicerPacerPriority $limits[[int]$q - 1].Exe $p $m) }
             }
             'Q' {
                 $q = Read-JuicerChoice 'Número'
@@ -1194,6 +1203,7 @@ function Start-Juicer {
         [string]$Juego,
         [string[]]$LimitarFps = @(),
         [string]$CalibrarJuego,
+        [ValidateSet('', 'Fluidez', 'Latencia')][string]$Prioridad = '',
         [ValidateSet('', 'Auto', 'nvidia', 'rtss')][string]$MotorPacer = '',
         [switch]$Juegos,
         [switch]$OptimizarJuegos,
@@ -1297,6 +1307,12 @@ function Start-Juicer {
         Write-Host "  Motor del frame pacer: $(Format-JuicerFpsBackend (Get-JuicerFpsBackend))."
         if ($results.Count -gt 0) { Show-JuicerResults $results }
         if ($LimitarFps.Count -eq 0 -and -not $CalibrarJuego) { return 0 }
+    }
+    if ($Prioridad) {
+        $targets = @($LimitarFps) + @(if ($CalibrarJuego) { $CalibrarJuego })
+        if ($targets.Count -eq 0) { Write-Host '  -Prioridad va con -LimitarFps o -CalibrarJuego.' -ForegroundColor Yellow; return 2 }
+        foreach ($exe in $targets) { [void](Set-JuicerPacerPriority $exe $Prioridad $monitor) }
+        Write-Host "  Prioridad del frame pacer: $Prioridad ($($targets -join ', '))."
     }
     if ($CalibrarJuego) {
         try {

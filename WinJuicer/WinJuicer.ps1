@@ -71,6 +71,13 @@
     -MedirJuego), empezando a los 10, y ajusta su ritmo a lo que sostiene de
     verdad: lo baja si no llega, lo sube si le sobra margen.
 
+.PARAMETER Prioridad
+    Con -LimitarFps o -CalibrarJuego, qué pone primero el frame pacer en esos
+    juegos: Fluidez (el ritmo más estable dentro de lo que el monitor enseña
+    entero) o Latencia (al calibrar, si el juego da para el doble de los Hz o
+    más, sube ahí sin sincronización vertical: menos latencia, con cortes de
+    imagen; para juegos competitivos).
+
 .PARAMETER MotorPacer
     Con qué marca el ritmo el frame pacer: Auto (el driver si hay NVIDIA),
     nvidia o rtss (RivaTuner, que admite décimas: con estrobo, el ritmo va
@@ -162,6 +169,7 @@ param(
     [string]$Juego,
     [string[]]$LimitarFps = @(),
     [string]$CalibrarJuego,
+    [ValidateSet('Fluidez', 'Latencia')][string]$Prioridad,
     [ValidateSet('Auto', 'nvidia', 'rtss')][string]$MotorPacer,
     [switch]$Juegos,
     [switch]$OptimizarJuegos,

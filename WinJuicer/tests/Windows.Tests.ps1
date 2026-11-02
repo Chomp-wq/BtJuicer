@@ -249,7 +249,11 @@ Import-Module '$psm' -Force
     `$informe = Save-JuicerAuditReport (Join-Path ([IO.Path]::GetTempPath()) 'wj-informe.txt') (Format-JuicerHardwareSummary `$hw) `$script:Gui.Findings
     Select-JuicerGuiTweaks 'Recomendado'
     `$script:Gui.C.SearchBox.Text = 'steam'
+    # The frametime chart: line, target, and both labels; and inside a card.
+    `$chart = New-JuicerFrameChart @{ Series = [double[]](5.8, 6.1, 5.9, 40, 5.8); TargetMs = 5.85; MaxMs = 40 }
+    `$card = New-JuicerFindingCard (New-JuicerFrameChartFinding @{ Application = 'cs2.exe'; MedianMs = 5.9 } ([double[]](5.8, 6.1, 5.9, 40, 5.8)) 5.85)
     `$r = @{
+        Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
         Visible = @(`$script:Gui.InstallChecks.Values | Where-Object { `$_.Check.Visibility -eq 'Visible' }).Count
@@ -271,6 +275,8 @@ Import-Module '$psm' -Force
             $r.Visible | Should -Be 1
             $r.Libs | Should -Be 2
             $r.Report | Should -BeGreaterThan 500
+            $r.Chart | Should -Be 4
+            $r.Card | Should -BeTrue
         } finally {
             $ps.Dispose()
             $rs.Dispose()
