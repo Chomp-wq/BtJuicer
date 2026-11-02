@@ -742,8 +742,9 @@ Describe 'Frame pacer' {
         $M.Backend.State.FpsLimits['b.exe'] | Should -Be 120
         @(Start-Juicer -LimitarFps 'a.exe' -Fps 5 -Si 6>$null)[-1] | Should -Be 2
         @(Start-Juicer -ModoMonitor 'Parpadeo' -Si 6>$null)[-1] | Should -Be 2
-        # Without a monitor to read (as here), the mode still decides this limit.
-        @(Start-Juicer -LimitarFps 'c.exe' -Fps 144 -ModoMonitor 'Estrobo' -Si 6>$null)[-1] | Should -Be 0
+        # The mode decides this limit, with or without a monitor to read (CI
+        # runners have one): under any refresh, so VSync is forced.
+        @(Start-Juicer -LimitarFps 'c.exe' -Fps 30 -ModoMonitor 'Estrobo' -Si 6>$null)[-1] | Should -Be 0
         $M.Backend.State.NvSettings['c.exe|11041231'] | Should -Be 0x47814940
         # Alone it needs a monitor to save it for: there is one on a real Windows.
         @(Start-Juicer -ModoMonitor 'Estrobo' -Si 6>$null)[-1] | Should -Be $(if (Get-JuicerPrimaryMonitor) { 0 } else { 1 })
