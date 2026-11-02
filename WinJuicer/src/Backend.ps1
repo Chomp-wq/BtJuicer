@@ -495,12 +495,13 @@ function Set-WinFpsLimit {
         'nvidia' { Initialize-JuicerNvApi; [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } else { -1 })) }
         'rtss' {
             $f = Get-WinRtssProfile $Exe
-            if ($Remove) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; return }
+            if ($Remove) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; Update-WinRtssProfiles; return }
             $lines = if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllLines($f) } else {
                 $global = Join-Path (Split-Path -Parent $f) 'Global'
                 if (Test-Path -LiteralPath $global) { [IO.File]::ReadAllLines($global) } else { @() }
             }
             [IO.File]::WriteAllLines($f, [string[]](Set-JuicerRtssLimit $lines $n $Exact), (New-Object Text.ASCIIEncoding))
+            Update-WinRtssProfiles
         }
         default { throw 'El frame pacer necesita una gráfica NVIDIA o RivaTuner Statistics Server.' }
     }
@@ -510,7 +511,8 @@ function Set-WinFpsLimit {
 # two limiters at once: RTSS's Global profile and the games it limits, and
 # the global frame limit of NVIDIA's control panel.
 function Get-WinPacerState {
-    $s = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0 }
+    # Nv*: the user values of NVIDIA's global profile, -1 when there is none.
+    $s = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
     $dir = Get-WinRtssDir
     if ($dir) {
         $s.RtssInstalled = $true
@@ -527,11 +529,53 @@ function Get-WinPacerState {
         try {
             $v = [WinJuicer.NvDrs]::GetGlobalDword([WinJuicer.NvDrs]::FrameRateLimiterId)
             if ($v -gt 0) { $s.NvGlobal = [int]$v }
+            # VRR_MODE_ID, PS_SHADERDISKCACHE_ID, PS_SHADERDISKCACHE_MAX_SIZE_ID (MB).
+            $s.NvVrrMode = [WinJuicer.NvDrs]::GetGlobalDword([uint32]0x1194F158)
+            $s.NvShaderCache = [WinJuicer.NvDrs]::GetGlobalDword([uint32]0x00198FFF)
+            $s.NvShaderCacheMb = [WinJuicer.NvDrs]::GetGlobalDword([uint32]0x00AC8497)
         } catch {
             Write-JuicerLog "No se pudo leer el perfil global de NVIDIA: $_"
         }
     }
     $s
+}
+
+# A RivaTuner that is running reads its profiles when it starts: after
+# writing one, it is told to read them again, through UpdateProfiles in its
+# own RTSSHooks64.dll (RTSS 7.3.7 and later; with an older one, or if it is
+# not running, the profile applies the next time it starts).
+function Update-WinRtssProfiles {
+    $dir = Get-WinRtssDir
+    if (-not $dir -or [IntPtr]::Size -ne 8 -or -not (Get-Process -Name 'RTSS' -ErrorAction SilentlyContinue)) { return }
+    $dll = Join-Path $dir 'RTSSHooks64.dll'
+    if (-not (Test-Path -LiteralPath $dll)) { return }
+    try {
+        if (-not ('WinJuicer.Rtss' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace WinJuicer {
+    public static class Rtss {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryW(string path);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi)] static extern IntPtr GetProcAddress(IntPtr module, string name);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] delegate void NoArgs();
+        // False when this RTSS has no UpdateProfiles.
+        public static bool UpdateProfiles(string dll) {
+            IntPtr m = LoadLibraryW(dll);
+            if (m == IntPtr.Zero) return false;
+            IntPtr f = GetProcAddress(m, "UpdateProfiles");
+            if (f == IntPtr.Zero) return false;
+            ((NoArgs)Marshal.GetDelegateForFunctionPointer(f, typeof(NoArgs)))();
+            return true;
+        }
+    }
+}
+'@
+        }
+        if (-not [WinJuicer.Rtss]::UpdateProfiles($dll)) { Write-JuicerLog 'Este RivaTuner no tiene UpdateProfiles: el perfil se aplicará al reiniciarlo.' }
+    } catch {
+        Write-JuicerLog "No se pudo pedir a RivaTuner que relea sus perfiles: $_"
+    }
 }
 
 # Any other DWORD of a program's NVIDIA profile: @{ Value } with null when
@@ -616,7 +660,7 @@ function New-JuicerMemoryBackend {
         NvSettings = @{}  # 'exe|id' -> value, the user values of NVIDIA profiles
         FpsExact = @{}    # exe -> fractional cap (RTSS)
         FpsEngines = $null  # engines the PC has; null = just FpsBackend
-        Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0 }
+        Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
         Calls    = New-Object System.Collections.ArrayList
         Run      = $Run
     }

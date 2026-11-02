@@ -116,6 +116,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # frame pacer al ritmo recomendado, solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o al tuyo
 .\WinJuicer.ps1 -CalibrarJuego cs2.exe                  # lo mide con su ritmo y lo ajusta a lo que sostiene
+.\WinJuicer.ps1 -CalibrarJuego cs2.exe -Prioridad Latencia  # para competitivos: por encima de los Hz si da para ello
 .\WinJuicer.ps1 -MotorPacer rtss                        # RivaTuner en vez del driver (admite décimas)
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
 .\WinJuicer.ps1 -OlvidarAjuste
@@ -374,7 +375,13 @@ segundos. Al acabar dice:
 - Si pasas de los Hz de tu pantalla, la sincronización vertical, la generación
   de fotogramas y, con NVIDIA, la temperatura y si la gráfica bajó de frecuencia.
 - **Comparado con la medida anterior del mismo juego**: así ves si el último
-  cambio dio FPS o sólo lo parecía.
+  cambio dio FPS o sólo lo parecía. También el ritmo (qué parte de los
+  fotogramas cae en su sitio y cuánto cambia uno del siguiente), la latencia
+  y la cola delante de la gráfica: mide sin frame pacer, pónselo y vuelve a
+  medir, y verás lo que gana.
+- **La gráfica de frametimes** de toda la medida, con el objetivo del frame
+  pacer como línea discontinua (en la consola, una línea de barras). Cada
+  punto es el fotograma más lento de su tramo, para que ningún pico se pierda.
 - **Si el juego tiene frame pacer, cómo de bien lo cumple** (ver abajo); si
   no, el ritmo que le conviene.
 
@@ -423,7 +430,11 @@ con Win Juicer cerrado:
   para ese juego: con el límite la gráfica no va al 100 % y el driver podría
   bajarle la frecuencia en escenas ligeras, y el siguiente fotograma pesado
   llegaría tarde. El modo «Ultra» no tiene un identificador público y no se
-  toca.
+  toca. La sincronización vertical del perfil siempre queda en uno de tres
+  estados (forzada, desactivada o la del juego), así que cambiar de modo o de
+  prioridad nunca deja puesta la del anterior. Un ritmo por encima de los Hz
+  (escrito a mano o calibrado) nunca la fuerza: haría esperar cada fotograma
+  al siguiente refresco.
 - **Cómo de bien lo cumple.** Al medir un juego con frame pacer, la medida dice
   qué parte de los fotogramas cae en su sitio (a ±4 % del objetivo), cuánto
   cambia el frametime de un fotograma al siguiente, el error de animación de
@@ -455,6 +466,18 @@ con Win Juicer cerrado:
   estroboscopio sin VRR no baja nunca: te dice a qué frecuencia bajar el
   monitor. Lo recuerda por juego mientras el monitor, sus Hz y cómo lo usas
   sigan iguales; «Olvidar calibraciones» vuelve al ritmo recomendado.
+- **Prioridad por juego: fluidez o latencia mínima.** Con fluidez (la de
+  siempre), el ritmo más estable dentro de lo que el monitor enseña entero.
+  Con **latencia**, pensada para competitivos: igual hasta que lo calibras;
+  entonces, si el juego da para el doble de los Hz o más, sube a ese múltiplo
+  (hasta 1000 FPS) con la sincronización vertical desactivada en su perfil:
+  cada fotograma llega antes a la pantalla, a cambio de cortes de imagen, que
+  a esos FPS apenas se ven. También con estroboscopio. Se elige en Juegos >
+  Frame pacer junto al juego, en la consola (opción P) o con `-Prioridad`.
+- **Generación de fotogramas** (DLSS, FSR): la medida la detecta y calibrar
+  ya no sube ni baja el ritmo por la cola o el margen, que con fotogramas
+  generados no se pueden leer bien; sólo lo baja si no se cumple. Con
+  RivaTuner como motor avisa: se pelea con la generación y da tirones.
 - **Los Hz de verdad.** Windows dice 180 Hz, pero la pantalla suele ir a
   179,96. Win Juicer lee la fracción exacta (`QueryDisplayConfig`). Con
   estroboscopio y sincronización vertical eso importa: un ritmo de 180 es un
@@ -470,6 +493,14 @@ con Win Juicer cerrado:
 - **Dos limitadores a la vez**: avisa si RivaTuner tiene un límite en su perfil
   Global o en el de un juego que ya tiene el ritmo del driver, si el panel de
   NVIDIA tiene un límite global, o si el motor es RivaTuner y no está abierto.
+- **Lo que el panel de NVIDIA estropea**: si usas VRR y G-SYNC está
+  desactivado, o activado sólo para pantalla completa (los juegos en ventana
+  sin bordes se quedan sin él); y si la caché de sombreadores está
+  desactivada o es muy pequeña, que da tirones que ningún ritmo arregla
+  (identificadores del `NvApiDriverSettings.h` de NVIDIA).
+- **RivaTuner abierto**: después de escribir un perfil, Win Juicer le pide que
+  relea sus perfiles (`UpdateProfiles` de su propia `RTSSHooks64.dll`, desde
+  RTSS 7.3.7), así el ritmo se aplica ya, sin reiniciarlo.
 - Con RivaTuner, en su Setup: «Front edge sync» da la menor latencia y «Back
   edge sync» los frametimes más planos.
 - Se deshace como todo lo demás, devolviendo el límite que tuviera el juego.

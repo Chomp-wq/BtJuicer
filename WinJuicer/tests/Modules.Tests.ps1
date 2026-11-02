@@ -687,7 +687,8 @@ Describe 'Frame pacer' {
         [void](Set-JuicerMonitorMode $mon 'Fijo')
         Add-JuicerFpsLimit 'cs2.exe' 0 $mon | Out-Null
         $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 180
-        $M.Backend.State.NvSettings.ContainsKey('cs2.exe|11041231') | Should -BeFalse
+        # At a fixed refresh, VSync is the game's (VSYNCMODE_PASSIVE), never a leftover.
+        $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x60925292
     }
 
     It 'edita perfiles de RTSS sin tocar el resto' {
@@ -722,7 +723,7 @@ Describe 'Frame pacer' {
         $fixed = @{ Display = [pscustomobject]@{ Hz = 60; MaxHz = 60; Primary = $true }; Info = @{}; Vrr = $null }
         (Add-JuicerFpsLimit 'game.exe' 0 $fixed).Outcome | Should -Be 'Aplicado'
         $M.Backend.State.FpsLimits['game.exe'] | Should -Be 60
-        $M.Backend.State.NvSettings.ContainsKey('game.exe|11041231') | Should -BeFalse
+        $M.Backend.State.NvSettings['game.exe|11041231'] | Should -Be 0x60925292
         Undo-JuicerTweak 'fps:game.exe' | Out-Null
         $M.Backend.State.FpsLimits['game.exe'] | Should -Be 100
     }
@@ -741,8 +742,9 @@ Describe 'Frame pacer' {
         $M.Backend.State.FpsLimits['b.exe'] | Should -Be 120
         @(Start-Juicer -LimitarFps 'a.exe' -Fps 5 -Si 6>$null)[-1] | Should -Be 2
         @(Start-Juicer -ModoMonitor 'Parpadeo' -Si 6>$null)[-1] | Should -Be 2
-        # Without a monitor to read (as here), the mode still decides this limit.
-        @(Start-Juicer -LimitarFps 'c.exe' -Fps 144 -ModoMonitor 'Estrobo' -Si 6>$null)[-1] | Should -Be 0
+        # The mode decides this limit, with or without a monitor to read (CI
+        # runners have one): under any refresh, so VSync is forced.
+        @(Start-Juicer -LimitarFps 'c.exe' -Fps 30 -ModoMonitor 'Estrobo' -Si 6>$null)[-1] | Should -Be 0
         $M.Backend.State.NvSettings['c.exe|11041231'] | Should -Be 0x47814940
         # Alone it needs a monitor to save it for: there is one on a real Windows.
         @(Start-Juicer -ModoMonitor 'Estrobo' -Si 6>$null)[-1] | Should -Be $(if (Get-JuicerPrimaryMonitor) { 0 } else { 1 })
@@ -880,6 +882,79 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
         $state.Calibrated['game.exe'] = @{ Fps = 180; Why = 'x'; Signature = (Get-JuicerLimitSignature $fixed) }
         Save-JuicerPacer $state
         (Get-JuicerRecommendedFps 'game.exe' $fixed).Fps | Should -Be 180
+    }
+
+    It 'un ritmo por encima de los Hz nunca fuerza la sincronización vertical' {
+        Add-JuicerFpsLimit 'cs2.exe' 400 $Mon | Out-Null
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 400
+        $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x08416747
+        Add-JuicerFpsLimit 'cs2.exe' 0 $Mon | Out-Null
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 171
+        $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x47814940
+    }
+
+    It 'prioridad latencia: al calibrar sube a un múltiplo de los Hz sin VSync, también con estrobo' {
+        $light = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 400)) 1.2 -Wait 0.1)
+        # Smoothness first: at its max already, it stays.
+        (Get-JuicerPacerCalibration $light 171 171 'VRR' 48 @() 180).Action | Should -Be 'Mantener'
+        $c = Get-JuicerPacerCalibration $light 171 171 'VRR' 48 @() 180 'Latencia'
+        $c.Action | Should -Be 'Subir'
+        $c.Fps | Should -Be 720
+        $c.Why | Should -BeLike '*desactívala también en el juego*'
+        $strobe = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.55) * 400)) 1.2 -Wait 0.1)
+        (Get-JuicerPacerCalibration $strobe 180 180 'Estrobo' 0 @() 180).Action | Should -Be 'Mantener'
+        (Get-JuicerPacerCalibration $strobe 180 180 'Estrobo' 0 @() 180 'Latencia').Fps | Should -Be 720
+        # Saved for the game, and what calibrating finds is used up to 1000 FPS.
+        Add-JuicerFpsLimit 'cs2.exe' 0 $Mon | Out-Null
+        Set-JuicerPacerPriority 'cs2.exe' 'Latencia' $Mon | Out-Null
+        Get-JuicerPacerPriority 'CS2.EXE' | Should -Be 'Latencia'
+        $state = Read-JuicerPacer
+        $state.Calibrated['cs2.exe'] = @{ Fps = 720; Why = 'x'; Signature = (Get-JuicerLimitSignature $Mon) }
+        Save-JuicerPacer $state
+        @(Update-JuicerFpsLimits $Mon) | Out-Null
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 720
+        $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x08416747
+        # Back to smoothness: the calibration is forgotten, and VSync forced again.
+        Set-JuicerPacerPriority 'cs2.exe' 'Fluidez' $Mon | Out-Null
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 171
+        $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x47814940
+        (Read-JuicerPacer).Calibrated.ContainsKey('cs2.exe') | Should -BeFalse
+    }
+
+    It 'con generación de fotogramas no sube ni baja por cola, y con RivaTuner lo avisa' {
+        $fg = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 400)) 5.7 -Wait 4.0)
+        $fg.Generated = 50
+        (Get-JuicerPacerCalibration $fg 171 171 'VRR' 48).Action | Should -Be 'Mantener'
+        (Get-JuicerPacerFindings $fg 171 0 'rtss' | Where-Object { $_.Title -like 'Generación de fotogramas con RivaTuner*' }).Severity | Should -Be 'Medio'
+        @(Get-JuicerPacerFindings $fg 171 | Where-Object { $_.Title -like 'La gráfica va al límite*' }).Count | Should -Be 0
+    }
+
+    It 'dibuja los frametimes: la serie conserva los picos y la consola los muestra' {
+        $r = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 999 + @(40.0))) 3.0)
+        $r.Series.Count | Should -Be 240
+        ($r.Series | Measure-Object -Maximum).Maximum | Should -Be 40
+        $f = New-JuicerFrameChartFinding $r $r.Series 5.85
+        $f.Chart.TargetMs | Should -Be 5.85
+        $line = Format-JuicerSparkline $r.Series 5.85 60
+        $line.Length | Should -Be 60
+        $line | Should -Match ([char]0x2588)
+        Format-JuicerSparkline @() | Should -Be ''
+        # The comparison with the last measurement includes the pace.
+        $prev = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.0, 8.0) * 200)) 3.0)
+        $prev.Date = (Get-Date).AddDays(-1).ToString('s')
+        $cmp = @(Get-JuicerFrameFindings $r $prev 180) | Where-Object { $_.Title -like 'Respecto al*' }
+        $cmp.Detail | Should -BeLike '*Ritmo: * → 100 % de los fotogramas en su sitio*'
+    }
+
+    It 'avisa de G-SYNC sólo en pantalla completa y de la caché de sombreadores' {
+        $s = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = 1; NvShaderCache = 0; NvShaderCacheMb = -1 }
+        $t = @(Get-JuicerPacerConflicts $s 'nvidia' @() $Mon | ForEach-Object { $_.Title })
+        $t | Should -Contain 'G-SYNC sólo en pantalla completa'
+        $t | Should -Contain 'La caché de sombreadores de NVIDIA está desactivada'
+        $s.NvVrrMode = 2; $s.NvShaderCache = -1; $s.NvShaderCacheMb = 512
+        $t = @(Get-JuicerPacerConflicts $s 'nvidia' @() $Mon | ForEach-Object { $_.Title })
+        $t | Should -Contain 'Caché de sombreadores de NVIDIA de sólo 512 MB'
+        @($t | Where-Object { $_ -like 'G-SYNC*' }).Count | Should -Be 0
     }
 
     It 'calibrar un juego mide, ajusta, lo recuerda para ese monitor y se puede olvidar' {

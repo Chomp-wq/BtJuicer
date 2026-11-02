@@ -332,6 +332,10 @@ $script:GuiXaml = @'
               </ComboBox>
               <TextBlock Text="Calibrar:" VerticalAlignment="Center" Margin="10,0,6,0" Foreground="#9A9AA5"/>
               <ComboBox x:Name="PacerGame" Width="220" Margin="3" IsEnabled="False" ToolTip="Los juegos con frame pacer"/>
+              <ComboBox x:Name="PacerPriority" Width="150" Margin="3" IsEnabled="False" ToolTip="Fluidez: el ritmo más estable dentro de lo que el monitor enseña entero. Latencia mínima: al calibrar, si el juego da para el doble de los Hz o más, sube ahí sin sincronización vertical (con cortes de imagen); para juegos competitivos">
+                <ComboBoxItem Content="Prioridad: fluidez" Tag="Fluidez"/>
+                <ComboBoxItem Content="Prioridad: latencia" Tag="Latencia"/>
+              </ComboBox>
               <Button x:Name="BtnPacerCalibrate" Content="Calibrar (empieza en 10 s)" IsEnabled="False" ToolTip="Mide el juego 60 s con su ritmo y lo ajusta a lo que sostiene de verdad: lo baja si no llega, lo sube si sobra margen"/>
               <Button x:Name="BtnPacerForget" Content="Olvidar calibraciones" IsEnabled="False"/>
             </WrapPanel>
@@ -624,6 +628,7 @@ $script:GuiWork = @{
     Limiter    = {
         $r = @()
         if ($A.Engine) { $Sync.Status = 'Cambiando el motor del frame pacer…'; $r += @(Set-JuicerPacerEngine $A.Engine) }
+        if ($A.Priority) { $Sync.Status = "Cambiando la prioridad de $($A.Priority.Exe)…"; $r += @(Set-JuicerPacerPriority $A.Priority.Exe $A.Priority.Priority) }
         if ($A.Forget) { Clear-JuicerPacerCalibration; $A.Recalc = $true }
         if ($A.Recalc) { $Sync.Status = 'Recalculando los ritmos…'; $r += @(Update-JuicerFpsLimits) }
         foreach ($exe in @($A.Add)) { $Sync.Status = "Poniendo el frame pacer a $exe…"; $r += Add-JuicerFpsLimit $exe ([int]$A.Fps) }
@@ -862,6 +867,47 @@ function Show-JuicerGuiPowerAndDns {
     $c.BtnDnsUndo.Visibility = $(if (Get-JuicerJournalEntry (Read-JuicerJournal) 'red.dns') { 'Visible' } else { 'Collapsed' })
 }
 
+# The frame times of a measurement: a line, the target as a dashed line,
+# and the top of the scale. Points and dashes are built as numbers, never
+# parsed from text, so a comma decimal separator cannot break them.
+function New-JuicerFrameChart {
+    param([hashtable]$Chart, [double]$Width = 560, [double]$Height = 110)
+    $series = @($Chart.Series)
+    $target = [double]$Chart.TargetMs
+    $top = [Math]::Max([double]$Chart.MaxMs, 1.5 * $target)
+    if ($top -le 0) { $top = 1 }
+    $canvas = New-JuicerUi Canvas @{ Width = $Width; Height = $Height; Background = '#17171C'; Margin = '0,6,0,2'; HorizontalAlignment = 'Left'; ClipToBounds = $true }
+    $points = New-Object System.Windows.Media.PointCollection
+    $last = [Math]::Max(1, $series.Count - 1)
+    for ($i = 0; $i -lt $series.Count; $i++) {
+        $points.Add((New-Object System.Windows.Point ($Width * $i / $last), ($Height - $Height * [double]$series[$i] / $top)))
+    }
+    $line = New-Object System.Windows.Shapes.Polyline
+    $line.Points = $points
+    $line.Stroke = ('System.Windows.Media.Brushes' -as [type])::DeepSkyBlue
+    $line.StrokeThickness = 1.3
+    [void]$canvas.Children.Add($line)
+    if ($target -gt 0) {
+        $y = $Height - $Height * $target / $top
+        $mark = New-Object System.Windows.Shapes.Line
+        $mark.X1 = 0; $mark.X2 = $Width; $mark.Y1 = $y; $mark.Y2 = $y
+        $mark.Stroke = ('System.Windows.Media.Brushes' -as [type])::MediumSeaGreen
+        $mark.StrokeThickness = 1
+        $dash = New-Object System.Windows.Media.DoubleCollection
+        $dash.Add(4); $dash.Add(3)
+        $mark.StrokeDashArray = $dash
+        [void]$canvas.Children.Add($mark)
+        $label = New-JuicerUi TextBlock @{ Text = ('{0:N2} ms' -f $target); Foreground = '#4CC38A'; FontSize = 10 }
+        ('System.Windows.Controls.Canvas' -as [type])::SetLeft($label, 4)
+        ('System.Windows.Controls.Canvas' -as [type])::SetTop($label, [Math]::Max(0, $y - 14))
+        [void]$canvas.Children.Add($label)
+    }
+    $topLabel = New-JuicerUi TextBlock @{ Text = ('{0:N1} ms' -f $top); Foreground = '#6E6E78'; FontSize = 10 }
+    ('System.Windows.Controls.Canvas' -as [type])::SetRight($topLabel, 4)
+    [void]$canvas.Children.Add($topLabel)
+    $canvas
+}
+
 function New-JuicerFindingCard {
     param([hashtable]$Finding)
     $colors = @{ Alto = '#E5484D'; Medio = '#F5B400'; Bajo = '#4EA1FF'; Info = '#6E6E78'; Ok = '#4CC38A' }
@@ -880,6 +926,7 @@ function New-JuicerFindingCard {
     Set-JuicerGridColumn $text 1
     [void]$text.Children.Add((New-JuicerUi TextBlock @{ Text = $Finding.Title; TextWrapping = 'Wrap'; FontWeight = $(if ($Finding.Severity -in 'Alto', 'Medio') { 'SemiBold' } else { 'Normal' }) }))
     if ($Finding.Detail) { [void]$text.Children.Add((New-JuicerUi TextBlock @{ Text = $Finding.Detail; TextWrapping = 'Wrap'; Foreground = '#9A9AA5'; Margin = '0,2,0,0' })) }
+    if ($Finding.Chart) { [void]$text.Children.Add((New-JuicerFrameChart $Finding.Chart)) }
     [void]$grid.Children.Add($text)
     $fix = $Finding.Fix
     $s = if ($fix -and $script:Gui.Snapshot) { $script:Gui.Snapshot.States[$fix] } else { $null }
@@ -1276,6 +1323,7 @@ function Get-JuicerGuiLimiter {
         Mode = $(if ($m) { $m.Mode } else { '' })
         Limits = $limits
         Engine = $pacer.Engine; Engines = @(Get-JuicerPacerEngines); Calibrated = @($pacer.Calibrated.Keys)
+        Latency = @($pacer.Games.Keys | Where-Object { [string]$pacer.Games[$_].Priority -eq 'Latencia' })
         Conflicts = @(Get-JuicerPacerConflicts $state (Get-JuicerFpsBackend) $limits $m)
     }
 }
@@ -1315,7 +1363,7 @@ function Show-JuicerGuiLimiter {
         $keep = if ($c.PacerGame.SelectedItem) { [string]$c.PacerGame.SelectedItem.Tag } else { '' }
         $c.PacerGame.Items.Clear()
         foreach ($g in @($L.Limits)) {
-            $label = if ($g.Fps) { '{0} ({1} FPS{2})' -f $g.Exe, $g.Fps, $(if (@($L.Calibrated) -contains $g.Exe) { ', calibrado' } else { '' }) } else { $g.Exe }
+            $label = if ($g.Fps) { '{0} ({1} FPS{2}{3})' -f $g.Exe, $g.Fps, $(if (@($L.Calibrated) -contains $g.Exe) { ', calibrado' } else { '' }), $(if (@($L.Latency) -contains $g.Exe) { ', latencia' } else { '' }) } else { $g.Exe }
             $it = New-JuicerUi ComboBoxItem @{ Content = $label; Tag = $g.Exe }
             [void]$c.PacerGame.Items.Add($it)
             if ($g.Exe -eq $keep -or -not $c.PacerGame.SelectedItem) { $c.PacerGame.SelectedItem = $it }
@@ -1324,14 +1372,31 @@ function Show-JuicerGuiLimiter {
         $script:Gui.SettingMode = $false
     }
     $c.BtnLimitRecalc.IsEnabled = @($L.Limits).Count -gt 0
+    $script:Gui.Pacer = $L
+    Show-JuicerGuiPacerPriority
     $c.PacerGame.IsEnabled = @($L.Limits).Count -gt 0
+    $c.PacerPriority.IsEnabled = @($L.Limits).Count -gt 0
     $c.BtnPacerCalibrate.IsEnabled = @($L.Limits).Count -gt 0
     $c.BtnPacerForget.IsEnabled = @($L.Calibrated).Count -gt 0
 }
 
+# The priority of the game chosen to calibrate, without that counting as
+# the user changing it.
+function Show-JuicerGuiPacerPriority {
+    $c = $script:Gui.C
+    $item = $c.PacerGame.SelectedItem
+    $want = if ($item -and $script:Gui.Pacer -and @($script:Gui.Pacer.Latency) -contains [string]$item.Tag) { 'Latencia' } else { 'Fluidez' }
+    $script:Gui.SettingMode = $true
+    try {
+        foreach ($it in $c.PacerPriority.Items) { if ([string]$it.Tag -eq $want) { $c.PacerPriority.SelectedItem = $it } }
+    } finally {
+        $script:Gui.SettingMode = $false
+    }
+}
+
 function Start-JuicerGuiLimiter {
-    param([string[]]$Add = @(), [string[]]$Remove = @(), [switch]$Recalc, [string]$Engine = '', [switch]$Forget)
-    Start-JuicerGuiTask 'Aplicando el frame pacer…' 'Limiter' @{ Add = $Add; Remove = $Remove; Fps = 0; Recalc = [bool]$Recalc; Engine = $Engine; Forget = [bool]$Forget } {
+    param([string[]]$Add = @(), [string[]]$Remove = @(), [switch]$Recalc, [string]$Engine = '', [switch]$Forget, [hashtable]$Priority)
+    Start-JuicerGuiTask 'Aplicando el frame pacer…' 'Limiter' @{ Add = $Add; Remove = $Remove; Fps = 0; Recalc = [bool]$Recalc; Engine = $Engine; Forget = [bool]$Forget; Priority = $Priority } {
         param($r)
         Show-JuicerGuiLimiter $r.Limiter
         $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica' })
@@ -1614,6 +1679,14 @@ function Register-JuicerGuiHandlers {
                     Set-JuicerGuiStatus 'Guardado. Los juegos a los que pongas el frame pacer usarán este modo.'
                 }
             }
+        })
+    $c.PacerGame.Add_SelectionChanged({ if (-not $script:Gui.SettingMode) { Show-JuicerGuiPacerPriority } })
+    $c.PacerPriority.Add_SelectionChanged({
+            if ($script:Gui.SettingMode) { return }
+            $game = $script:Gui.C.PacerGame.SelectedItem
+            $item = $script:Gui.C.PacerPriority.SelectedItem
+            if (-not $game -or -not $item) { return }
+            Start-JuicerGuiLimiter -Priority @{ Exe = [string]$game.Tag; Priority = [string]$item.Tag }
         })
     $c.PacerEngine.Add_SelectionChanged({
             if ($script:Gui.SettingMode) { return }
