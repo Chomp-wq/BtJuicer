@@ -288,11 +288,25 @@ Import-Module '$psm' -Force
     Set-JuicerGuiAdvanced `$true
     `$script:Gui.Ready = `$true
     Show-JuicerGuiHome
+    # Advanced mode: one tweak's details, searching, a level, a whole category.
+    Show-JuicerGuiTweakDetail 'ui.carpetas'
+    `$detail = `$script:Gui.C.TweakDetail.Children.Count
+    `$script:Gui.C.TweakSearch.Text = 'carpetas'
+    `$searched = @(`$script:Gui.Checks.Values | Where-Object { `$_.Visibility -eq 'Visible' }).Count
+    `$script:Gui.C.TweakSearch.Text = ''
+    `$script:Gui.C.TweakLevel.SelectedIndex = 3
+    `$extreme = @(`$script:Gui.Checks.Keys | Where-Object { `$script:Gui.Checks[`$_].Visibility -eq 'Visible' } | ForEach-Object { (Find-JuicerTweak `$_).Level } | Select-Object -Unique)
+    `$script:Gui.C.TweakLevel.SelectedIndex = 0
+    Select-JuicerGuiTweaks 'Ninguno'
+    Set-JuicerGuiCategoryChecks 'Interfaz' `$true
+    `$picked = @(Get-JuicerGuiCheckedTweaks).Count
+    `$countText = [string]`$script:Gui.C.TweakCount.Text
     `$r = @{
         IconOk = `$iconOk; IconWidth = `$(if (`$iconSize) { `$iconSize.Width } else { 0 }); Sections = `$script:Gui.Sections.Count; Tiles = `$script:Gui.Tiles.Count; Found = `$found
         PageShown = `$pageShown; Latency = [bool]`$script:Gui.C.GameLatencia.IsChecked; Measure = `$script:Gui.C.GameMeasurePanel.Children.Count
         Tips = `$script:Gui.C.GameTipsPanel.Children.Count; Hidden = `$hidden; Back = (`$script:Gui.C.GalleryPage.Visibility -eq 'Visible'); Home = [string]`$script:Gui.C.HomeHw.Text
         PageErrors = `$pageErrors; RealStatus = `$realStatus; Pending = [bool]`$script:Gui.Task
+        Detail = `$detail; Searched = `$searched; Extreme = `$extreme; Picked = `$picked; CountText = `$countText
         Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
@@ -332,6 +346,12 @@ Import-Module '$psm' -Force
             $r.PageErrors | Should -BeNullOrEmpty
             $r.Pending | Should -BeFalse
             $r.RealStatus | Should -BeLike 'Steam · *'
+            $r.Detail | Should -BeGreaterThan 8
+            $r.Searched | Should -BeGreaterOrEqual 1
+            $r.Searched | Should -BeLessThan 5
+            @($r.Extreme) | Should -Be @(3)
+            $r.Picked | Should -BeGreaterThan 0
+            $r.CountText | Should -BeLike "$($r.Picked) seleccionados*"
         } finally {
             $ps.Dispose()
             $rs.Dispose()

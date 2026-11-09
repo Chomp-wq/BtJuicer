@@ -38,6 +38,13 @@ function Format-JuicerResultsText {
     $lines -join "`n"
 }
 
+# Whether Text contains Query, ignoring case. Not -like: «[» typed in a
+# search box would be an invalid wildcard pattern.
+function Test-JuicerContains {
+    param([string]$Text, [string]$Query)
+    -not $Query -or ($Text -and $Text.IndexOf($Query, [StringComparison]::OrdinalIgnoreCase) -ge 0)
+}
+
 # Categories into two columns of similar height.
 function Split-JuicerColumns {
     param([object[]]$Groups)
@@ -206,6 +213,7 @@ $script:GuiXaml = @'
         <TextBlock Text="WIN JUICER" FontSize="24" FontWeight="Bold" Foreground="#F5B400"/>
         <TextBlock Text="  exprime Windows, sin humo y con vuelta atrás" FontSize="14" Foreground="#9A9AA5" VerticalAlignment="Bottom" Margin="0,0,0,4"/>
       </StackPanel>
+      <CheckBox x:Name="ChkAdvanced" Content="Modo avanzado" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="18,0,0,0" FontSize="14" ToolTip="Para quien sabe lo que toca: añade las pestañas de ajustes uno a uno (con lo que cambia exactamente cada uno), debloat, instalar programas, programas de arranque, ajuste fino y mantenimiento. Se recuerda para la próxima vez."/>
       <StackPanel x:Name="UpdatePanel" Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center" Visibility="Collapsed" Margin="16,0,0,0">
         <TextBlock x:Name="UpdateNote" Foreground="#F5B400" VerticalAlignment="Center"/>
         <Button x:Name="BtnUpdateCopy" Content="Copiar la orden" ToolTip="Cierra Win Juicer y pega la orden en PowerShell"/>
@@ -250,8 +258,7 @@ $script:GuiXaml = @'
                 </StackPanel>
               </Border>
             </WrapPanel>
-            <CheckBox x:Name="ChkAdvanced" Content="Mostrar todas las opciones (para quien quiere elegir ajuste a ajuste)" Margin="2,10,0,0"/>
-            <TextBlock Style="{StaticResource Note}" Text="Añade las pestañas de ajustes uno a uno, debloat, instalar programas, programas de arranque, ajuste fino y mantenimiento. Se recuerda para la próxima vez."/>
+            <TextBlock Style="{StaticResource Note}" Margin="2,10,2,4" Text="¿Sabes lo que haces? Activa «Modo avanzado», arriba a la derecha: podrás elegir una a una las optimizaciones, ver qué cambia exactamente cada una, guardar tu selección y usar el resto de herramientas."/>
           </StackPanel>
         </ScrollViewer>
       </TabItem>
@@ -276,25 +283,44 @@ $script:GuiXaml = @'
       <TabItem Header="Ajustes" x:Name="TabAjustes">
         <Grid Margin="14,10,14,10">
           <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="330"/></Grid.ColumnDefinitions>
+          <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="380"/></Grid.ColumnDefinitions>
           <WrapPanel Grid.Row="0" Grid.ColumnSpan="2" VerticalAlignment="Center">
-            <TextBlock Text="Selección:" VerticalAlignment="Center" Margin="2,0,6,0" Foreground="#9A9AA5"/>
-            <Button x:Name="BtnSelRecomendado" Content="Para este equipo" Style="{StaticResource Accent}"/>
+            <TextBlock Text="Seleccionar:" VerticalAlignment="Center" Margin="2,0,6,0" Foreground="#9A9AA5"/>
+            <Button x:Name="BtnSelRecomendado" Content="Para este equipo" Style="{StaticResource Accent}" ToolTip="Lo que conviene a tu hardware, según el diagnóstico"/>
             <Button x:Name="BtnSelSeguro" Content="Seguro"/>
             <Button x:Name="BtnSelRendimiento" Content="Rendimiento"/>
             <Button x:Name="BtnSelExtremo" Content="Extremo"/>
             <Button x:Name="BtnSelNinguno" Content="Ninguno"/>
             <TextBlock Text="   " />
-            <Button x:Name="BtnSimulate" Content="Simular"/>
+            <Button x:Name="BtnSimulate" Content="Simular" ToolTip="Dice qué cambiaría cada ajuste seleccionado, sin cambiar nada"/>
             <Button x:Name="BtnUndoSelected" Content="Deshacer seleccionados"/>
             <Button x:Name="BtnApply" Content="Aplicar seleccionados" Style="{StaticResource Accent}"/>
             <CheckBox x:Name="ChkRestorePoint" Content="Punto de restauración antes" IsChecked="True" Margin="10,0,0,0"/>
-            <TextBlock Text="   " />
-            <Button x:Name="BtnExport" Content="Exportar…"/>
-            <Button x:Name="BtnImport" Content="Importar…"/>
           </WrapPanel>
-          <TextBlock Grid.Row="1" Grid.ColumnSpan="2" Style="{StaticResource Note}"
-                     Text="Pasa el ratón por encima de cada ajuste: qué hace, qué ganas, qué cuesta y si conviene a este equipo. ★ recomendado aquí · ✓ ya aplicado · – no aplica en este equipo. Todo se puede deshacer."/>
+          <WrapPanel Grid.Row="1" Grid.ColumnSpan="2" VerticalAlignment="Center" Margin="0,2,0,6">
+            <TextBlock Text="Buscar:" VerticalAlignment="Center" Margin="2,0,4,0" Foreground="#9A9AA5"/>
+            <TextBox x:Name="TweakSearch" Style="{StaticResource Field}" Width="170" ToolTip="Por nombre, por lo que hace, o por su identificador (el de -Aplicar)"/>
+            <TextBlock Text="Nivel:" VerticalAlignment="Center" Margin="8,0,4,0" Foreground="#9A9AA5"/>
+            <ComboBox x:Name="TweakLevel" Width="120" Margin="3" SelectedIndex="0">
+              <ComboBoxItem Content="Todos" Tag=""/>
+              <ComboBoxItem Content="Seguro" Tag="1"/>
+              <ComboBoxItem Content="Rendimiento" Tag="2"/>
+              <ComboBoxItem Content="Extremo" Tag="3"/>
+            </ComboBox>
+            <TextBlock Text="Mostrar:" VerticalAlignment="Center" Margin="8,0,4,0" Foreground="#9A9AA5"/>
+            <ComboBox x:Name="TweakShow" Width="215" Margin="3" SelectedIndex="0">
+              <ComboBoxItem Content="Todos" Tag=""/>
+              <ComboBoxItem Content="Sin aplicar" Tag="Pendiente"/>
+              <ComboBoxItem Content="Aplicados" Tag="Aplicado"/>
+              <ComboBoxItem Content="Recomendados para este equipo" Tag="Recomendado"/>
+              <ComboBoxItem Content="Sólo los seleccionados" Tag="Marcado"/>
+            </ComboBox>
+            <TextBlock x:Name="TweakCount" Foreground="#F5B400" VerticalAlignment="Center" Margin="10,0,10,0"/>
+            <Button x:Name="BtnSelSave" Content="Guardar selección…" ToolTip="Tu selección, como perfil propio: cárgalo más tarde o en otro PC para revisarla y aplicarla"/>
+            <Button x:Name="BtnSelLoad" Content="Cargar selección…" ToolTip="Marca los ajustes de un perfil guardado, sin aplicar nada todavía"/>
+            <Button x:Name="BtnExport" Content="Exportar lo aplicado…" ToolTip="Lo que Win Juicer ha aplicado en este PC, para hacer lo mismo en otro"/>
+            <Button x:Name="BtnImport" Content="Importar…" ToolTip="Aplica una configuración exportada o una selección guardada"/>
+          </WrapPanel>
           <ScrollViewer Grid.Row="2" Grid.Column="0" VerticalScrollBarVisibility="Auto">
             <Grid Margin="0,0,10,0">
               <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
@@ -302,27 +328,37 @@ $script:GuiXaml = @'
               <StackPanel x:Name="TweaksRight" Grid.Column="1"/>
             </Grid>
           </ScrollViewer>
-          <Border Grid.Row="2" Grid.Column="1" Background="#1F1F25" CornerRadius="6" Padding="12,4,12,10">
-            <ScrollViewer VerticalScrollBarVisibility="Auto">
-              <StackPanel>
-                <TextBlock Text="Preferencias" Style="{StaticResource Head}"/>
-                <TextBlock Style="{StaticResource Note}" Text="Se aplican al marcar o desmarcar."/>
-                <StackPanel x:Name="PrefPanel"/>
-                <TextBlock Text="Plan de energía" Style="{StaticResource Head}"/>
-                <TextBlock x:Name="PlanNote" Style="{StaticResource Note}"/>
-                <WrapPanel>
-                  <Button x:Name="BtnPlanAdd" Content="Añadir y activar"/>
-                  <Button x:Name="BtnPlanRemove" Content="Quitar"/>
-                </WrapPanel>
-                <TextBlock Text="DNS" Style="{StaticResource Head}"/>
-                <TextBlock x:Name="DnsNote" Style="{StaticResource Note}"/>
-                <ComboBox x:Name="DnsCombo" Margin="3"/>
-                <WrapPanel>
-                  <Button x:Name="BtnDns" Content="Usar este DNS"/>
-                  <Button x:Name="BtnDnsUndo" Content="Volver al que tenía"/>
-                </WrapPanel>
-              </StackPanel>
-            </ScrollViewer>
+          <Border Grid.Row="2" Grid.Column="1" Background="#1F1F25" CornerRadius="6" Padding="10,6,10,10">
+            <TabControl x:Name="SideTabs" Background="Transparent" BorderThickness="0" Padding="0">
+              <TabItem Header="Detalles" x:Name="TabSideDetail">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <StackPanel x:Name="TweakDetail" Margin="2,8,4,4">
+                    <TextBlock Style="{StaticResource Note}" Text="Pasa el ratón por un ajuste: aquí verás qué hace, qué ganas, qué cuesta, si conviene a tu equipo y qué cambia exactamente. ★ recomendado aquí · ✓ ya aplicado · – no aplica en este equipo. Todo se puede deshacer."/>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+              <TabItem Header="Preferencias" x:Name="TabSidePrefs">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                  <StackPanel>
+                    <TextBlock Style="{StaticResource Note}" Margin="4,8,4,6" Text="Se aplican al marcar o desmarcar."/>
+                    <StackPanel x:Name="PrefPanel"/>
+                    <TextBlock Text="Plan de energía" Style="{StaticResource Head}"/>
+                    <TextBlock x:Name="PlanNote" Style="{StaticResource Note}"/>
+                    <WrapPanel>
+                      <Button x:Name="BtnPlanAdd" Content="Añadir y activar"/>
+                      <Button x:Name="BtnPlanRemove" Content="Quitar"/>
+                    </WrapPanel>
+                    <TextBlock Text="DNS" Style="{StaticResource Head}"/>
+                    <TextBlock x:Name="DnsNote" Style="{StaticResource Note}"/>
+                    <ComboBox x:Name="DnsCombo" Margin="3"/>
+                    <WrapPanel>
+                      <Button x:Name="BtnDns" Content="Usar este DNS"/>
+                      <Button x:Name="BtnDnsUndo" Content="Volver al que tenía"/>
+                    </WrapPanel>
+                  </StackPanel>
+                </ScrollViewer>
+              </TabItem>
+            </TabControl>
           </Border>
         </Grid>
       </TabItem>
@@ -863,7 +899,23 @@ function Get-JuicerGuiSnapshot {
     }
     $dns = @()
     try { $dns = @(Get-JuicerCurrentDns) } catch { Write-JuicerLog "Sin DNS actual: $_" }
-    @{ States = $states; Dns = $dns }
+    @{ States = $states; Dns = $dns; Changes = (Get-JuicerTweakChanges) }
+}
+
+# What each tweak changes, line by line, for the details pane: computed in
+# the background, since a few read this PC to know (the network adapters).
+function Get-JuicerTweakChanges {
+    $out = @{}
+    foreach ($t in (Get-JuicerCatalog)) {
+        try {
+            # Assigned first: Resolve-JuicerActions hands the list over whole.
+            $acts = Resolve-JuicerActions $t
+            $out[$t.Id] = @($acts | ForEach-Object { Format-JuicerAction $_ })
+        } catch {
+            $out[$t.Id] = @("(no se pudo leer: $_)")
+        }
+    }
+    $out
 }
 
 # One task at a time; what arrives meanwhile (a tab opened during the
@@ -965,6 +1017,11 @@ function Get-JuicerStateSuffix {
     @('', '#9A9AA5')
 }
 
+$script:LevelColors = @{ 0 = '#9A9AA5'; 1 = '#4CC38A'; 2 = '#4EA1FF'; 3 = '#E5484D' }
+
+# One tweak in the list: what it is and, at a glance, how far it goes (its
+# level), whether it needs a restart and its state. The rest, in the details
+# pane, which follows the mouse.
 function New-JuicerTweakCheck {
     param([hashtable]$Tweak)
     $s = $script:Gui.Snapshot.States[$Tweak.Id]
@@ -975,19 +1032,42 @@ function New-JuicerTweakCheck {
     [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $star; Foreground = '#F5B400' }))
     $titleColor = if ($Tweak.Level -eq 3) { '#FF8A80' } else { '#E8E8E8' }
     [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $Tweak.Title; Foreground = $titleColor }))
+    $chip = '  ' + $script:LevelNames[[int]$Tweak.Level].ToLowerInvariant()
+    [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $chip; Foreground = $script:LevelColors[[int]$Tweak.Level]; FontSize = 11; VerticalAlignment = 'Center' }))
+    if ($Tweak.Reboot -in 'Reinicio', 'Sesion') {
+        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $(if ($Tweak.Reboot -eq 'Reinicio') { '  ↻ reinicio' } else { '  ↻ sesión' }); Foreground = '#6E6E78'; FontSize = 11; VerticalAlignment = 'Center' }))
+    }
     $suffix = Get-JuicerStateSuffix $state
     [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $suffix[0]; Foreground = $suffix[1] }))
-    $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $Tweak.Id; ToolTip = (Get-JuicerGuiTweakTip $Tweak) }
+    $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $Tweak.Id }
     if ($state -eq 'NoAplica' -or ($state -eq 'Aplicado' -and -not $s.Undoable)) { $cb.Opacity = 0.6 }
     if ($state -eq 'NoAplica') { $cb.IsEnabled = $false }
+    $cb.Add_MouseEnter({ Show-JuicerGuiTweakDetail ([string]$this.Tag) })
+    $cb.Add_Click({ Show-JuicerGuiTweakDetail ([string]$this.Tag) -Focus; Update-JuicerGuiTweakCount })
     $script:Gui.Checks[$Tweak.Id] = $cb
     $cb
+}
+
+# A category's title with «todos» and «ninguno» for the ones shown in it.
+function New-JuicerGuiCategoryHead {
+    param([string]$Name)
+    $dock = New-JuicerUi DockPanel @{ Margin = '2,12,2,4' }
+    foreach ($label in 'ninguno', 'todos') {
+        $b = New-JuicerUi Button @{ Content = $label; Tag = @{ Category = $Name; On = ($label -eq 'todos') }; Padding = '7,1'; Margin = '3,0,0,0'; FontSize = 11; ToolTip = $(if ($label -eq 'todos') { 'Marca los que se ven de esta categoría y se pueden aplicar' } else { 'Desmarca los de esta categoría' }) }
+        ('System.Windows.Controls.DockPanel' -as [type])::SetDock($b, 'Right')
+        $b.Add_Click({ Set-JuicerGuiCategoryChecks $this.Tag.Category ([bool]$this.Tag.On) })
+        [void]$dock.Children.Add($b)
+    }
+    [void]$dock.Children.Add((New-JuicerUi TextBlock @{ Text = $Name; Foreground = '#F5B400'; FontWeight = 'SemiBold'; FontSize = 14; VerticalAlignment = 'Center' }))
+    $dock
 }
 
 function Show-JuicerGuiTweaks {
     $c = $script:Gui.C
     $checked = @($script:Gui.Checks.Keys | Where-Object { $script:Gui.Checks[$_].IsChecked })
     $script:Gui.Checks = @{}
+    $script:Gui.TweakGroups = New-Object System.Collections.ArrayList
+    $script:Gui.DetailId = $null
     $c.TweaksLeft.Children.Clear()
     $c.TweaksRight.Children.Clear()
     $catalog = @(Get-JuicerCatalog)
@@ -1000,18 +1080,136 @@ function Show-JuicerGuiTweaks {
     $panels = @($c.TweaksLeft, $c.TweaksRight)
     for ($i = 0; $i -lt 2; $i++) {
         foreach ($g in $cols[$i]) {
-            [void]$panels[$i].Children.Add((New-JuicerUi TextBlock @{ Text = $g.Name; Foreground = '#F5B400'; FontWeight = 'SemiBold'; FontSize = 14; Margin = '2,12,2,4' }))
+            $head = New-JuicerGuiCategoryHead $g.Name
+            [void]$panels[$i].Children.Add($head)
+            $boxes = @()
             foreach ($t in $g.Items) {
                 $cb = New-JuicerTweakCheck $t
                 $s = $script:Gui.Snapshot.States[$t.Id]
                 if ($checked -contains $t.Id -and $cb.IsEnabled -and $s -and $s.State -in 'Pendiente', 'Parcial') { $cb.IsChecked = $true }
                 [void]$panels[$i].Children.Add($cb)
+                $boxes += @{ Check = $cb; Tweak = $t }
             }
+            [void]$script:Gui.TweakGroups.Add(@{ Name = $g.Name; Head = $head; Items = $boxes })
         }
     }
     Show-JuicerGuiToggles 'Preferencias' $c.PrefPanel
     Show-JuicerGuiToggles 'Componentes' $c.CompPanel
     Show-JuicerGuiPowerAndDns
+    Set-JuicerGuiTweakFilter
+}
+
+# Whether a tweak passes the filters: a search in its title, what it does
+# and its id; its level; and its state, the advice or being checked.
+function Test-JuicerTweakFilter {
+    param([hashtable]$Tweak, [string]$Query, [string]$Level, [string]$Show, [string]$State, [string]$Verdict, [bool]$Checked)
+    if ($Query -and -not ((Test-JuicerContains $Tweak.Title $Query) -or (Test-JuicerContains $Tweak.What $Query) -or (Test-JuicerContains $Tweak.Id $Query))) { return $false }
+    if ($Level -and [string]$Tweak.Level -ne $Level) { return $false }
+    switch ($Show) {
+        'Pendiente' { return $State -in 'Pendiente', 'Parcial' }
+        'Aplicado' { return $State -eq 'Aplicado' }
+        'Recomendado' { return $Verdict -eq 'Recomendado' }
+        'Marcado' { return $Checked }
+    }
+    $true
+}
+
+function Set-JuicerGuiTweakFilter {
+    $c = $script:Gui.C
+    $q = ([string]$c.TweakSearch.Text).Trim()
+    $level = if ($c.TweakLevel.SelectedItem) { [string]$c.TweakLevel.SelectedItem.Tag } else { '' }
+    $show = if ($c.TweakShow.SelectedItem) { [string]$c.TweakShow.SelectedItem.Tag } else { '' }
+    foreach ($g in @($script:Gui.TweakGroups)) {
+        $any = $false
+        foreach ($e in $g.Items) {
+            $s = $script:Gui.Snapshot.States[$e.Tweak.Id]
+            $a = $script:Gui.Advice[$e.Tweak.Id]
+            $ok = Test-JuicerTweakFilter $e.Tweak $q $level $show $(if ($s) { $s.State } else { 'Pendiente' }) $(if ($a) { $a.Verdict } else { '' }) ([bool]$e.Check.IsChecked)
+            $e.Check.Visibility = $(if ($ok) { 'Visible' } else { 'Collapsed' })
+            if ($ok) { $any = $true }
+        }
+        $g.Head.Visibility = $(if ($any) { 'Visible' } else { 'Collapsed' })
+    }
+    Update-JuicerGuiTweakCount
+}
+
+# What is checked and can be applied or undone, shown or hidden by a filter:
+# a filter changes what is seen, not what was chosen.
+function Get-JuicerGuiCheckedTweaks {
+    @(foreach ($k in $script:Gui.Checks.Keys) {
+            $cb = $script:Gui.Checks[$k]
+            if ($cb.IsChecked -and $cb.IsEnabled) { $k }
+        })
+}
+
+function Update-JuicerGuiTweakCount {
+    $c = $script:Gui.C
+    $n = @(Get-JuicerGuiCheckedTweaks).Count
+    $total = $script:Gui.Checks.Count
+    $shown = @($script:Gui.Checks.Values | Where-Object { $_.Visibility -eq 'Visible' }).Count
+    $c.TweakCount.Text = '{0} seleccionados · {1} de {2} a la vista' -f $n, $shown, $total
+    $c.BtnApply.Content = $(if ($n -gt 0) { "Aplicar seleccionados ($n)" } else { 'Aplicar seleccionados' })
+}
+
+function Set-JuicerGuiCategoryChecks {
+    param([string]$Category, [bool]$On)
+    $g = @($script:Gui.TweakGroups | Where-Object { $_.Name -eq $Category }) | Select-Object -First 1
+    if (-not $g) { return }
+    foreach ($e in $g.Items) {
+        if (-not $e.Check.IsEnabled) { continue }
+        if (-not $On) { $e.Check.IsChecked = $false; continue }
+        $s = $script:Gui.Snapshot.States[$e.Tweak.Id]
+        if ($e.Check.Visibility -eq 'Visible' -and $s -and $s.State -in 'Pendiente', 'Parcial') { $e.Check.IsChecked = $true }
+    }
+    Update-JuicerGuiTweakCount
+}
+
+# Everything about one tweak, for someone deciding whether they want it.
+# Hovering only fills it in; Focus (a click) also brings its tab to the front,
+# so moving the mouse never takes the preferences away from under it.
+function Show-JuicerGuiTweakDetail {
+    param([string]$Id, [switch]$Focus)
+    if ($Focus) { $script:Gui.C.SideTabs.SelectedItem = $script:Gui.C.TabSideDetail }
+    if ($script:Gui.DetailId -eq $Id) { return }
+    $t = Find-JuicerTweak $Id
+    if (-not $t) { return }
+    $script:Gui.DetailId = $Id
+    $p = $script:Gui.C.TweakDetail
+    $p.Children.Clear()
+    $s = $script:Gui.Snapshot.States[$Id]
+    $a = $script:Gui.Advice[$Id]
+    $state = if ($s) { $s.State } else { 'Pendiente' }
+    $add = {
+        param([string]$Text, [string]$Color = '#C8C8D0', [string]$Weight = 'Normal', [double]$Size = 13, [string]$Margin = '0,2,0,0')
+        [void]$p.Children.Add((New-JuicerUi TextBlock @{ Text = $Text; Foreground = $Color; FontWeight = $Weight; FontSize = $Size; TextWrapping = 'Wrap'; Margin = $Margin }))
+    }
+    & $add $t.Title '#E8E8E8' 'SemiBold' 16 '0,0,0,2'
+    $rb = @{ No = 'efecto inmediato'; Explorador = 'reinicia el Explorador'; Sesion = 'al volver a iniciar sesión'; Reinicio = 'tras reiniciar' }[$t.Reboot]
+    & $add ('{0} · impacto {1} · {2}' -f $script:LevelNames[[int]$t.Level], ([string]$t.Impact).ToLowerInvariant(), $rb) $script:LevelColors[[int]$t.Level] 'Normal' 12
+    $stateText = switch ($state) {
+        'Aplicado' { if ($s.Undoable) { '✓ Aplicado por Win Juicer: se puede deshacer.' } else { '✓ Ya estaba así en este equipo.' } }
+        'Parcial' { '~ A medias: algo de lo que cambia ya está y algo no.' }
+        'NoAplica' { '– No aplica en este equipo.' }
+        'Error' { '! No se pudo leer su estado.' }
+        default { 'Sin aplicar.' }
+    }
+    if ($s -and $s.Reason) { $stateText += " $($s.Reason)" }
+    & $add $stateText $(if ($state -eq 'Aplicado') { '#4CC38A' } else { '#9A9AA5' }) 'Normal' 12 '0,6,0,0'
+    if ($a) {
+        $verdict = @{ Recomendado = 'Recomendado'; Opcional = 'Opcional'; NoRecomendado = 'No recomendado' }[$a.Verdict]
+        $vc = @{ Recomendado = '#4CC38A'; Opcional = '#F5B400'; NoRecomendado = '#E5484D' }[$a.Verdict]
+        & $add "Para este equipo: $verdict. $($a.Reason)" $vc 'Normal' 12 '0,4,0,0'
+    }
+    foreach ($sec in @(@('Qué hace', $t.What), @('Qué ganas', $t.Gain), @('Qué cuesta', $t.Cost))) {
+        & $add $sec[0] '#F5B400' 'SemiBold' 13 '0,10,0,0'
+        & $add $sec[1]
+    }
+    & $add 'Qué cambia exactamente' '#F5B400' 'SemiBold' 13 '0,10,0,0'
+    $lines = @($script:Gui.Snapshot.Changes[$Id])
+    if ($lines.Count -eq 0) { $lines = @('(nada en este equipo)') }
+    $box = New-JuicerUi TextBlock @{ Text = (($lines | ForEach-Object { '· ' + $_ }) -join "`n"); FontFamily = 'Consolas'; FontSize = 11; Foreground = '#C8C8D0'; TextWrapping = 'Wrap'; Margin = '0,2,0,0' }
+    [void]$p.Children.Add($box)
+    & $add "Se deshace en Deshacer, o desde la línea de órdenes con -Deshacer $Id. Para aplicarlo así: -Aplicar $Id." '#6E6E78' 'Normal' 11 '0,10,0,0'
 }
 
 # Preferences and components: checked means on, and a click applies.
@@ -1225,7 +1423,7 @@ function Show-JuicerGuiApps {
 function Set-JuicerGuiSearch {
     $q = ([string]$script:Gui.C.SearchBox.Text).Trim()
     foreach ($e in $script:Gui.InstallChecks.Values) {
-        $match = -not $q -or $e.App.Name -like "*$q*" -or $e.App.What -like "*$q*" -or $e.App.Id -like "*$q*"
+        $match = (Test-JuicerContains $e.App.Name $q) -or (Test-JuicerContains $e.App.What $q) -or (Test-JuicerContains $e.App.Id $q)
         $e.Check.Visibility = $(if ($match) { 'Visible' } else { 'Collapsed' })
     }
 }
@@ -1562,7 +1760,7 @@ function Set-JuicerGuiGallerySearch {
     foreach ($sec in @($script:Gui.Sections)) {
         $any = $false
         foreach ($t in $sec.Tiles) {
-            $show = -not $q -or $t.Name -like "*$q*"
+            $show = Test-JuicerContains $t.Name $q
             $t.Button.Visibility = $(if ($show) { 'Visible' } else { 'Collapsed' })
             if ($show) { $any = $true }
         }
@@ -2013,10 +2211,36 @@ function Register-JuicerGuiHandlers {
         BtnSelRendimiento     = { Select-JuicerGuiTweaks 'Rendimiento' }
         BtnSelExtremo         = { Select-JuicerGuiTweaks 'Extremo' }
         BtnSelNinguno         = { Select-JuicerGuiTweaks 'Ninguno' }
-        BtnApply              = { Invoke-JuicerGuiApply (Get-JuicerCheckedTags $script:Gui.Checks) }
-        BtnSimulate           = { Invoke-JuicerGuiApply (Get-JuicerCheckedTags $script:Gui.Checks) -Simulate }
+        BtnApply              = { Invoke-JuicerGuiApply (Get-JuicerGuiCheckedTweaks) }
+        BtnSimulate           = { Invoke-JuicerGuiApply (Get-JuicerGuiCheckedTweaks) -Simulate }
+        BtnSelSave            = {
+            $ids = @(Get-JuicerGuiCheckedTweaks)
+            if ($ids.Count -eq 0) { Show-JuicerGuiMessage 'Marca primero los ajustes que quieres guardar en tu perfil.' | Out-Null; return }
+            $d = New-Object Microsoft.Win32.SaveFileDialog
+            $d.Filter = 'Selección de Win Juicer (*.json)|*.json'
+            $d.FileName = 'mi-seleccion-winjuicer.json'
+            if (-not $d.ShowDialog($script:Gui.Window)) { return }
+            [IO.File]::WriteAllText($d.FileName, (ConvertTo-JuicerJson (New-JuicerSelectionConfig $ids)), (New-Object Text.UTF8Encoding $false))
+            Set-JuicerGuiStatus "Selección de $($ids.Count) ajustes guardada en $($d.FileName)."
+        }
+        BtnSelLoad            = {
+            $d = New-Object Microsoft.Win32.OpenFileDialog
+            $d.Filter = 'Selección o configuración de Win Juicer (*.json)|*.json'
+            if (-not $d.ShowDialog($script:Gui.Window)) { return }
+            $cfg = Read-JuicerConfig $d.FileName
+            $n = 0
+            foreach ($k in $script:Gui.Checks.Keys) {
+                $cb = $script:Gui.Checks[$k]
+                if (-not $cb.IsEnabled) { continue }
+                $cb.IsChecked = @($cfg.Tweaks) -contains $k
+                if ($cb.IsChecked) { $n++ }
+            }
+            Set-JuicerGuiTweakFilter
+            $skip = @($cfg.Unknown).Count
+            Set-JuicerGuiStatus ("Marcados $n ajustes de $(Split-Path -Leaf $d.FileName)." + $(if ($skip) { " $skip no los conoce esta versión." } else { '' }) + ' Revísalos y pulsa «Aplicar seleccionados».')
+        }
         BtnUndoSelected       = {
-            $ids = @(Get-JuicerCheckedTags $script:Gui.Checks | Where-Object { $script:Gui.Snapshot.States[$_].Undoable })
+            $ids = @(Get-JuicerGuiCheckedTweaks | Where-Object { $script:Gui.Snapshot.States[$_].Undoable })
             if ($ids.Count -eq 0) { Show-JuicerGuiMessage 'Ninguno de los seleccionados lo cambió Win Juicer: no hay nada que deshacer.' | Out-Null; return }
             Start-JuicerGuiTask 'Deshaciendo…' 'Run' @{ Undo = $ids } { param($r) Complete-JuicerGuiRun $r }
         }
@@ -2137,6 +2361,9 @@ function Register-JuicerGuiHandlers {
             })
     }
     $c.SearchBox.Add_TextChanged({ Set-JuicerGuiSearch })
+    $c.TweakSearch.Add_TextChanged({ Set-JuicerGuiTweakFilter })
+    $c.TweakLevel.Add_SelectionChanged({ Set-JuicerGuiTweakFilter })
+    $c.TweakShow.Add_SelectionChanged({ Set-JuicerGuiTweakFilter })
     $c.ChkUpkeep.Add_Click({
             if ($script:Gui.SettingUpkeep) { return }
             $on = [bool]$script:Gui.C.ChkUpkeep.IsChecked
@@ -2175,6 +2402,10 @@ function Register-JuicerGuiHandlers {
             $on = [bool]$script:Gui.C.ChkAdvanced.IsChecked
             Set-JuicerGuiAdvanced $on
             try { Save-JuicerUiPrefs @{ Advanced = $on } } catch { Write-JuicerLog "No se pudo guardar la preferencia de la ventana: $_" }
+            if ($on) {
+                $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabAjustes
+                Set-JuicerGuiStatus 'Modo avanzado: elige una a una las optimizaciones; a la derecha, qué cambia exactamente cada una.'
+            }
         })
     $c.PacerEngine.Add_SelectionChanged({
             if ($script:Gui.SettingMode) { return }
@@ -2280,6 +2511,8 @@ function Select-JuicerGuiTweaks {
         $cb = $script:Gui.Checks[$k]
         if ($cb.IsEnabled) { $cb.IsChecked = ($ids -contains $k) }
     }
+    # Through the filter: «Sólo los seleccionados» follows the new selection.
+    Set-JuicerGuiTweakFilter
     $label = @{ Recomendado = 'lo recomendado para este equipo'; Seguro = 'el perfil Seguro'; Rendimiento = 'el perfil Rendimiento'; Extremo = 'el perfil Extremo' }[$Mode]
     if ($label) { Set-JuicerGuiStatus "Seleccionado ${label}: $($ids.Count) ajustes por aplicar." } else { Set-JuicerGuiStatus 'Selección vacía.' }
 }

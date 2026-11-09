@@ -68,14 +68,34 @@ La ventana empieza **sencilla**, para que cualquiera pueda usarla: la pestaña
 - **Deshacer**: todo lo que ha hecho Win Juicer, de golpe.
 
 Con eso, más **Equipo**, **Juegos** y **Deshacer**, no hace falta nada más.
-**«Mostrar todas las opciones»**, en Empezar, añade el resto de pestañas para
-quien quiere elegir ajuste a ajuste, y se recuerda para la próxima vez:
+
+**Modo avanzado**, la casilla de arriba a la derecha, es para quien sabe lo que
+toca: añade el resto de pestañas y abre **Ajustes**, donde eliges una a una las
+optimizaciones. Se recuerda para la próxima vez.
+- Cada ajuste dice de un vistazo su nivel (seguro, rendimiento, extremo), si
+  pide reiniciar o volver a entrar, si está aplicado y si conviene a tu equipo (★).
+- **Buscar** por nombre, por lo que hace o por su identificador; filtrar por
+  **nivel** y por **estado** (sin aplicar, aplicados, recomendados para tu
+  equipo, sólo los seleccionados). Los filtros cambian lo que ves, no lo que has
+  elegido: «Aplicar» aplica todo lo seleccionado, se vea o no.
+- **todos / ninguno** en cada categoría, y la cuenta de seleccionados en el
+  botón de aplicar.
+- **Detalles**, a la derecha, del ajuste que tengas bajo el ratón: qué hace,
+  qué ganas, qué cuesta, su estado, si conviene a tu equipo y por qué, y **qué
+  cambia exactamente**: cada valor del registro, servicio o tarea, tal como lo
+  escribirá. Y su identificador, para `-Aplicar` y `-Deshacer`.
+- **Simular** dice qué cambiaría todo lo seleccionado, sin cambiar nada.
+- **Guardar selección…** guarda lo que has marcado como perfil propio;
+  **Cargar selección…** lo vuelve a marcar (aquí o en otro PC) sin aplicar nada,
+  para revisarlo antes. **Importar…** lo aplica directamente.
+
+Las pestañas:
 
 | Pestaña | Qué tiene |
 |---|---|
 | **Empezar** | Los cuatro botones de arriba, con el estado de cada cosa. |
 | **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo», «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro) y «Medir antes y después». |
-| **Ajustes** | Todos los ajustes con casillas, agrupados. Selección: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. *Exportar…* e *Importar…* llevan tu configuración a otro PC. |
+| **Ajustes** | Todos los ajustes, para elegirlos uno a uno (arriba). Selección rápida: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, los detalles del ajuste y, en su otra pestaña, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. *Exportar lo aplicado…* e *Importar…* llevan tu configuración a otro PC. |
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Arranque** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
@@ -617,6 +637,7 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
 | Sin animaciones | Rendimiento | Medio |
 | Sin transparencias | Rendimiento | Bajo |
 | Menú contextual clásico | Rendimiento | Bajo |
+| Carpetas grandes al instante: sin detectar el tipo de cada carpeta | Rendimiento | Medio |
 | Búsqueda de Inicio sin resultados de Bing | Rendimiento | Medio |
 | Sin Widgets | Rendimiento | Bajo |
 
@@ -681,7 +702,9 @@ contrario, aunque ya estuviera así antes de Win Juicer.
 - **Preferencias:** tema oscuro, mostrar extensiones de archivo, mostrar
   archivos ocultos, Bloq Num al iniciar, «Finalizar tarea» en la barra de tareas,
   barra de tareas a la izquierda, pantallazo azul con detalles (útil con
-  overclock), mensajes detallados al arrancar, rutas largas.
+  overclock), mensajes detallados al arrancar, rutas largas, el Explorador
+  abriendo en «Este equipo», Alt+Tab sólo con ventanas (sin las pestañas de
+  Edge) y sin «Galería» en el panel del Explorador.
 - **Componentes de Windows:** .NET Framework 3.5 y DirectPlay (juegos antiguos),
   WSL, Sandbox y Hyper-V.
 

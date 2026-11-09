@@ -287,6 +287,41 @@ Describe 'Ventana (sin pantalla)' {
         foreach ($b in @($names | Where-Object { $_ -like 'Btn*' })) { $handlers | Should -Contain $b -Because "$b necesita qué hacer" }
     }
 
+    It 'modo avanzado: busca sin romperse, filtra por nivel y estado, y sabe qué cambia cada ajuste' {
+        Test-JuicerContains 'Carpetas grandes' 'CARPETAS' | Should -BeTrue
+        Test-JuicerContains 'Carpetas grandes' '[' | Should -BeFalse
+        Test-JuicerContains 'abc' '' | Should -BeTrue
+        Test-JuicerContains '' 'x' | Should -BeFalse
+        $t = Find-JuicerTweak 'ui.carpetas'
+        Test-JuicerTweakFilter $t 'carpetas' '' '' 'Pendiente' 'Opcional' $false | Should -BeTrue
+        Test-JuicerTweakFilter $t 'ui.carp' '' '' 'Pendiente' 'Opcional' $false | Should -BeTrue
+        Test-JuicerTweakFilter $t 'no-existe' '' '' 'Pendiente' 'Opcional' $false | Should -BeFalse
+        Test-JuicerTweakFilter $t '' '2' '' 'Pendiente' 'Opcional' $false | Should -BeTrue
+        Test-JuicerTweakFilter $t '' '3' '' 'Pendiente' 'Opcional' $false | Should -BeFalse
+        Test-JuicerTweakFilter $t '' '' 'Pendiente' 'Parcial' 'Opcional' $false | Should -BeTrue
+        Test-JuicerTweakFilter $t '' '' 'Aplicado' 'Pendiente' 'Opcional' $false | Should -BeFalse
+        Test-JuicerTweakFilter $t '' '' 'Recomendado' 'Pendiente' 'Opcional' $false | Should -BeFalse
+        Test-JuicerTweakFilter $t '' '' 'Marcado' 'Pendiente' 'Opcional' $true | Should -BeTrue
+        $ch = Get-JuicerTweakChanges
+        $ch.Count | Should -Be @(Get-JuicerCatalog).Count
+        $ch['ui.carpetas'] | Should -BeLike '*\FolderType = "NotSpecified"'
+        @($ch['pref.esteequipo'])[0] | Should -BeLike '*LaunchTo = 1*'
+    }
+
+    It 'guarda una selección como perfil, y la lee como una configuración más' {
+        $file = Join-Path ([IO.Path]::GetTempPath()) ('wj-seleccion-' + [guid]::NewGuid().ToString('N') + '.json')
+        try {
+            $cfg = New-JuicerSelectionConfig @('ui.carpetas', 'juegos.raton', 'pref.oscuro', 'no.existe', 'ui.carpetas')
+            @($cfg.Tweaks) | Should -Be @('ui.carpetas', 'juegos.raton')
+            [IO.File]::WriteAllText($file, (ConvertTo-JuicerJson $cfg))
+            $back = Read-JuicerConfig $file
+            @($back.Tweaks) | Should -Be @('ui.carpetas', 'juegos.raton')
+            $back.Toggles.Count | Should -Be 0
+        } finally {
+            Remove-Item -LiteralPath $file -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'resume resultados con sus avisos de reinicio' {
         $text = Format-JuicerResultsText @(
             @{ Title = 'A'; Outcome = 'Aplicado'; Reboot = 'Reinicio' }
@@ -1194,8 +1229,10 @@ Describe 'Galería de juegos' {
     }
 
     It 'la página de un juego reúne lo que hace falta para dibujarla' {
-        Add-JuicerFpsLimit 'cs2.exe' 200 | Out-Null
+        # The priority first: changing it recalculates the rate with the
+        # screen of this PC, and CI runners have one.
         Set-JuicerPacerPriority 'cs2.exe' 'Latencia' | Out-Null
+        Add-JuicerFpsLimit 'cs2.exe' 200 | Out-Null
         $p = Get-JuicerGuiGamePage @{ Id = 'steam:730'; Name = 'Counter-Strike 2'; Launcher = 'Steam'; Dir = ''; Exe = 'C:\Juegos\cs2.exe'; ExeName = 'cs2.exe' }
         $p.Game.Fps | Should -Be 200
         $p.Priority | Should -Be 'Latencia'
