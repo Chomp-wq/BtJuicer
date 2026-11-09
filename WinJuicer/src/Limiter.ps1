@@ -41,7 +41,7 @@ function Get-JuicerFpsBackend { [string](& (Get-JuicerBackend).FpsBackend) }
 
 # --- What the frame pacer remembers ------------------------------------------
 # Engine: Auto, nvidia or rtss. Calibrated: exe -> @{ Fps; Why; Signature; Date }.
-# Games: exe -> @{ Priority = Fluidez | Latencia }.
+# Games: exe -> @{ Priority = Fluidez | Latencia; Fps = a rate chosen by hand }.
 
 function Get-JuicerPacerPath { Join-Path (Get-JuicerHome) 'frame-pacer.json' }
 
@@ -85,11 +85,40 @@ function Set-JuicerPacerPriority {
     param([Parameter(Mandatory)][string]$Exe, [ValidateSet('Fluidez', 'Latencia')][string]$Priority, [hashtable]$Monitor)
     $exe = ConvertTo-JuicerExeName $Exe
     $state = Read-JuicerPacer
-    if ($Priority -eq 'Fluidez') { $state.Games.Remove($exe) } else { $state.Games[$exe] = @{ Priority = $Priority } }
+    Set-JuicerPacerGameField $state $exe 'Priority' $(if ($Priority -eq 'Latencia') { 'Latencia' } else { $null })
     # A calibration made for the other priority does not hold for this one.
     $state.Calibrated.Remove($exe)
     Save-JuicerPacer $state
-    if (@(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe }).Count -gt 0) { Add-JuicerFpsLimit $exe 0 $Monitor }
+    if (@(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe }).Count -gt 0) {
+        # Without a screen to read, it is saved and applies at the next recalculation.
+        try { Add-JuicerFpsLimit $exe 0 $Monitor } catch { Write-JuicerLog "Prioridad de $exe guardada; el ritmo se recalculará cuando se pueda leer la pantalla: $_" }
+    }
+}
+
+# One field of a game's entry; null removes it, and an empty entry goes.
+function Set-JuicerPacerGameField {
+    param([hashtable]$State, [string]$Exe, [string]$Name, $Value)
+    $g = $State.Games[$Exe]
+    if ($g -isnot [hashtable]) { $g = @{} }
+    if ($null -eq $Value) { $g.Remove($Name) } else { $g[$Name] = $Value }
+    if ($g.Count -gt 0) { $State.Games[$Exe] = $g } else { $State.Games.Remove($Exe) }
+}
+
+# A rate chosen by hand for a game, kept when the rates are recalculated
+# (a new monitor mode, the sign-in upkeep). 0 goes back to the automatic one.
+function Set-JuicerPacerFps {
+    param([Parameter(Mandatory)][string]$Exe, [int]$Fps, [hashtable]$Monitor, [string]$Use)
+    $exe = ConvertTo-JuicerExeName $Exe
+    $state = Read-JuicerPacer
+    Set-JuicerPacerGameField $state $exe 'Fps' $(if ($Fps -gt 0) { $Fps } else { $null })
+    Save-JuicerPacer $state
+    Add-JuicerFpsLimit $exe $Fps $Monitor $Use
+}
+
+function Get-JuicerPacerFps {
+    param([string]$Exe)
+    $g = (Read-JuicerPacer).Games[(ConvertTo-JuicerExeName $Exe)]
+    if ($g -is [hashtable] -and [int]$g.Fps -gt 0) { [int]$g.Fps } else { 0 }
 }
 
 # Which engines this PC has: nvidia, rtss, both or none.
@@ -278,9 +307,10 @@ function New-JuicerFpsLimitTweak {
 }
 
 # The cap Win Juicer would set for this game on this screen, used the way
-# its owner uses it. A warning, if any, goes at the end of Why.
+# its owner uses it. A warning, if any, goes at the end of Why. A rate chosen
+# by hand wins, unless Automatic asks for what Win Juicer would choose.
 function Get-JuicerRecommendedFps {
-    param([string]$Exe, [hashtable]$Monitor)
+    param([string]$Exe, [hashtable]$Monitor, [switch]$Automatic)
     if (-not $Monitor) { $Monitor = Get-JuicerPrimaryMonitor }
     if (-not $Monitor) { return $null }
     $hz = [int]$Monitor.Display.Hz
@@ -304,6 +334,14 @@ function Get-JuicerRecommendedFps {
         $cap.Calibrated = $true
         # The fraction under the refresh is only for a pace at the refresh.
         if ($cap.Fps -ne $hz) { $cap.Exact = 0 }
+    }
+    $manual = Get-JuicerPacerFps $exe
+    if ($cap -and $manual -gt 0 -and -not $Automatic) {
+        $cap.Fps = $manual
+        $cap.Why = 'Ritmo elegido por ti: {0} FPS ({1:N2} ms por fotograma).' -f $manual, (1000 / $manual)
+        $cap.Manual = $true
+        $cap.Warn = $null
+        if ($manual -ne $hz) { $cap.Exact = 0 }
     }
     if ($cap -and $cap.Warn) { $cap.Why = "$($cap.Why) $($cap.Warn)" }
     $cap
@@ -517,6 +555,8 @@ function Invoke-JuicerPacerCalibration {
     if ($c.Action -in 'Bajar', 'Subir') {
         $state = Read-JuicerPacer
         $state.Calibrated[$exe] = @{ Fps = $c.Fps; Why = $c.Why; Signature = (Get-JuicerLimitSignature $Monitor); Date = (Get-Date).ToString('s') }
+        # Calibrating is choosing automatically again.
+        Set-JuicerPacerGameField $state $exe 'Fps' $null
         Save-JuicerPacer $state
         $r = Add-JuicerFpsLimit $exe 0 $Monitor
         $sev = if ($r.Outcome -in 'Aplicado', 'YaEstaba') { 'Ok' } else { 'Medio' }

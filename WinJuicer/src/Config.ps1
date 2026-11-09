@@ -41,6 +41,14 @@ function Export-JuicerConfig {
     $cfg
 }
 
+# A selection made in Ajustes, saved as a configuration file: the same
+# format, so «Importar…» applies it and «Cargar selección…» just checks it.
+function New-JuicerSelectionConfig {
+    param([string[]]$Ids = @())
+    $tweaks = @($Ids | Where-Object { $t = Find-JuicerTweak $_; $t -and -not $t.Off } | Select-Object -Unique)
+    @{ Version = 1; Creado = (Get-Date).ToString('s'); Seleccion = $true; Tweaks = $tweaks; Toggles = @{}; Dns = $null; Apps = @() }
+}
+
 # Reads and checks a configuration. Whatever this version of Win Juicer does
 # not know goes to Unknown instead of failing the whole file.
 function Read-JuicerConfig {

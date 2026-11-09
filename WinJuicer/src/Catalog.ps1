@@ -511,6 +511,16 @@ function New-JuicerCatalog {
         )
     }
     @{
+        Id = 'ui.carpetas'; Category = 'Interfaz'; Level = 2; Impact = 'Medio'; Reboot = 'Explorador'
+        Title = 'Carpetas grandes al instante (sin detectar su tipo)'
+        What = 'El Explorador deja de mirar qué hay en cada carpeta para elegir su vista (música, imágenes, documentos) y las abre todas como carpeta general.'
+        Gain = 'Las carpetas con miles de archivos, como Descargas o una biblioteca de mods, se abren al momento en lugar de quedarse cargando.'
+        Cost = 'Las carpetas de música o fotos ya no cambian solas a su vista con columnas o miniaturas grandes; la eliges tú con «Ver», y se recuerda.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKCU\Software\Classes\Local Settings\Software\Microsoft\Windows\Shell\Bags\AllFolders\Shell'; Name = 'FolderType'; Kind = 'String'; Value = 'NotSpecified' }
+        )
+    }
+    @{
         Id = 'ui.busqueda'; Category = 'Interfaz'; Level = 2; Impact = 'Medio'; Reboot = 'Explorador'
         Title = 'Búsqueda de Inicio sin resultados web'
         What = 'Quita las sugerencias de Bing de la búsqueda del menú Inicio.'
@@ -918,6 +928,35 @@ function New-JuicerCatalog {
         Skip = { if ((Get-JuicerWindowsBuild) -lt 22000) { 'Sólo en Windows 11.' } }
         Actions = @(@{ Type = 'Registry'; Path = $adv; Name = 'TaskbarAl'; Value = 0 })
         Off = @(@{ Type = 'Registry'; Path = $adv; Name = 'TaskbarAl'; Value = 1 })
+    }
+    @{
+        Id = 'pref.esteequipo'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'Explorador'
+        Title = 'El Explorador abre en «Este equipo»'
+        What = 'Al abrir el Explorador se ven tus unidades y carpetas en lugar de Inicio con los archivos recientes.'
+        Gain = 'Llegas antes a tus discos y bibliotecas de juegos, y no se muestran tus archivos recientes al abrirlo.'
+        Cost = 'Ninguno.'
+        Actions = @(@{ Type = 'Registry'; Path = $adv; Name = 'LaunchTo'; Value = 1 })
+        Off = @(@{ Type = 'Registry'; Path = $adv; Name = 'LaunchTo'; Delete = $true })
+    }
+    @{
+        Id = 'pref.alttab'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Alt+Tab sólo con ventanas, sin pestañas de Edge'
+        What = 'Alt+Tab enseña sólo las ventanas abiertas, no cada pestaña de Microsoft Edge por separado.'
+        Gain = 'Vuelves al juego con un Alt+Tab, sin recorrer las pestañas del navegador.'
+        Cost = 'Ninguno: las pestañas siguen en su ventana.'
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 19041) { 'Necesita Windows 10 20H1 o posterior.' } }
+        Actions = @(@{ Type = 'Registry'; Path = $adv; Name = 'MultiTaskingAltTabFilter'; Value = 3 })
+        Off = @(@{ Type = 'Registry'; Path = $adv; Name = 'MultiTaskingAltTabFilter'; Delete = $true })
+    }
+    @{
+        Id = 'pref.galeria'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'Explorador'
+        Title = 'Sin «Galería» en el panel del Explorador'
+        What = 'Quita «Galería» del panel izquierdo del Explorador de Windows 11.'
+        Gain = 'Un panel más corto con lo que usas, y el Explorador no lee tus fotos para llenar la galería.'
+        Cost = 'Ninguno: tus imágenes siguen en su carpeta. Alguna actualización de Windows lo ha vuelto a mostrar; si pasa, vuelve a activarlo aquí.'
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 22621) { 'Sólo en Windows 11 22H2 o posterior.' } }
+        Actions = @(@{ Type = 'Registry'; Path = 'HKCU\Software\Classes\CLSID\{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}'; Name = 'System.IsPinnedToNameSpaceTree'; Value = 0 })
+        Off = @(@{ Type = 'Registry'; Path = 'HKCU\Software\Classes\CLSID\{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}'; Name = 'System.IsPinnedToNameSpaceTree'; Delete = $true })
     }
     @{
         Id = 'pref.pantallazo'; Category = 'Preferencias'; Level = 0; Impact = 'Bajo'; Reboot = 'No'

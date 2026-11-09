@@ -59,14 +59,47 @@ versión es: al abrirse mira si hay otra más nueva (lee la versión del
 arrancador publicado, 3 KB, nada más) y, si la hay, lo dice arriba con un botón
 para copiar la orden de una línea.
 
+La ventana empieza **sencilla**, para que cualquiera pueda usarla: la pestaña
+**Empezar** tiene cuatro botones grandes, en palabras normales:
+- **Optimizar Windows**: aplica sólo lo que conviene a tu equipo (nada del
+  nivel Extremo), con un punto de restauración antes. Una pregunta y listo.
+- **Mis juegos**: la galería de tus juegos (abajo).
+- **Revisar mi PC**: el diagnóstico, con cuántas cosas conviene arreglar.
+- **Deshacer**: todo lo que ha hecho Win Juicer, de golpe.
+
+Con eso, más **Equipo**, **Juegos** y **Deshacer**, no hace falta nada más.
+
+**Modo avanzado**, la casilla de arriba a la derecha, es para quien sabe lo que
+toca: añade el resto de pestañas y abre **Ajustes**, donde eliges una a una las
+optimizaciones. Se recuerda para la próxima vez.
+- Cada ajuste dice de un vistazo su nivel (seguro, rendimiento, extremo), si
+  pide reiniciar o volver a entrar, si está aplicado y si conviene a tu equipo (★).
+- **Buscar** por nombre, por lo que hace o por su identificador; filtrar por
+  **nivel** y por **estado** (sin aplicar, aplicados, recomendados para tu
+  equipo, sólo los seleccionados). Los filtros cambian lo que ves, no lo que has
+  elegido: «Aplicar» aplica todo lo seleccionado, se vea o no.
+- **todos / ninguno** en cada categoría, y la cuenta de seleccionados en el
+  botón de aplicar.
+- **Detalles**, a la derecha, del ajuste que tengas bajo el ratón: qué hace,
+  qué ganas, qué cuesta, su estado, si conviene a tu equipo y por qué, y **qué
+  cambia exactamente**: cada valor del registro, servicio o tarea, tal como lo
+  escribirá. Y su identificador, para `-Aplicar` y `-Deshacer`.
+- **Simular** dice qué cambiaría todo lo seleccionado, sin cambiar nada.
+- **Guardar selección…** guarda lo que has marcado como perfil propio;
+  **Cargar selección…** lo vuelve a marcar (aquí o en otro PC) sin aplicar nada,
+  para revisarlo antes. **Importar…** lo aplica directamente.
+
+Las pestañas:
+
 | Pestaña | Qué tiene |
 |---|---|
+| **Empezar** | Los cuatro botones de arriba, con el estado de cada cosa. |
 | **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo», «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro) y «Medir antes y después». |
-| **Ajustes** | Todos los ajustes con casillas, agrupados. Selección: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. *Exportar…* e *Importar…* llevan tu configuración a otro PC. |
+| **Ajustes** | Todos los ajustes, para elegirlos uno a uno (arriba). Selección rápida: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, los detalles del ajuste y, en su otra pestaña, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. *Exportar lo aplicado…* e *Importar…* llevan tu configuración a otro PC. |
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
-| **Inicio** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
-| **Juegos** | La lista de tus juegos, que encuentra solo, para optimizarlos en un clic; medir FPS y frametimes (media, 1 % y 0,1 % bajos, tirones, qué limita), frame pacer por juego (con calibración), GPU de alto rendimiento y prioridad alta para el `.exe` de un juego, y exclusiones de Defender para las bibliotecas de Steam, Epic, GOG y Xbox que encuentra. |
+| **Arranque** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
+| **Juegos** | La galería de tus juegos, con sus portadas, que encuentra solo. «Optimizar todos» en un clic, o pulsa un juego para su página: frame pacer (fluidez o latencia, ritmo automático o el tuyo, calibrar), gráfica potente, prioridad alta, medir FPS y frametimes, y qué poner dentro del juego. En «Mi pantalla y el frame pacer…», cómo usas el monitor, el motor y, con todas las opciones, medir cualquier juego y las exclusiones de Defender. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
 | **No hacemos** | Los «trucos» que circulan, y por qué no. |
@@ -309,16 +342,45 @@ tienda o, si no lo dice, el `*-Win64-Shipping.exe` de los juegos Unreal o el
 ejecutable principal con su nombre, nunca un desinstalador, un lanzador o un
 informe de errores. Lo recuerda, y con «Cambiar .exe…» eliges otro.
 
-Cada fila dice lo que tiene el juego (frame pacer con su frametime, GPU
-dedicada, prioridad alta). Para configurarlos, márcalos y pulsa:
-- **Optimizar los marcados**: el frame pacer al ritmo recomendado para tu
-  monitor y su modo, con la receta de baja latencia en NVIDIA, y la GPU dedicada si tienes
-  dos gráficas. Se aplica solo cada vez que abras el juego.
-- **Sólo frame pacer** (el ritmo recomendado o el que escribas), **GPU dedicada**,
-  **Prioridad alta** o **Quitar lo de Win Juicer**.
+Los muestra como una **galería**, agrupados por tienda (Steam, Epic, GOG,
+Xbox…), con un buscador. Cada juego lleva su portada:
+- **Steam**: la de la caché de su biblioteca, ya en tu PC. Steam guarda ahora
+  cada juego en su carpeta con nombres que cambian, así que Win Juicer elige la
+  vertical por su tamaño, leyendo sólo la cabecera de cada imagen.
+- **Xbox**: el logo que trae el propio juego en su carpeta.
+- Si no está en tu PC, se descarga una vez de la tienda: Steam, Epic (la URL
+  sale de la caché del catálogo de su lanzador) o GOG (su API pública). Sólo
+  por HTTPS, sólo de sus servidores, y sólo si lo que llega empieza como un JPEG
+  o un PNG de tamaño normal. Lo que no se encuentra no se vuelve a buscar en
+  una semana.
+- Si no hay portada, el icono del propio `.exe` sobre un color.
 
-**Consejos**, en cada fila: lo que hay que poner dentro del juego, que Win
-Juicer no puede cambiar desde fuera, para tu gráfica, tu monitor y cómo lo usas:
+Todo queda en `ProgramData\WinJuicer\portadas`. Los juegos ya optimizados
+llevan su ritmo en la esquina, y los nuevos, «NUEVO».
+
+**Optimizar todos**: a cada juego, el frame pacer al ritmo recomendado para tu
+monitor y su modo, con la receta de baja latencia en NVIDIA, y la gráfica potente
+si tienes dos. Se aplica solo cada vez que abras el juego.
+
+**La página de cada juego** (pulsa su portada):
+- **Optimizar este juego**, o **Quitar lo de Win Juicer**.
+- **Frame pacer**: activado o no y, en palabras normales, **¿qué prefieres?**:
+  *Fluidez* (el ritmo más estable, para la mayoría) o *Latencia mínima* (para
+  competitivos, y lo dice en los que lo son: CS2, VALORANT, Fortnite, Apex…).
+  **Ritmo**: *automático* (el recomendado o el calibrado para tu PC) o *elegido
+  por ti*, que se respeta aunque cambies de monitor o de modo. **Calibrar**,
+  con los pasos explicados antes de empezar. Sin NVIDIA ni RivaTuner, un botón
+  para instalar RivaTuner.
+- **Más rendimiento**: la gráfica potente (con dos gráficas) y prioridad alta.
+- **Medir**: tu última medida con su gráfica de frametimes, y un botón para
+  medir este juego en concreto.
+- **Dentro del juego**: los consejos de abajo.
+
+Cada cambio en la página se aplica al momento y se deshace como todo lo demás.
+
+**Dentro del juego**, en su página: lo que hay que poner en las opciones del
+juego, que Win Juicer no puede cambiar desde fuera, para tu gráfica, tu
+monitor y cómo lo usas:
 - **Latencia:** NVIDIA Reflex («Activado + Boost» si tu medida dice que limita
   el procesador), AMD Anti-Lag 2 en los juegos que lo traen (CS2, Ghost of
   Tsushima) o Radeon Anti-Lag del panel en los demás.
@@ -332,9 +394,7 @@ Juicer no puede cambiar desde fuera, para tu gráfica, tu monitor y cómo lo usa
   Siege, Marvel Rivals, THE FINALS, PUBG, Cyberpunk 2077…) y lo particular de
   algunos, como que Elden Ring no pasa de 60 FPS. A los demás les da lo general.
 
-Los juegos instalados desde la última vez salen como **nuevos**, ya marcados.
-
-**Mantenerlos optimizados solo** (casilla en la pestaña, o
+**Optimizar solos los juegos que instale** (casilla en la pestaña, o
 `-MantenerJuegos Activar`): al iniciar sesión, sin abrir Win Juicer, optimiza
 los juegos que hayas instalado desde la última vez y recalcula el frame pacer si
 ha cambiado el monitor, sus Hz o cómo lo usas, y te avisa con una
@@ -577,6 +637,7 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
 | Sin animaciones | Rendimiento | Medio |
 | Sin transparencias | Rendimiento | Bajo |
 | Menú contextual clásico | Rendimiento | Bajo |
+| Carpetas grandes al instante: sin detectar el tipo de cada carpeta | Rendimiento | Medio |
 | Búsqueda de Inicio sin resultados de Bing | Rendimiento | Medio |
 | Sin Widgets | Rendimiento | Bajo |
 
@@ -641,7 +702,9 @@ contrario, aunque ya estuviera así antes de Win Juicer.
 - **Preferencias:** tema oscuro, mostrar extensiones de archivo, mostrar
   archivos ocultos, Bloq Num al iniciar, «Finalizar tarea» en la barra de tareas,
   barra de tareas a la izquierda, pantallazo azul con detalles (útil con
-  overclock), mensajes detallados al arrancar, rutas largas.
+  overclock), mensajes detallados al arrancar, rutas largas, el Explorador
+  abriendo en «Este equipo», Alt+Tab sólo con ventanas (sin las pestañas de
+  Edge) y sin «Galería» en el panel del Explorador.
 - **Componentes de Windows:** .NET Framework 3.5 y DirectPlay (juegos antiguos),
   WSL, Sandbox y Hyper-V.
 
@@ -798,6 +861,7 @@ WinJuicer/
   src/Config.ps1          exportar e importar la configuración
   src/Measure.ps1         antes y después: medir y comparar
   src/Library.ps1         los juegos instalados y su .exe, y configurarlos en un paso
+  src/Covers.ps1          portadas de la galería: caché de Steam, logos de Xbox, tiendas, icono
   src/Upkeep.ps1          mantener los juegos optimizados al iniciar sesión
   src/GameTips.ps1        qué poner dentro de cada juego según tu gráfica y tu monitor
   src/Frames.ps1          FPS y frametimes con PresentMon

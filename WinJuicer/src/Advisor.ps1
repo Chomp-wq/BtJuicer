@@ -79,6 +79,10 @@ function Get-JuicerAdviceRule {
         'ui.menu' {
             return New-JuicerVerdict 'Opcional' 'Cuestión de gusto. Si el clic derecho tarda en abrirse, el clásico es instantáneo.'
         }
+        'ui.carpetas' {
+            if ($hdd) { return New-JuicerVerdict 'Recomendado' 'Windows está en un disco duro: leer cada carpeta para decidir su vista es lo que más tarda al abrirlas.' }
+            return New-JuicerVerdict 'Opcional' 'Se nota en carpetas con miles de archivos (Descargas, mods, fotos); si las tuyas son pequeñas, no cambia nada.'
+        }
         'ui.busqueda' {
             return New-JuicerVerdict 'Opcional' 'Si nunca buscas en la web desde Inicio, sólo ganas: la búsqueda deja de esperar a internet.'
         }

@@ -628,7 +628,7 @@ function Show-JuicerLimiter {
                 if (-not $exe) { continue }
                 $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'
                 $fps = if ($f -match '^\d+$') { [int]$f } else { 0 }
-                Show-JuicerResults @(Add-JuicerFpsLimit $exe $fps)
+                Show-JuicerResults @(if ($fps -gt 0) { Set-JuicerPacerFps $exe $fps $m } else { Add-JuicerFpsLimit $exe 0 $m })
             }
             'M' { Show-JuicerResults @(foreach ($g in @(Get-JuicerUnlimitedGames)) { Add-JuicerFpsLimit $g }) }
             'C' {
@@ -1327,7 +1327,8 @@ function Start-Juicer {
     }
     if ($LimitarFps.Count -gt 0) {
         if ($Fps -and ($Fps -lt 20 -or $Fps -gt 1000)) { Write-Host '  -Fps va de 20 a 1000.' -ForegroundColor Yellow; return 2 }
-        $results = @(foreach ($exe in $LimitarFps) { Add-JuicerFpsLimit $exe $Fps $monitor $ModoMonitor })
+        # A rate given by hand is kept when the rates are recalculated.
+        $results = @(foreach ($exe in $LimitarFps) { if ($Fps) { Set-JuicerPacerFps $exe $Fps $monitor $ModoMonitor } else { Add-JuicerFpsLimit $exe 0 $monitor $ModoMonitor } })
         Show-JuicerResults $results
         return $(if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
     }

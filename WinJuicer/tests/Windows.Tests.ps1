@@ -252,7 +252,61 @@ Import-Module '$psm' -Force
     # The frametime chart: line, target, and both labels; and inside a card.
     `$chart = New-JuicerFrameChart @{ Series = [double[]](5.8, 6.1, 5.9, 40, 5.8); TargetMs = 5.85; MaxMs = 40 }
     `$card = New-JuicerFindingCard (New-JuicerFrameChartFinding @{ Application = 'cs2.exe'; MedianMs = 5.9 } ([double[]](5.8, 6.1, 5.9, 40, 5.8)) 5.85)
+    # The gallery: a cover, an icon taken from a real .exe, and a game with
+    # no image at all; searching; one game's page; the simple window.
+    `$png = Join-Path ([IO.Path]::GetTempPath()) ('wj-icono-' + [guid]::NewGuid().ToString('N') + '.png')
+    `$iconOk = Save-JuicerExeIcon (Join-Path `$env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') `$png
+    `$iconSize = Read-JuicerImageSize `$png
+    `$games = @(
+        @{ Id = 'steam:1'; Name = 'Uno'; Launcher = 'Steam'; Dir = 'C:\x'; Exe = 'C:\x\uno.exe'; ExeName = 'uno.exe'; Fps = 171; Cover = @{ Path = `$png; Kind = 'cover' } }
+        @{ Id = 'gog:2'; Name = 'Dos'; Launcher = 'GOG'; Dir = 'C:\y'; Exe = 'C:\y\dos.exe'; ExeName = 'dos.exe'; New = `$true; Cover = @{ Path = `$png; Kind = 'icon' } }
+        @{ Id = 'custom:tres'; Name = 'Tres'; Launcher = 'custom'; Dir = ''; Exe = 'tres.exe'; ExeName = 'tres.exe' }
+    )
+    Show-JuicerGuiGallery `$games
+    `$script:Gui.C.GameSearch.Text = 'dos'
+    `$found = @(`$script:Gui.Sections | ForEach-Object { `$_.Tiles } | Where-Object { `$_.Button.Visibility -eq 'Visible' }).Count
+    `$script:Gui.C.GameSearch.Text = ''
+    `$page = @{
+        Game = `$games[0]; Engine = 'nvidia'; Priority = 'Latencia'; Manual = 0; Auto = @{ Fps = 171; Why = 'x'; Calibrated = `$false }; Competitive = `$true; TwoGpus = `$false
+        Last = @{ Date = (Get-Date).ToString('s'); AvgFps = 170; Low1 = 150; Steady = 95; JitterMs = 0.2; InputLatency = 12.3 }
+        Chart = @{ Series = [double[]](5.8, 6.1, 5.9, 40, 5.8); TargetMs = 5.85; MaxMs = 40 }
+        Tips = @(Get-JuicerGameTips -ExeName 'uno.exe' -GpuVendor 'NVIDIA' -Use 'VRR'); Cover = `$null
+    }
+    Open-JuicerGuiGame 'steam:1'
+    # Its page is read in the background: let it finish, as the window's timer would.
+    `$limit = (Get-Date).AddMinutes(3)
+    while ((`$script:Gui.Task -or `$script:Gui.Queue.Count -gt 0) -and (Get-Date) -lt `$limit) {
+        if (`$script:Gui.Task -and `$script:Gui.Task.Handle.IsCompleted) { Complete-JuicerGuiTask } else { Start-Sleep -Milliseconds 200 }
+    }
+    `$pageErrors = @(`$script:Gui.Silent | Where-Object { `$_ -like '[[]Error[]]*' })
+    `$realStatus = [string]`$script:Gui.C.GameStatus.Text
+    Show-JuicerGuiGamePage `$page
+    `$pageShown = `$script:Gui.C.GamePage.Visibility -eq 'Visible'
+    Close-JuicerGuiGame
+    Set-JuicerGuiAdvanced `$false
+    `$hidden = @(`$script:AdvancedTabs | Where-Object { `$script:Gui.C[`$_].Visibility -ne 'Visible' }).Count
+    Set-JuicerGuiAdvanced `$true
+    `$script:Gui.Ready = `$true
+    Show-JuicerGuiHome
+    # Advanced mode: one tweak's details, searching, a level, a whole category.
+    Show-JuicerGuiTweakDetail 'ui.carpetas'
+    `$detail = `$script:Gui.C.TweakDetail.Children.Count
+    `$script:Gui.C.TweakSearch.Text = 'carpetas'
+    `$searched = @(`$script:Gui.Checks.Values | Where-Object { `$_.Visibility -eq 'Visible' }).Count
+    `$script:Gui.C.TweakSearch.Text = ''
+    `$script:Gui.C.TweakLevel.SelectedIndex = 3
+    `$extreme = @(`$script:Gui.Checks.Keys | Where-Object { `$script:Gui.Checks[`$_].Visibility -eq 'Visible' } | ForEach-Object { (Find-JuicerTweak `$_).Level } | Select-Object -Unique)
+    `$script:Gui.C.TweakLevel.SelectedIndex = 0
+    Select-JuicerGuiTweaks 'Ninguno'
+    Set-JuicerGuiCategoryChecks 'Interfaz' `$true
+    `$picked = @(Get-JuicerGuiCheckedTweaks).Count
+    `$countText = [string]`$script:Gui.C.TweakCount.Text
     `$r = @{
+        IconOk = `$iconOk; IconWidth = `$(if (`$iconSize) { `$iconSize.Width } else { 0 }); Sections = `$script:Gui.Sections.Count; Tiles = `$script:Gui.Tiles.Count; Found = `$found
+        PageShown = `$pageShown; Latency = [bool]`$script:Gui.C.GameLatencia.IsChecked; Measure = `$script:Gui.C.GameMeasurePanel.Children.Count
+        Tips = `$script:Gui.C.GameTipsPanel.Children.Count; Hidden = `$hidden; Back = (`$script:Gui.C.GalleryPage.Visibility -eq 'Visible'); Home = [string]`$script:Gui.C.HomeHw.Text
+        PageErrors = `$pageErrors; RealStatus = `$realStatus; Pending = [bool]`$script:Gui.Task
+        Detail = `$detail; Searched = `$searched; Extreme = `$extreme; Picked = `$picked; CountText = `$countText
         Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
@@ -277,6 +331,27 @@ Import-Module '$psm' -Force
             $r.Report | Should -BeGreaterThan 500
             $r.Chart | Should -Be 4
             $r.Card | Should -BeTrue
+            $r.IconOk | Should -BeTrue
+            $r.IconWidth | Should -BeGreaterOrEqual 32
+            $r.Sections | Should -Be 3
+            $r.Tiles | Should -Be 3
+            $r.Found | Should -Be 1
+            $r.PageShown | Should -BeTrue
+            $r.Latency | Should -BeTrue
+            $r.Measure | Should -Be 1
+            $r.Tips | Should -BeGreaterThan 0
+            $r.Hidden | Should -Be 7
+            $r.Back | Should -BeTrue
+            $r.Home | Should -BeLike 'Tu equipo:*'
+            $r.PageErrors | Should -BeNullOrEmpty
+            $r.Pending | Should -BeFalse
+            $r.RealStatus | Should -BeLike 'Steam · *'
+            $r.Detail | Should -BeGreaterThan 8
+            $r.Searched | Should -BeGreaterOrEqual 1
+            $r.Searched | Should -BeLessThan 5
+            @($r.Extreme) | Should -Be @(3)
+            $r.Picked | Should -BeGreaterThan 0
+            $r.CountText | Should -BeLike "$($r.Picked) seleccionados*"
         } finally {
             $ps.Dispose()
             $rs.Dispose()

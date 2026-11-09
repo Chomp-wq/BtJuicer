@@ -383,6 +383,39 @@ function Save-JuicerFrameResult {
     [IO.File]::WriteAllText((Get-JuicerFrameHistoryPath), (ConvertTo-JuicerJson $list), (New-Object Text.UTF8Encoding $false))
 }
 
+# The last chart of each game (up to 40 games), for its page in the gallery.
+function Get-JuicerFrameChartPath { Join-Path (Get-JuicerHome) 'graficas.json' }
+
+function Read-JuicerFrameCharts {
+    $p = Get-JuicerFrameChartPath
+    if (-not (Test-Path -LiteralPath $p)) { return @{} }
+    try {
+        $d = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($p) | ConvertFrom-Json)
+        if ($d -is [hashtable]) { return $d }
+    } catch {
+        Write-JuicerLog "graficas.json dañado, se ignora: $_"
+    }
+    @{}
+}
+
+function Save-JuicerFrameChart {
+    param([Parameter(Mandatory)][string]$Application, [Parameter(Mandatory)][hashtable]$Chart)
+    $all = Read-JuicerFrameCharts
+    $c = @{ Series = @($Chart.Series); TargetMs = $Chart.TargetMs; MaxMs = $Chart.MaxMs; Date = (Get-Date).ToString('s') }
+    $all[$Application.ToLowerInvariant()] = $c
+    if ($all.Count -gt 40) {
+        foreach ($k in @($all.Keys | Sort-Object { [string]$all[$_].Date } | Select-Object -First ($all.Count - 40))) { $all.Remove($k) }
+    }
+    [IO.File]::WriteAllText((Get-JuicerFrameChartPath), (ConvertTo-JuicerJson $all), (New-Object Text.UTF8Encoding $false))
+}
+
+function Get-JuicerFrameChart {
+    param([string]$Application)
+    $c = (Read-JuicerFrameCharts)[$Application.ToLowerInvariant()]
+    if ($c -is [hashtable] -and @($c.Series).Count -ge 2) { $c.Series = [double[]]@($c.Series); return $c }
+    $null
+}
+
 function Get-JuicerPreviousFrameResult {
     param([string]$Application)
     @(Read-JuicerFrameHistory | Where-Object { $_.Application -eq $Application }) | Select-Object -Last 1
@@ -459,7 +492,11 @@ function Invoke-JuicerFrameCapture {
         $now = @()
         try { $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq ([string]$result.Application).ToLowerInvariant() -and $_.Fps }) } catch { Write-JuicerLog "Sin frame pacer: $_" }
         $targetMs = if ($now.Count -gt 0) { 1000 / $(if ($now[0].Exact -gt 0 -and $now[0].Backend -eq 'rtss') { [double]$now[0].Exact } else { [double]$now[0].Fps }) } else { 0 }
-        New-JuicerFrameChartFinding $result $series $targetMs
+        $chart = New-JuicerFrameChartFinding $result $series $targetMs
+        if ($chart) {
+            $chart
+            try { Save-JuicerFrameChart $result.Application $chart.Chart } catch { Write-JuicerLog "Sin guardar la gráfica: $_" }
+        }
         try {
             $cap = Get-JuicerRecommendedFps $result.Application
             if ($cap) {
