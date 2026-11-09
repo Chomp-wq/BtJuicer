@@ -52,6 +52,7 @@ $script:WingetApps = @(
     @{ Id = 'TechPowerUp.GPU-Z'; Name = 'GPU-Z'; Category = 'Hardware'; What = 'Datos de la gráfica: Resizable BAR, enlace PCIe, relojes.' }
     @{ Id = 'CPUID.HWMonitor'; Name = 'HWMonitor'; Category = 'Hardware'; What = 'Temperaturas y voltajes, más sencillo que HWiNFO.' }
     @{ Id = 'Guru3D.Afterburner'; Name = 'MSI Afterburner'; Category = 'Hardware'; What = 'Overclock, undervolt y curva de ventiladores de la gráfica; con RivaTuner, limitador de FPS y estadísticas en pantalla.' }
+    @{ Id = 'Guru3D.RTSS'; Name = 'RivaTuner Statistics Server'; Category = 'Hardware'; What = 'El motor del frame pacer de Win Juicer cuando no hay gráfica NVIDIA (o con estrobo, porque admite décimas), y estadísticas en pantalla.' }
     @{ Id = 'CrystalDewWorld.CrystalDiskInfo'; Name = 'CrystalDiskInfo'; Category = 'Hardware'; What = 'Salud y temperatura de los discos y SSD.' }
     @{ Id = 'CrystalDewWorld.CrystalDiskMark'; Name = 'CrystalDiskMark'; Category = 'Hardware'; What = 'Mide la velocidad de los discos.' }
     @{ Id = 'Maxon.CinebenchR23'; Name = 'Cinebench R23'; Category = 'Hardware'; What = 'Prueba de estabilidad y rendimiento del procesador.' }
@@ -93,6 +94,7 @@ function Get-JuicerAppSuggestions {
     $s['REALiX.HWiNFO'] = 'Para comprobar temperaturas y errores WHEA de lo que señala la revisión de hardware.'
     if ($Hw) {
         if (@($Hw.Gpus | Where-Object { $_.Vendor -eq 'NVIDIA' }).Count -gt 0) { $s['TechPowerUp.NVCleanstall'] = 'Tienes NVIDIA: el driver sin telemetría ni extras.' }
+        elseif (@($Hw.Gpus).Count -gt 0) { $s['Guru3D.RTSS'] = 'Sin gráfica NVIDIA, es lo que usa el frame pacer de Win Juicer para marcar el ritmo de tus juegos.' }
         if (@($Hw.Gpus | Where-Object { $_.Discrete }).Count -gt 0) { $s['TechPowerUp.GPU-Z'] = 'Confirma Resizable BAR y las líneas PCIe de tu gráfica.' }
         if ($Hw.SystemDisk -and $Hw.SystemDisk.Media -ne 'HDD') { $s['CrystalDewWorld.CrystalDiskInfo'] = 'Vigila la salud de tu SSD.' }
         if (@($Hw.Modules).Count -gt 0 -and -not $Hw.Laptop) { $s['CPUID.CPU-Z'] = 'Comprueba la velocidad real de tu RAM tras activar XMP/EXPO.' }

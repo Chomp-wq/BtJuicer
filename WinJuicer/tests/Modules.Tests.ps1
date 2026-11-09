@@ -1046,6 +1046,182 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
     }
 }
 
+Describe 'Galería de juegos' {
+    BeforeAll {
+        # The first bytes of a PNG or a JPEG of a given size: enough for
+        # reading the size, which is all the cover choice needs.
+        function New-TestPng {
+            param([string]$Path, [int]$W, [int]$H)
+            $b = New-Object byte[] 64
+            [byte[]](0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52) | ForEach-Object -Begin { $i = 0 } -Process { $b[$i++] = $_ }
+            $b[16] = ($W -shr 24) -band 255; $b[17] = ($W -shr 16) -band 255; $b[18] = ($W -shr 8) -band 255; $b[19] = $W -band 255
+            $b[20] = ($H -shr 24) -band 255; $b[21] = ($H -shr 16) -band 255; $b[22] = ($H -shr 8) -band 255; $b[23] = $H -band 255
+            [IO.File]::WriteAllBytes($Path, $b)
+        }
+        function New-TestJpg {
+            param([string]$Path, [int]$W, [int]$H)
+            # SOI, an APP0 of 16 bytes, then the frame header.
+            $b = [byte[]](@(0xFF, 0xD8, 0xFF, 0xE0, 0, 16) + @(0) * 14 + @(0xFF, 0xC0, 0, 17, 8, (($H -shr 8) -band 255), ($H -band 255), (($W -shr 8) -band 255), ($W -band 255), 3) + @(0) * 30)
+            [IO.File]::WriteAllBytes($Path, $b)
+        }
+    }
+    BeforeEach {
+        $script:M = New-NetMachine
+        $M.Backend.State.FpsBackend = 'nvidia'
+        $script:Dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-portadas-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $Dir | Out-Null
+        Remove-Item -LiteralPath (Get-JuicerCoverDir) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Get-JuicerPacerPath), (Get-JuicerUiPrefsPath), (Get-JuicerFrameChartPath) -ErrorAction SilentlyContinue
+    }
+    AfterEach {
+        Remove-Item -LiteralPath $Dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+
+    It 'lee el tamaño de un JPEG o un PNG sin decodificarlo' {
+        New-TestPng (Join-Path $Dir 'a.png') 600 900
+        New-TestJpg (Join-Path $Dir 'b.jpg') 460 215
+        $p = Read-JuicerImageSize (Join-Path $Dir 'a.png')
+        $p.Width | Should -Be 600; $p.Height | Should -Be 900; $p.Kind | Should -Be 'png'
+        $j = Read-JuicerImageSize (Join-Path $Dir 'b.jpg')
+        $j.Width | Should -Be 460; $j.Height | Should -Be 215; $j.Kind | Should -Be 'jpg'
+        Set-Content -LiteralPath (Join-Path $Dir 'c.txt') -Value 'no soy una imagen'
+        Read-JuicerImageSize (Join-Path $Dir 'c.txt') | Should -BeNullOrEmpty
+        Read-JuicerImageSize (Join-Path $Dir 'no-existe.png') | Should -BeNullOrEmpty
+    }
+
+    It 'sólo descarga por HTTPS y de las tiendas' {
+        Test-JuicerCoverUrl 'https://shared.cloudflare.steamstatic.com/store_item_assets/steam/apps/730/header.jpg' | Should -BeTrue
+        Test-JuicerCoverUrl 'https://cdn1.epicgames.com/x.jpg' | Should -BeTrue
+        Test-JuicerCoverUrl 'https://images.gog-statics.com/x.jpg' | Should -BeTrue
+        Test-JuicerCoverUrl 'http://cdn1.epicgames.com/x.jpg' | Should -BeFalse
+        Test-JuicerCoverUrl 'https://evilsteamstatic.com/x.jpg' | Should -BeFalse
+        Test-JuicerCoverUrl 'https://example.com/x.jpg' | Should -BeFalse
+        Test-JuicerCoverUrl 'no es una url' | Should -BeFalse
+    }
+
+    It 'de la caché de Steam elige la portada vertical, también con los nombres nuevos' {
+        $cache = Join-Path $Dir 'appcache\librarycache'
+        New-Item -ItemType Directory -Path (Join-Path $cache '730\abcd') -Force | Out-Null
+        New-TestJpg (Join-Path $cache '730\abcd\1a2b.jpg') 460 215
+        New-TestJpg (Join-Path $cache '730\3c4d.jpg') 600 900
+        New-TestPng (Join-Path $cache '730\logo.png') 640 360
+        Find-JuicerSteamCover $Dir '730' | Should -Be (Join-Path $cache '730\3c4d.jpg')
+        # The old flat name wins when it is there.
+        New-TestJpg (Join-Path $cache '570_library_600x900.jpg') 600 900
+        Find-JuicerSteamCover $Dir '570' | Should -Be (Join-Path $cache '570_library_600x900.jpg')
+        Find-JuicerSteamCover $Dir '999' | Should -BeNullOrEmpty
+        Find-JuicerSteamCover '' '730' | Should -BeNullOrEmpty
+    }
+
+    It 'saca del catálogo de Epic la portada alta de cada juego' {
+        $json = '[{"keyImages":[{"type":"DieselGameBox","url":"https://cdn1.epicgames.com/wide.jpg"},{"type":"DieselGameBoxTall","url":"https://cdn1.epicgames.com/tall.jpg"}],"releaseInfo":[{"appId":"Fortnite"}]},' +
+            '{"keyImages":[{"type":"DieselGameBoxTall","url":"https://malo.example.com/x.jpg"}],"releaseInfo":[{"appId":"Otro"}]}]'
+        $b64 = [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($json))
+        $map = ConvertFrom-JuicerEpicCatalog $b64
+        $map['fortnite'] | Should -Be 'https://cdn1.epicgames.com/tall.jpg'
+        $map.ContainsKey('otro') | Should -BeFalse
+        (ConvertFrom-JuicerEpicCatalog $json)['fortnite'] | Should -Be 'https://cdn1.epicgames.com/tall.jpg'
+        (ConvertFrom-JuicerEpicCatalog 'basura').Count | Should -Be 0
+    }
+
+    It 'en un juego de Xbox usa su logo, aunque lleve la escala en el nombre' {
+        Set-Content -LiteralPath (Join-Path $Dir 'MicrosoftGame.config') -Value '<Game><ShellVisuals DefaultDisplayName="Juego" Square150x150Logo="Assets\Logo.png" StoreLogo="Assets\Store.png"/></Game>'
+        New-Item -ItemType Directory -Path (Join-Path $Dir 'Assets') | Out-Null
+        New-TestPng (Join-Path $Dir 'Assets\Logo.scale-200.png') 300 300
+        New-TestPng (Join-Path $Dir 'Assets\Store.png') 50 50
+        Find-JuicerXboxCover $Dir | Should -Be (Join-Path $Dir 'Assets\Logo.scale-200.png')
+        Find-JuicerXboxCover (Join-Path $Dir 'nada') | Should -BeNullOrEmpty
+    }
+
+    It 'descarga una vez, guarda la portada y no vuelve a intentar lo que falló' {
+        Mock -ModuleName WinJuicer Save-JuicerCoverDownload {
+            param($Url, $Target)
+            if ($Url -like '*/730/library_600x900.jpg') { [IO.File]::WriteAllBytes($Target, [byte[]](0xFF, 0xD8, 0xFF, 0xD9)); return $true }
+            $false
+        }
+        $g = @{ Id = 'steam:730'; Name = 'Counter-Strike 2'; Dir = ''; Exe = '' }
+        Get-JuicerCover $g -NoDownload | Should -BeNullOrEmpty
+        $c = Get-JuicerCover $g
+        $c.Kind | Should -Be 'cover'
+        $c.Path | Should -BeLike '*steam_730.jpg'
+        Should -Invoke -ModuleName WinJuicer Save-JuicerCoverDownload -Times 2 -Exactly
+        (Get-JuicerCover $g -NoDownload).Path | Should -Be $c.Path
+        Should -Invoke -ModuleName WinJuicer Save-JuicerCoverDownload -Times 2 -Exactly
+        # A game with no cover anywhere: tried once, then left alone for a week.
+        $none = @{ Id = 'steam:1'; Name = 'Sin portada'; Dir = ''; Exe = '' }
+        Get-JuicerCover $none | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName WinJuicer Save-JuicerCoverDownload -Times 8 -Exactly
+        Get-JuicerCover $none | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName WinJuicer Save-JuicerCoverDownload -Times 8 -Exactly
+        Test-Path -LiteralPath (Join-Path (Get-JuicerCoverDir) 'steam_1.none') | Should -BeTrue
+    }
+
+    It 'agrupa la galería por tienda: las grandes primero y lo añadido a mano al final' {
+        $games = @(
+            @{ Id = 'custom:a'; Name = 'Zeta'; Launcher = 'custom' }
+            @{ Id = 'medido:b.exe'; Name = 'b'; Launcher = 'Medido o limitado' }
+            @{ Id = 'battle.net:d'; Name = 'Diablo IV'; Launcher = 'Battle.net' }
+            @{ Id = 'gog:1'; Name = 'Witcher'; Launcher = 'GOG' }
+            @{ Id = 'steam:2'; Name = 'Portal 2'; Launcher = 'Steam' }
+            @{ Id = 'steam:1'; Name = 'Counter-Strike 2'; Launcher = 'Steam' }
+            @{ Id = 'hoyoverse:g'; Name = 'Genshin'; Launcher = 'HoYoverse' }
+        )
+        $groups = @(Get-JuicerGuiGameGroups $games)
+        @($groups | ForEach-Object { $_.Name }) | Should -Be @('Steam', 'GOG', 'Battle.net', 'HoYoverse', 'Añadidos por ti', 'Otros')
+        @($groups[0].Games | ForEach-Object { $_.Name }) | Should -Be @('Counter-Strike 2', 'Portal 2')
+        @(Get-JuicerGuiGameGroups @()).Count | Should -Be 0
+    }
+
+    It 'un ritmo elegido a mano se queda al recalcular, y Automático lo devuelve al recomendado' {
+        $mon = @{ Display = [pscustomobject]@{ Monitor = 'X'; MonitorId = 'm#X#1'; Hz = 165; MaxHz = 165; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' } }
+        Set-JuicerPacerFps 'cs2.exe' 237 $mon | Out-Null
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 237
+        Get-JuicerPacerFps 'CS2.EXE' | Should -Be 237
+        (Get-JuicerRecommendedFps 'cs2.exe' $mon).Manual | Should -BeTrue
+        (Get-JuicerRecommendedFps 'cs2.exe' $mon -Automatic).Fps | Should -Be 157
+        @(Update-JuicerFpsLimits $mon) | Out-Null
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 237
+        # The priority is another field of the same entry: one does not erase the other.
+        Set-JuicerPacerPriority 'cs2.exe' 'Latencia' $mon | Out-Null
+        Set-JuicerPacerPriority 'cs2.exe' 'Fluidez' $mon | Out-Null
+        Get-JuicerPacerFps 'cs2.exe' | Should -Be 237
+        Set-JuicerPacerFps 'cs2.exe' 0 $mon | Out-Null
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
+        (Read-JuicerPacer).Games.ContainsKey('cs2.exe') | Should -BeFalse
+        # From the command line too.
+        @(Start-Juicer -LimitarFps 'b.exe' -Fps 120 -Si 6>$null)[-1] | Should -Be 0
+        Get-JuicerPacerFps 'b.exe' | Should -Be 120
+    }
+
+    It 'la página de un juego reúne lo que hace falta para dibujarla' {
+        Add-JuicerFpsLimit 'cs2.exe' 200 | Out-Null
+        Set-JuicerPacerPriority 'cs2.exe' 'Latencia' | Out-Null
+        $p = Get-JuicerGuiGamePage @{ Id = 'steam:730'; Name = 'Counter-Strike 2'; Launcher = 'Steam'; Dir = ''; Exe = 'C:\Juegos\cs2.exe'; ExeName = 'cs2.exe' }
+        $p.Game.Fps | Should -Be 200
+        $p.Priority | Should -Be 'Latencia'
+        $p.Competitive | Should -BeTrue
+        $p.Engine | Should -Be 'nvidia'
+        $p.Manual | Should -Be 0
+        $p.TwoGpus | Should -BeFalse
+        @($p.Tips).Count | Should -BeGreaterThan 0
+        Test-JuicerCompetitiveGame 'cyberpunk2077.exe' | Should -BeFalse
+    }
+
+    It 'recuerda la gráfica de cada juego y la preferencia de la ventana' {
+        $chart = @{ Series = [double[]](5.8, 6.0, 5.9, 12.0); TargetMs = 5.85; MaxMs = 12.0 }
+        Save-JuicerFrameChart 'CS2.exe' $chart
+        $c = Get-JuicerFrameChart 'cs2.exe'
+        @($c.Series).Count | Should -Be 4
+        $c.TargetMs | Should -Be 5.85
+        Get-JuicerFrameChart 'otro.exe' | Should -BeNullOrEmpty
+        for ($i = 0; $i -lt 45; $i++) { Save-JuicerFrameChart "j$i.exe" $chart }
+        (Read-JuicerFrameCharts).Count | Should -Be 40
+        (Read-JuicerUiPrefs).Advanced | Should -BeFalse
+        Save-JuicerUiPrefs @{ Advanced = $true }
+        (Read-JuicerUiPrefs).Advanced | Should -BeTrue
+    }
+}
+
 Describe 'Tus juegos' {
     BeforeEach {
         $script:M = New-NetMachine

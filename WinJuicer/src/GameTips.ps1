@@ -4,27 +4,35 @@
 # they complete what it sets from outside (the FPS cap, the NVIDIA profile).
 #
 # The table only states what is known for sure of each game: whether it has
-# NVIDIA Reflex or AMD Anti-Lag 2, and the odd fact that changes the advice
+# NVIDIA Reflex or AMD Anti-Lag 2, whether it is played competitively, and
+# the odd fact that changes the advice
 # (Elden Ring is capped at 60 FPS by the game itself). The rest comes from
 # the hardware and applies to any game.
 
 $script:GameTips = @(
-    @{ P = '^cs2\.exe$'; Name = 'Counter-Strike 2'; Reflex = $true; AntiLag2 = $true }
-    @{ P = '^valorant-win64-shipping\.exe$'; Name = 'VALORANT'; Reflex = $true }
-    @{ P = '^fortniteclient-win64-shipping'; Name = 'Fortnite'; Reflex = $true; Notes = 'Con un procesador o una gráfica modestos, el modo de renderizado «Rendimiento» da muchos más FPS a cambio de calidad; con hardware actual, DirectX 12.' }
-    @{ P = '^r5apex(_dx12)?\.exe$'; Name = 'Apex Legends'; Reflex = $true }
-    @{ P = '^overwatch\.exe$'; Name = 'Overwatch 2'; Reflex = $true }
-    @{ P = '^(cod|modernwarfare|blackopscoldwar|vanguard)\.exe$'; Name = 'Call of Duty'; Reflex = $true }
-    @{ P = '^rainbowsix(_vulkan|_dx12)?(_be)?\.exe$'; Name = 'Rainbow Six Siege'; Reflex = $true }
-    @{ P = '^marvel-win64-shipping\.exe$'; Name = 'Marvel Rivals'; Reflex = $true }
-    @{ P = '^discovery\.exe$'; Name = 'THE FINALS'; Reflex = $true }
-    @{ P = '^tslgame\.exe$'; Name = 'PUBG: BATTLEGROUNDS'; Reflex = $true }
+    @{ P = '^cs2\.exe$'; Competitive = $true; Name = 'Counter-Strike 2'; Reflex = $true; AntiLag2 = $true }
+    @{ P = '^valorant-win64-shipping\.exe$'; Competitive = $true; Name = 'VALORANT'; Reflex = $true }
+    @{ P = '^fortniteclient-win64-shipping'; Competitive = $true; Name = 'Fortnite'; Reflex = $true; Notes = 'Con un procesador o una gráfica modestos, el modo de renderizado «Rendimiento» da muchos más FPS a cambio de calidad; con hardware actual, DirectX 12.' }
+    @{ P = '^r5apex(_dx12)?\.exe$'; Competitive = $true; Name = 'Apex Legends'; Reflex = $true }
+    @{ P = '^overwatch\.exe$'; Competitive = $true; Name = 'Overwatch 2'; Reflex = $true }
+    @{ P = '^(cod|modernwarfare|blackopscoldwar|vanguard)\.exe$'; Competitive = $true; Name = 'Call of Duty'; Reflex = $true }
+    @{ P = '^rainbowsix(_vulkan|_dx12)?(_be)?\.exe$'; Competitive = $true; Name = 'Rainbow Six Siege'; Reflex = $true }
+    @{ P = '^marvel-win64-shipping\.exe$'; Competitive = $true; Name = 'Marvel Rivals'; Reflex = $true }
+    @{ P = '^discovery\.exe$'; Competitive = $true; Name = 'THE FINALS'; Reflex = $true }
+    @{ P = '^tslgame\.exe$'; Competitive = $true; Name = 'PUBG: BATTLEGROUNDS'; Reflex = $true }
     @{ P = '^cyberpunk2077\.exe$'; Name = 'Cyberpunk 2077'; Reflex = $true }
     @{ P = '^ghostoftsushima\.exe$'; Name = 'Ghost of Tsushima'; Reflex = $true; AntiLag2 = $true }
     @{ P = '^eldenring\.exe$'; Name = 'Elden Ring'; Cap60 = $true; Notes = 'El propio juego no pasa de 60 FPS: con una pantalla de más Hz, la frecuencia variable es lo que evita los tirones.' }
-    @{ P = '^league of legends\.exe$'; Name = 'League of Legends'; Notes = 'No tiene Reflex: su limitador de FPS propio, si lo usas, a la misma cifra que el frame pacer de Win Juicer.' }
-    @{ P = '^rocketleague\.exe$'; Name = 'Rocket League' }
+    @{ P = '^league of legends\.exe$'; Competitive = $true; Name = 'League of Legends'; Notes = 'No tiene Reflex: su limitador de FPS propio, si lo usas, a la misma cifra que el frame pacer de Win Juicer.' }
+    @{ P = '^rocketleague\.exe$'; Competitive = $true; Name = 'Rocket League' }
 )
+
+# Competitive games: where the frame pacer is best set for latency.
+function Test-JuicerCompetitiveGame {
+    param([string]$ExeName)
+    $t = Find-JuicerGameTip $ExeName
+    [bool]($t -and $t.Competitive)
+}
 
 function Find-JuicerGameTip {
     param([string]$ExeName)
