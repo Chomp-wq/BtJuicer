@@ -63,6 +63,17 @@ function Get-JuicerSelection {
         })
 }
 
+# What «Optimizar ahora» applies, and what Empezar counts as pending: the
+# same list, or the card would promise what the button then does not do.
+# What is recommended here, without the Extreme level: that one is chosen in
+# Ajustes, knowing what it costs.
+function Get-JuicerHomeSelection {
+    param([object[]]$Tweaks, [hashtable]$States, [hashtable]$Advice)
+    $level = @{}
+    foreach ($t in $Tweaks) { $level[$t.Id] = [int]$t.Level }
+    @(Get-JuicerSelection 'Recomendado' $Tweaks $States $Advice | Where-Object { $level[$_] -lt 3 })
+}
+
 # --- The window ------------------------------------------------------------------
 
 $script:GuiXaml = @'
@@ -1667,6 +1678,9 @@ function Show-JuicerGuiUndo {
     $c.UndoPanel.Children.Clear()
     $script:Gui.UndoChecks = @{}
     $journal = Read-JuicerJournal
+    # Nothing to undo: the buttons say so by being off.
+    Set-JuicerGuiButton 'BtnUndoChecked' ($journal.Count -gt 0)
+    Set-JuicerGuiButton 'BtnUndoAll' ($journal.Count -gt 0)
     $c.UndoNote.Text = "Deshacer devuelve cada cambio a como estaba antes de que Win Juicer lo tocara por primera vez. Las apps quitadas se reinstalan desde Microsoft Store. Diario: $(Get-JuicerJournalPath)"
     if ($journal.Count -eq 0) {
         [void]$c.UndoPanel.Children.Add((New-JuicerUi TextBlock @{ Text = 'No hay cambios de Win Juicer que deshacer.'; Foreground = '#4CC38A' }))
@@ -2569,7 +2583,7 @@ function Register-JuicerGuiHandlers {
         BtnRestorePoint       = { Start-JuicerGuiTask 'Creando punto de restauración…' 'Restore' @{} { param($r) Show-JuicerGuiMessage $r.Rp.Message | Out-Null } }
         BtnUndoChecked        = {
             $ids = Get-JuicerCheckedTags $script:Gui.UndoChecks
-            if ($ids.Count -eq 0) { return }
+            if ($ids.Count -eq 0) { Set-JuicerGuiStatus 'Marca primero los cambios que quieras deshacer, o pulsa «Deshacer todo».'; return }
             Start-JuicerGuiTask 'Deshaciendo…' 'Run' @{ Undo = $ids } { param($r) Complete-JuicerGuiRun $r }
         }
         BtnUndoAll            = {
@@ -2790,7 +2804,7 @@ function Show-JuicerGuiHome {
         } catch {
             $c.HomeHw.Text = 'Tu equipo: no se ha podido leer entero; lo demás funciona igual.'
         }
-        $pending = @(Get-JuicerSelection 'Recomendado' @(Get-JuicerCatalog) $script:Gui.Snapshot.States $script:Gui.Advice)
+        $pending = @(Get-JuicerHomeSelection @(Get-JuicerCatalog) $script:Gui.Snapshot.States $script:Gui.Advice)
         $c.HomeOptimizeNote.Text = if ($pending.Count -gt 0) {
             "$(if ($pending.Count -eq 1) { 'Hay 1 ajuste que conviene' } else { "Hay $($pending.Count) ajustes que convienen" }) a tu equipo sin aplicar. Antes se crea un punto de restauración, y todo se puede deshacer."
         } else {
@@ -2810,6 +2824,7 @@ function Show-JuicerGuiHome {
     }
     # Not @(…): the journal comes back as one list, and @() would count it as one.
     $n = (Read-JuicerJournal).Count
+    Set-JuicerGuiButton 'BtnHomeUndo' ($n -gt 0)
     $c.HomeUndoNote.Text = if ($n -gt 0) { $(if ($n -eq 1) { 'Win Juicer ha hecho 1 cambio en este equipo. Puedes deshacerlo aquí o en la pestaña Deshacer.' } else { "Win Juicer ha hecho $n cambios en este equipo. Puedes deshacerlos todos, o uno a uno en la pestaña Deshacer." }) } else { 'Todavía no has cambiado nada. Todo lo que haga Win Juicer se podrá deshacer.' }
 }
 
@@ -2817,7 +2832,7 @@ function Show-JuicerGuiHome {
 # level, with a restore point first, after one plain question.
 function Invoke-JuicerGuiHomeOptimize {
     if (-not $script:Gui.Ready) { Show-JuicerGuiMessage 'Espera un momento: Win Juicer todavía está leyendo tu equipo.' | Out-Null; return }
-    $ids = @(Get-JuicerSelection 'Recomendado' @(Get-JuicerCatalog) $script:Gui.Snapshot.States $script:Gui.Advice | Where-Object { (Find-JuicerTweak $_).Level -lt 3 })
+    $ids = @(Get-JuicerHomeSelection @(Get-JuicerCatalog) $script:Gui.Snapshot.States $script:Gui.Advice)
     if ($ids.Count -eq 0) {
         Show-JuicerGuiMessage 'Ya tienes aplicado todo lo que conviene a tu equipo.' | Out-Null
         return

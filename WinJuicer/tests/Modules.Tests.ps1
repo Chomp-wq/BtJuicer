@@ -408,6 +408,13 @@ Describe 'Ventana (sin pantalla)' {
         Format-JuicerHardwareShort @{ Cpu = @{}; Gpus = @() } | Should -Be ''
     }
 
+    It 'Optimizar ahora aplica lo mismo que Empezar cuenta: lo recomendado sin el nivel Extremo' {
+        $t = @(@{ Id = 'a'; Level = 1 }, @{ Id = 'b'; Level = 3 }, @{ Id = 'c'; Level = 2 }, @{ Id = 'd'; Level = 2 })
+        $states = @{ a = @{ State = 'Pendiente' }; b = @{ State = 'Pendiente' }; c = @{ State = 'Parcial' }; d = @{ State = 'Aplicado' } }
+        $advice = @{ a = @{ Verdict = 'Recomendado' }; b = @{ Verdict = 'Recomendado' }; c = @{ Verdict = 'Recomendado' }; d = @{ Verdict = 'Recomendado' } }
+        @(Get-JuicerHomeSelection $t $states $advice) | Should -Be @('a', 'c')
+    }
+
     It 'los botones de selección marcan lo que toca y sólo lo pendiente' {
         $t = @(
             @{ Id = 'a'; Level = 1 }, @{ Id = 'b'; Level = 2 }, @{ Id = 'c'; Level = 3 }, @{ Id = 'd'; Level = 0 }, @{ Id = 'e'; Level = 1 }
