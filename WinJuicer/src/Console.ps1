@@ -571,7 +571,7 @@ function Show-JuicerGameList {
         Write-JuicerMenu @(
             @('O', 'Optimizar', 'límite de FPS recomendado y GPU dedicada si hay dos'),
             @('F', 'Sólo límite de FPS', 'el recomendado o el que digas'),
-            @('P', 'Prioridad alta', ''),
+            @('P', 'Prioridad por encima de lo normal', 'no «alta»: con alta, el equipo se puede congelar'),
             @('Q', 'Quitar lo de Win Juicer', 'límite, GPU y prioridad'),
             @('C', 'Consejos', 'qué poner dentro de cada juego para tu gráfica y tu monitor')
         )
@@ -585,7 +585,9 @@ function Show-JuicerGameList {
         if (-not $what) { continue }
         $fps = 0
         if ($what -eq 'Fps') { $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'; if ($f -match '^\d+$') { $fps = [int]$f } }
-        Show-JuicerResults @(Invoke-JuicerGameSetup $sel $what $fps)
+        # Games picked one by one are what the user asked for, even one Win
+        # Juicer protected after it failed; «t» (all of them) leaves those alone.
+        Show-JuicerResults @(Invoke-JuicerGameSetup $sel $what $fps -Force:($pick -notmatch '^[tT]'))
     }
 }
 
