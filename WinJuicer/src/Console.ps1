@@ -370,7 +370,7 @@ function Show-JuicerProfiles {
             $pending = @($set | Where-Object { (Get-JuicerTweakState $_ $journal).State -in 'Pendiente', 'Parcial' }).Count
             Write-Host ('  {0}  ' -f $lvl) -ForegroundColor Yellow -NoNewline
             Write-Host ('{0,-12}' -f $script:LevelNames[$lvl]) -ForegroundColor White -NoNewline
-            Write-Host ('{0} ajustes, {1} por aplicar' -f $set.Count, $pending) -ForegroundColor DarkGray
+            Write-Host ('{0}, {1} por aplicar' -f (Format-JuicerCount $set.Count 'ajuste'), $pending) -ForegroundColor DarkGray
             Write-JuicerWrapped $descriptions[$lvl] 5 'DarkGray'
         }
         Write-Host ''
@@ -404,7 +404,7 @@ function Show-JuicerProfiles {
             Wait-JuicerKey
             continue
         }
-        if (-not (Confirm-JuicerAction "¿Aplicar $($todo.Count) ajustes?")) { continue }
+        if (-not (Confirm-JuicerAction "¿Aplicar $(Format-JuicerCount $todo.Count 'ajuste')?")) { continue }
         Show-JuicerResults (Invoke-JuicerTweakSet $todo)
         Wait-JuicerKey
     }
@@ -594,7 +594,8 @@ function Show-JuicerLimiter {
         $m = $null
         try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
         $pacer = Read-JuicerPacer
-        Write-JuicerWrapped ('Marca el ritmo con: ' + (Format-JuicerFpsBackend (Get-JuicerFpsBackend)) + '.') 2 'Gray'
+        $backend = Get-JuicerFpsBackend
+        Write-JuicerWrapped ('Marca el ritmo con: ' + (Format-JuicerFpsBackend $backend) + '.' + $(if (-not $backend) { ' Instálalo desde «Instalar programas» (9) del menú principal.' } else { '' })) 2 'Gray'
         if ($m) {
             $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) @() ([double]$m.Display.ExactHz)
             Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + '. Cómo la usas: ' + (Get-JuicerMonitorModes)[$m.Mode] + ". Ritmo recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
@@ -863,7 +864,7 @@ function Show-JuicerUndo {
         $c = Read-JuicerChoice 'Números a deshacer, T para todo, Intro para volver'
         if ($c -eq '') { return }
         if ($c -match '^[tT]$') {
-            if (Confirm-JuicerAction "¿Deshacer los $($journal.Count) cambios?") { Show-JuicerResults @(Undo-JuicerAll); Wait-JuicerKey }
+            if (Confirm-JuicerAction $(if ($journal.Count -eq 1) { '¿Deshacer el cambio?' } else { "¿Deshacer los $($journal.Count) cambios?" })) { Show-JuicerResults @(Undo-JuicerAll); Wait-JuicerKey }
             continue
         }
         $ids = @(Get-JuicerNumbers $c $journal.Count | ForEach-Object { $journal[$_ - 1].Id })
@@ -902,7 +903,7 @@ function Show-JuicerRecommended {
         Write-Host "  (impacto $($t.Impact.ToLowerInvariant()))" -ForegroundColor DarkGray
         Write-JuicerWrapped $advice[$t.Id].Reason 6 'DarkGray'
     }
-    $c = Read-JuicerChoice "¿Aplicar $($todo.Count) ajustes? S para aplicar, V para simular, Intro para volver"
+    $c = Read-JuicerChoice "¿Aplicar $(Format-JuicerCount $todo.Count 'ajuste')? S para aplicar, V para simular, Intro para volver"
     if ($c -match '^[vV]$') { Show-JuicerResults (Invoke-JuicerTweakSet $todo -Simulate) }
     elseif ($c -match '^(s|si|sí|y|yes)$') { Show-JuicerResults (Invoke-JuicerTweakSet $todo) }
     else { return }
@@ -961,7 +962,7 @@ function Show-JuicerDebloat {
         foreach ($p in $picked) {
             if ($p.App -and $p.App.Need) { Write-JuicerWrapped "Atención: $($p.App.Title). $($p.App.Need)" 2 'Yellow' }
         }
-        if (-not (Confirm-JuicerAction "¿Quitar $($tweaks.Count) apps?")) { continue }
+        if (-not (Confirm-JuicerAction "¿Quitar $(Format-JuicerCount $tweaks.Count 'app')?")) { continue }
         Show-JuicerResults (Invoke-JuicerTweakSet $tweaks)
         Wait-JuicerKey
     }
@@ -1355,7 +1356,7 @@ function Start-Juicer {
     if ($Medir -or $NuevaMedida) { Write-JuicerFindings (Invoke-JuicerMeasure -Reset:$NuevaMedida); return 0 }
     if ($Exportar) {
         $cfg = Export-JuicerConfig $Exportar
-        Write-Host ('  Configuración guardada en {0}: {1} ajustes, {2} preferencias, {3} apps{4}.' -f $Exportar, @($cfg.Tweaks).Count, $cfg.Toggles.Count, @($cfg.Apps).Count, $(if ($cfg.Dns) { ", DNS $($cfg.Dns)" } else { '' }))
+        Write-Host ('  Configuración guardada en {0}: {1}, {2}, {3}{4}.' -f $Exportar, (Format-JuicerCount @($cfg.Tweaks).Count 'ajuste'), (Format-JuicerCount $cfg.Toggles.Count 'preferencia'), (Format-JuicerCount @($cfg.Apps).Count 'app'), $(if ($cfg.Dns) { ", DNS $($cfg.Dns)" } else { '' }))
         return 0
     }
     $imported = $null
@@ -1412,7 +1413,7 @@ function Start-Juicer {
             if ($script:Interactive -and -not $Simular) {
                 Write-Host ''
                 foreach ($t in $todo) { Write-Host "  · $($t.Title)" }
-                if (-not (Confirm-JuicerAction "¿Aplicar $($todo.Count) ajustes?")) { return 0 }
+                if (-not (Confirm-JuicerAction "¿Aplicar $(Format-JuicerCount $todo.Count 'ajuste')?")) { return 0 }
             }
             $results += Invoke-JuicerTweakSet $todo -Simulate:$Simular -AcceptRisk:$AceptoRiesgos -NoRestorePoint:$SinPuntoDeRestauracion
         }

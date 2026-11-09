@@ -28,8 +28,6 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             $script:Gui.Advice = Get-JuicerAdvice $hw
             $script:Gui.Snapshot = Get-JuicerGuiSnapshot
             $script:Gui.Ready = $true
-            $summary = @(Format-JuicerHardwareSummary $hw)
-            $script:Gui.C.HwLine.Text = (@($summary | Select-Object -First 2) -join '   ·   ')
             Show-JuicerGuiTweaks
             Show-JuicerGuiApps
             Show-JuicerGuiUndo
@@ -132,8 +130,11 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             & $shot '09-ajustes-detalles'
             $c.SideTabs.SelectedItem = $c.TabSidePrefs
             & $shot '10-ajustes-preferencias'
-            & $shot '11-ajustes-pantalla-pequena' 960 620
-            foreach ($t in @(@('TabDebloat', '12-debloat'), @('TabInstalar', '13-instalar'), @('TabInicio', '14-arranque'), @('TabAjusteFino', '15-ajuste-fino'), @('TabMantenimiento', '16-mantenimiento'), @('TabMitos', '17-no-hacemos'))) {
+            $c.SideTabs.SelectedItem = $c.TabSideProfiles
+            & $shot '11-ajustes-perfiles'
+            $c.SideTabs.SelectedItem = $c.TabSideDetail
+            & $shot '12-ajustes-pantalla-pequena' 960 620
+            foreach ($t in @(@('TabDebloat', '13-debloat'), @('TabInstalar', '14-instalar'), @('TabInicio', '15-arranque'), @('TabAjusteFino', '16-ajuste-fino'), @('TabMantenimiento', '17-mantenimiento'), @('TabMitos', '18-no-hacemos'))) {
                 $c.Tabs.SelectedItem = $c[$t[0]]
                 & $shot $t[1]
             }

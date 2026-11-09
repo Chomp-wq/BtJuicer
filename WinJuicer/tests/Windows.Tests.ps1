@@ -297,6 +297,22 @@ Import-Module '$psm' -Force
     `$script:Gui.C.TweakLevel.SelectedIndex = 3
     `$extreme = @(`$script:Gui.Checks.Keys | Where-Object { `$script:Gui.Checks[`$_].Visibility -eq 'Visible' } | ForEach-Object { (Find-JuicerTweak `$_).Level } | Select-Object -Unique)
     `$script:Gui.C.TweakLevel.SelectedIndex = 0
+    # A button off for what the window shows stays off when a task ends.
+    Set-JuicerGuiButton 'BtnPacerForget' `$false
+    Set-JuicerGuiBusy `$true
+    Set-JuicerGuiBusy `$false
+    `$offStays = -not `$script:Gui.C.BtnPacerForget.IsEnabled -and `$script:Gui.C.BtnApply.IsEnabled
+    # A late page of a game no longer on screen does not paint over the gallery.
+    `$c2 = `$script:Gui.C
+    `$c2.GamePage.Visibility = 'Collapsed'; `$c2.GalleryPage.Visibility = 'Visible'; `$script:Gui.Game = `$null
+    `$c2.GameTitle.Text = 'antes'
+    Show-JuicerGuiGamePage `$page
+    `$stale = (`$c2.GameTitle.Text -eq 'antes') -and (`$c2.GalleryPage.Visibility -eq 'Visible')
+    # Keys: Esc from a game's page, Ctrl+F in the gallery.
+    `$c2.Tabs.SelectedItem = `$c2.TabJuegos
+    `$c2.GalleryPage.Visibility = 'Collapsed'; `$c2.GamePage.Visibility = 'Visible'; `$script:Gui.Game = `$games[0]
+    `$esc = (Invoke-JuicerGuiKey 'Escape' `$false) -and `$c2.GalleryPage.Visibility -eq 'Visible'
+    `$find = Invoke-JuicerGuiKey 'F' `$true
     Select-JuicerGuiTweaks 'Ninguno'
     Set-JuicerGuiCategoryChecks 'Interfaz' `$true
     `$picked = @(Get-JuicerGuiCheckedTweaks).Count
@@ -307,6 +323,7 @@ Import-Module '$psm' -Force
         Tips = `$script:Gui.C.GameTipsPanel.Children.Count; Hidden = `$hidden; Back = (`$script:Gui.C.GalleryPage.Visibility -eq 'Visible'); Home = [string]`$script:Gui.C.HomeHw.Text
         PageErrors = `$pageErrors; RealStatus = `$realStatus; Pending = [bool]`$script:Gui.Task
         Detail = `$detail; Searched = `$searched; Extreme = `$extreme; Picked = `$picked; CountText = `$countText
+        OffStays = `$offStays; Stale = `$stale; Esc = `$esc; Find = `$find
         Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
@@ -351,7 +368,11 @@ Import-Module '$psm' -Force
             $r.Searched | Should -BeLessThan 5
             @($r.Extreme) | Should -Be @(3)
             $r.Picked | Should -BeGreaterThan 0
-            $r.CountText | Should -BeLike "$($r.Picked) seleccionados*"
+            $r.CountText | Should -BeLike "$($r.Picked) seleccionado*"
+            $r.OffStays | Should -BeTrue
+            $r.Stale | Should -BeTrue
+            $r.Esc | Should -BeTrue
+            $r.Find | Should -BeTrue
         } finally {
             $ps.Dispose()
             $rs.Dispose()

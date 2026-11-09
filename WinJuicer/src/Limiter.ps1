@@ -130,7 +130,7 @@ function Get-JuicerPacerEngines { @(& (Get-JuicerBackend).FpsEngines) }
 function Set-JuicerPacerEngine {
     param([ValidateSet('Auto', 'nvidia', 'rtss')][string]$Engine, [hashtable]$Monitor)
     if ($Engine -ne 'Auto' -and (Get-JuicerPacerEngines) -notcontains $Engine) {
-        throw $(if ($Engine -eq 'rtss') { 'RivaTuner Statistics Server no está instalado (pestaña Instalar).' } else { 'No hay una gráfica NVIDIA con su driver.' })
+        throw $(if ($Engine -eq 'rtss') { 'RivaTuner Statistics Server no está instalado. Es gratis: Win Juicer lo instala (Instalar programas) o se descarga de guru3d.com.' } else { 'No hay una gráfica NVIDIA con su driver.' })
     }
     $before = Get-JuicerFpsBackend
     $state = Read-JuicerPacer
@@ -301,7 +301,7 @@ function New-JuicerFpsLimitTweak {
         What = "Marca a $exe un ritmo de $Fps FPS cada vez que se abra, desde el driver de NVIDIA o RivaTuner, sin inyectar nada en el juego. Con NVIDIA, además, sin cola de fotogramas$sync"
         Gain = $(if ($Why) { $Why } else { 'Frametimes constantes y menos latencia que dejar que la gráfica vaya al máximo.' })
         Cost = 'Si el juego podría ir más rápido, ese margen no se usa (se nota menos que los tirones que quita). Si el juego tiene NVIDIA Reflex, actívalo en sus opciones: el límite se aplica entonces a través de Reflex.'
-        Skip = { if (-not (Get-JuicerFpsBackend)) { 'El frame pacer necesita una gráfica NVIDIA o RivaTuner Statistics Server (pestaña Instalar).' } }
+        Skip = { if (-not (Get-JuicerFpsBackend)) { 'El frame pacer necesita una gráfica NVIDIA o RivaTuner Statistics Server, que es gratis y Win Juicer instala.' } }
         Actions = $actions
     }
 }
@@ -401,7 +401,7 @@ function Format-JuicerFpsBackend {
     switch ($Backend) {
         'nvidia' { 'el limitador del driver de NVIDIA (el de «Velocidad máxima de fotogramas»), por juego' }
         'rtss' { 'RivaTuner Statistics Server (tiene que estar abierto; se queda en la bandeja). En su Setup, «Framerate limiter»: «Front edge sync» da la menor latencia y «Back edge sync» los frametimes más planos' }
-        default { 'ninguno todavía: con NVIDIA lo hace el driver; con AMD o Intel, instala RivaTuner Statistics Server desde la pestaña Instalar' }
+        default { 'ninguno todavía: con NVIDIA lo hace el driver; con AMD o Intel hace falta RivaTuner Statistics Server, que es gratis' }
     }
 }
 
@@ -622,7 +622,7 @@ function Get-JuicerPacerConflicts {
         $hz = [int]$Monitor.Display.Hz
         $exact = [double]$Monitor.Display.ExactHz
         if ($Backend -eq 'nvidia' -and $exact -gt 0 -and $exact -lt $hz - 0.004) {
-            $tail = if ($State.RtssInstalled) { 'Tienes RivaTuner: elige «RivaTuner» como motor del frame pacer y el ritmo irá a {0:N2} FPS, justo por debajo.' -f ($exact - 0.01) } else { 'RivaTuner admite décimas: instálalo (pestaña Instalar), elígelo como motor del frame pacer y el ritmo irá justo por debajo, a {0:N2} FPS.' -f ($exact - 0.01) }
+            $tail = if ($State.RtssInstalled) { 'Tienes RivaTuner: elige «RivaTuner» como motor del frame pacer y el ritmo irá a {0:N2} FPS, justo por debajo.' -f ($exact - 0.01) } else { 'RivaTuner admite décimas: instálalo (es gratis), elígelo como motor del frame pacer y el ritmo irá justo por debajo, a {0:N2} FPS.' -f ($exact - 0.01) }
             $out += New-JuicerFinding $area 'Medio' ('Tu pantalla va a {0:N3} Hz, y el driver de NVIDIA sólo limita en enteros' -f $exact) ("Con estrobo y sincronización vertical, $hz FPS es un pelo más rápido que la pantalla: la cola de la sincronización vertical se llena y vuelve un fotograma de latencia (unos {0:N1} ms). $tail" -f (1000 / $exact))
         } elseif ($Backend -eq 'rtss' -and $exact -gt 0) {
             $out += New-JuicerFinding $area 'Ok' ('Ritmo al Hz exacto: {0:N2} FPS para una pantalla a {1:N3} Hz' -f ($exact - 0.01), $exact) 'Justo por debajo del refresco real, con la sincronización vertical: un fotograma por destello y sin la cola que añade latencia («low-lag VSync»).'
