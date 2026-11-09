@@ -13,12 +13,12 @@ $script:Gui = $null
 # --- Pure pieces, testable without a screen ----------------------------------
 
 $script:ResultMarks = @{
-    Aplicado = '✓'; Deshecho = '↺'; YaEstaba = '='; Simulado = '…'; NoAplica = '–'; NadaQueDeshacer = '–'; Error = '✗'; NoSeMantuvo = '~'
+    Aplicado = '✓'; Deshecho = '↺'; YaEstaba = '='; Simulado = '…'; NoAplica = '–'; NadaQueDeshacer = '–'; Error = '✗'; NoSeMantuvo = '~'; Pendiente = '→'
 }
 
 function Format-JuicerResultsText {
     param([object[]]$Results)
-    $notes = @{ YaEstaba = 'ya estaba así'; NoAplica = 'no aplica'; NadaQueDeshacer = 'nada que deshacer'; NoSeMantuvo = 'Windows no lo conservó' }
+    $notes = @{ YaEstaba = 'ya estaba así'; NoAplica = 'no aplica'; NadaQueDeshacer = 'nada que deshacer'; NoSeMantuvo = 'Windows no lo conservó'; Pendiente = 'al cerrar el juego' }
     $lines = New-Object System.Collections.ArrayList
     foreach ($r in $Results) {
         $line = '{0} {1}' -f $script:ResultMarks[[string]$r.Outcome], $r.Title
@@ -627,6 +627,7 @@ $script:GuiXaml = @'
             </DockPanel>
             <TextBlock x:Name="GamesNote" Grid.Row="1" Style="{StaticResource Note}" Text="Buscando los juegos de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net, Riot…"/>
             <StackPanel Grid.Row="2">
+              <StackPanel x:Name="SafetyAlerts"/>
               <StackPanel x:Name="PacerAlerts"/>
               <WrapPanel>
                 <CheckBox x:Name="ChkUpkeep" Content="Optimizar automáticamente los juegos que instale" VerticalAlignment="Center" IsEnabled="False" ToolTip="Al iniciar sesión, sin abrir Win Juicer: optimiza los juegos nuevos y recalcula el frame pacer si cambias de monitor. Copia Win Juicer a Program Files (sólo administradores pueden cambiarlo) y crea una tarea de inicio de sesión; desmárcalo para quitar las dos cosas."/>
@@ -701,12 +702,16 @@ $script:GuiXaml = @'
                     <Button x:Name="BtnGameOptimize" Content="Optimizar este juego" Style="{StaticResource Accent}" FontSize="14" ToolTip="El frame pacer a la medida de tu monitor y, si tienes dos gráficas, la potente"/>
                     <Button x:Name="BtnGameClear" Content="Quitar lo de Win Juicer"/>
                   </WrapPanel>
+                  <Border x:Name="GameNotice" Visibility="Collapsed" Background="#2A2410" BorderBrush="#7A5C00" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,8,0,2">
+                    <TextBlock x:Name="GameNoticeText" TextWrapping="Wrap" Foreground="#F0E0B0"/>
+                  </Border>
 
                   <TextBlock Text="Frame pacer" Style="{StaticResource Head}" FontSize="16"/>
                   <TextBlock x:Name="GamePacerNote" Style="{StaticResource Note}"/>
                   <CheckBox x:Name="GamePacerOn" Content="Activado en este juego" FontSize="14"/>
                   <Button x:Name="BtnGameInstallRtss" Content="Instalar RivaTuner (gratis)" HorizontalAlignment="Left" Visibility="Collapsed"/>
                   <StackPanel x:Name="GamePacerBox" Margin="22,2,0,0">
+                    <CheckBox x:Name="GamePrudent" Content="Modo prudente: sólo el límite de FPS" Margin="2,6,2,0" ToolTip="Para un juego que se congela o se cierra: el frame pacer marca sólo el ritmo y deja la sincronización vertical y la cola de fotogramas como las ponga el juego. Win Juicer lo activa solo si un juego falla después de optimizarlo."/>
                     <TextBlock Text="¿Qué prefieres?" Foreground="#9A9AA5" Margin="2,8,2,2"/>
                     <RadioButton x:Name="GameFluidez" GroupName="GamePriority" VerticalContentAlignment="Top">
                       <StackPanel>
@@ -926,7 +931,12 @@ $script:GuiWork = @{
         $Sync.Status = 'Buscando versiones nuevas…'
         $update = $null
         try { $update = Get-JuicerUpdateNotice } catch { Write-JuicerLog "Sin comprobar versiones nuevas: $_" }
-        @{ Hw = $hw; Advice = $advice; Snapshot = $snapshot; Update = $update }
+        # What waited for a game to close, and what an older recipe left behind.
+        $games = @()
+        # Writes to the driver: closing the window waits for them (see Add_Closing).
+        $Sync.Mutating = $true
+        try { $games = @(Invoke-JuicerPacerPending) + @(Repair-JuicerGameSetups) } catch { Write-JuicerLog "No se pudo poner al día lo de los juegos: $_" } finally { $Sync.Mutating = $false }
+        @{ Hw = $hw; Advice = $advice; Snapshot = $snapshot; Update = $update; GameFixes = @($games | ForEach-Object { @{ Title = $_.Title; Outcome = $_.Outcome } }); Pending = @(Get-JuicerPacerPending) }
     }
     Frames     = {
         @{ Findings = @(Invoke-JuicerFrameCapture -Seconds ([int]$A.Seconds) -Delay 10 -OnStatus { param($t) $Sync.Status = $t }) }
@@ -1005,10 +1015,15 @@ $script:GuiWork = @{
         $libs = @(foreach ($l in @(Get-JuicerGameLibraries)) {
                 @{ Path = $l.Path; Launcher = $l.Launcher; State = (Get-JuicerTweakState (New-JuicerDefenderTweak $l.Path $l.Launcher) $journal).State }
             })
+        $Sync.Mutating = $true
+        try { [void](Invoke-JuicerPacerPending); [void](Repair-JuicerGameSetups) } finally { $Sync.Mutating = $false }
         $Sync.Status = 'Leyendo el monitor y el frame pacer…'
         $lim = Get-JuicerGuiLimiter
         $Sync.Status = 'Buscando tus juegos…'
-        @{ Libraries = $libs; Limiter = $lim; Games = @(Get-JuicerGuiGameList); Upkeep = (Test-JuicerUpkeep) }
+        $games = @(Get-JuicerGuiGameList)
+        $Sync.Mutating = $true
+        try { $safety = Get-JuicerGuiSafety $games } finally { $Sync.Mutating = $false }
+        @{ Libraries = $libs; Limiter = $lim; Games = $games; Upkeep = (Test-JuicerUpkeep); Safety = $safety; Pending = @(Get-JuicerPacerPending) }
     }
     Upkeep     = {
         if ($A.On) { $Sync.Status = 'Copiando Win Juicer a Program Files y creando la tarea…'; Register-JuicerUpkeep } else { Unregister-JuicerUpkeep }
@@ -1023,10 +1038,11 @@ $script:GuiWork = @{
         $exe = [string]$g.ExeName
         $r = @()
         switch ($A.Action) {
-            'Optimizar' { $r = @(Invoke-JuicerGameSetup @($g) 'Recomendado') }
+            'Optimizar' { $r = @(Invoke-JuicerGameSetup @($g) 'Recomendado' -Force) }
+            'Prudente' { $r = @(Set-JuicerPacerMinimal $exe ([bool]$A.Value)) }
             'Quitar' { $r = @(Invoke-JuicerGameSetup @($g) 'Quitar') }
             'PacerOn' { $r = @(Add-JuicerFpsLimit $exe 0) }
-            'PacerOff' { if (@(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe }).Count -gt 0) { $r = @(Undo-JuicerTweak "fps:$exe") } }
+            'PacerOff' { $r = @(Remove-JuicerFpsLimit $exe) }
             'Prioridad' { $r = @(Set-JuicerPacerPriority $exe ([string]$A.Value)) }
             'Fps' { $r = @(Set-JuicerPacerFps $exe ([int]$A.Value)) }
             'GpuOn' { $r = @(Invoke-JuicerTweak (New-JuicerGpuTweak $g.Exe)) }
@@ -1040,17 +1056,27 @@ $script:GuiWork = @{
             }
         }
         @{
-            Page = (Get-JuicerGuiGamePage $g)
+            Page = (Get-JuicerGuiGamePage $g); Pending = @(Get-JuicerPacerPending)
             Results = @($r | Where-Object { $_ -is [hashtable] -and $_.Outcome } | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } })
         }
     }
     GameMeasure = {
         $f = @(Invoke-JuicerFrameCapture -Seconds 60 -Delay 10 -Process $A.Game.ExeName -OnStatus { param($t) $Sync.Status = $t })
-        @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game) }
+        @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
     }
     GameCalibrate = {
         $f = @(Invoke-JuicerPacerCalibration -Exe $A.Game.ExeName -Seconds 60 -Delay 10 -OnStatus { param($t) $Sync.Status = $t })
-        @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game) }
+        @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
+    }
+    # What waited for a game to close, now that it has.
+    PacerPending = {
+        $r = @(Invoke-JuicerPacerPending)
+        $Sync.Status = 'Buscando tus juegos…'
+        $games = @(Get-JuicerGuiGameList)
+        @{
+            Games = $games; Limiter = (Get-JuicerGuiLimiter); Pending = @(Get-JuicerPacerPending)
+            Results = @($r | Where-Object { $_ -is [hashtable] -and $_.Outcome } | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } })
+        }
     }
     Covers     = {
         $out = @{}
@@ -1075,8 +1101,9 @@ $script:GuiWork = @{
             }
         }
         $Sync.Status = 'Buscando tus juegos…'
+        $games = @(Get-JuicerGuiGameList)
         @{
-            Games = @(Get-JuicerGuiGameList); Limiter = (Get-JuicerGuiLimiter)
+            Games = $games; Limiter = (Get-JuicerGuiLimiter); Safety = (Get-JuicerGuiSafety $games); Pending = @(Get-JuicerPacerPending)
             Results = @($r | Where-Object { $_ } | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } })
         }
     }
@@ -1087,8 +1114,8 @@ $script:GuiWork = @{
         if ($A.Forget) { Clear-JuicerPacerCalibration; $A.Recalc = $true }
         if ($A.Recalc) { $Sync.Status = 'Recalculando los ritmos…'; $r += @(Update-JuicerFpsLimits) }
         foreach ($exe in @($A.Add)) { $Sync.Status = "Poniendo el frame pacer a $exe…"; $r += Add-JuicerFpsLimit $exe ([int]$A.Fps) }
-        foreach ($id in @($A.Remove)) { $Sync.Status = "Quitando $id…"; $r += Undo-JuicerTweak $id }
-        @{ Limiter = (Get-JuicerGuiLimiter); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
+        foreach ($id in @($A.Remove)) { $Sync.Status = "Quitando $id…"; $r += $(if ([string]$id -like 'fps:*') { Remove-JuicerFpsLimit ([string]$id).Substring(4) } else { Undo-JuicerTweak $id }) }
+        @{ Limiter = (Get-JuicerGuiLimiter); Pending = @(Get-JuicerPacerPending); Results = @($r | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } }) }
     }
     MonitorMode = {
         $m = Get-JuicerPrimaryMonitor
@@ -1818,6 +1845,8 @@ function Start-JuicerGuiGames {
         Show-JuicerGuiGames $r.Libraries
         Show-JuicerGuiLimiter $r.Limiter
         Show-JuicerGuiGallery $r.Games
+        Show-JuicerGuiSafety $r.Safety
+        Update-JuicerGuiPendingWatch $r.Pending
         Set-JuicerGuiUpkeep $r.Upkeep
         Show-JuicerGuiHome
         Start-JuicerGuiCovers
@@ -1839,6 +1868,66 @@ function Get-JuicerGuiGameList {
         try { $g.Cover = Get-JuicerCover $g -NoDownload } catch { Write-JuicerLog "Sin portada de $($g.Name): $_" }
     }
     @(Get-JuicerGameStatus $games)
+}
+
+# Games that started failing after they were optimized (Update-JuicerGameSafety),
+# for the cards above the gallery: the ones protected just now, and the ones
+# that already failed before, if it was recent. The games' badges follow.
+function Get-JuicerGuiSafety {
+    param([object[]]$Games)
+    $none = @{ Protected = @(); Warned = @() }
+    $s = $null
+    try { $s = Update-JuicerGameSafety $Games } catch { Write-JuicerLog "No se pudo revisar si algún juego falla: $_"; return $none }
+    if (@($s.Protected).Count -gt 0) { [void](Get-JuicerGameStatus $Games) }
+    $recent = (Get-Date).AddDays(-14)
+    @{ Protected = @($s.Protected); Warned = @($s.Warned | Where-Object { [datetime]$_.Time -ge $recent }) }
+}
+
+function Show-JuicerGuiSafety {
+    param([hashtable]$S)
+    $p = $script:Gui.C.SafetyAlerts
+    $p.Children.Clear()
+    if (-not $S) { return }
+    foreach ($x in @($S.Protected)) {
+        $note = Format-JuicerSafeNote @{ Kind = $x.Kind; Time = $x.Time; Module = $x.Module } $x.Name
+        [void]$p.Children.Add((New-JuicerFindingCard (New-JuicerFinding 'Juegos' 'Alto' "$($x.Name) falló después de optimizarlo" $note)))
+    }
+    foreach ($x in @($S.Warned)) {
+        $what = if ($x.Kind -eq 'Cuelgue') { 'se ha quedado colgado' } else { 'se ha cerrado con error' }
+        [void]$p.Children.Add((New-JuicerFindingCard (New-JuicerFinding 'Juegos' 'Info' "$($x.Name) $what $(Format-JuicerCount $x.Count 'vez' 'veces') desde que se optimizó" "Ya le pasaba antes ($(Format-JuicerCount $x.Before 'vez' 'veces') en el mismo tiempo), así que no parece cosa de Win Juicer. Para descartarlo, en su página activa el modo prudente o pulsa «Quitar lo de Win Juicer».")))
+    }
+}
+
+# The games with a frame pacer change waiting for them to close; while there
+# are any, the window looks every few seconds (Test-JuicerGuiPendingClosed).
+function Update-JuicerGuiPendingWatch {
+    param([object[]]$Pending)
+    $script:Gui.Pending = @($Pending | Where-Object { $_ })
+    $t = $script:Gui.PendingTimer
+    if (-not $t) { return }
+    if ($script:Gui.Pending.Count -gt 0) { $t.Start() } else { $t.Stop() }
+}
+
+function Test-JuicerGuiPendingClosed {
+    if ($script:Gui.Task -or @($script:Gui.Pending).Count -eq 0) { return }
+    $closed = @($script:Gui.Pending | Where-Object { -not (Test-JuicerGameRunning $_) })
+    if ($closed.Count -eq 0) { return }
+    $script:Gui.PendingTimer.Stop()
+    Start-JuicerGuiTask "Aplicando el frame pacer de $($closed -join ', '), ya cerrado…" 'PacerPending' @{} { param($r) Complete-JuicerGuiPending $r } -Quiet
+}
+
+function Complete-JuicerGuiPending {
+    param([hashtable]$R)
+    Show-JuicerGuiGallery $R.Games
+    Show-JuicerGuiLimiter $R.Limiter
+    Show-JuicerGuiUndo
+    $res = @($R.Results)
+    $bad = @($res | Where-Object { $_.Outcome -eq 'Error' })
+    if ($bad.Count -gt 0) { Show-JuicerGuiMessage (@($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message } | Select-Object -Unique) -join "`n") 'Warning' | Out-Null }
+    $done = @($res | Where-Object { $_.Outcome -in 'Aplicado', 'Deshecho', 'YaEstaba' })
+    if ($done.Count -gt 0) { Set-JuicerGuiStatus ('Juego cerrado; aplicado: ' + (@($done | ForEach-Object { $_.Title }) -join '; ') + '.') }
+    if ($script:Gui.Game) { Start-JuicerGuiTask "Leyendo $($script:Gui.Game.Name)…" 'GamePage' @{ Game = $script:Gui.Game.Clone() } { param($r2) Show-JuicerGuiGamePage $r2.Page } -Quiet }
+    Update-JuicerGuiPendingWatch $R.Pending
 }
 
 # The gallery's sections: one per store, the big ones first, then the rest
@@ -1930,7 +2019,10 @@ function New-JuicerGuiTile {
     $frame = New-JuicerUi Grid @{ Width = 150; Height = 225; ClipToBounds = $true }
     [void]$frame.Children.Add((New-JuicerGuiCoverVisual $Game 150 225))
     $badge = $null
-    if ($Game.Fps) { $badge = @(('✓ {0} FPS' -f $Game.Fps), '#4CC38A') } elseif ($Game.New) { $badge = @('NUEVO', '#F5B400') }
+    if ($Game.Safe) { $badge = @('⚠ PROTEGIDO', '#FF8A80') }
+    elseif ($Game.Waiting) { $badge = @('→ AL CERRARLO', '#F5B400') }
+    elseif ($Game.Fps) { $badge = @(('✓ {0} FPS' -f $Game.Fps), '#4CC38A') }
+    elseif ($Game.New) { $badge = @('NUEVO', '#F5B400') }
     if ($badge) {
         $b = New-JuicerUi Border @{ Background = '#E61B1B1F'; CornerRadius = '4'; Padding = '6,2'; Margin = '5'; HorizontalAlignment = 'Right'; VerticalAlignment = 'Top' }
         $b.Child = New-JuicerUi TextBlock @{ Text = $badge[0]; Foreground = $badge[1]; FontSize = 11; FontWeight = 'SemiBold' }
@@ -2050,6 +2142,8 @@ function Get-JuicerGuiGamePage {
         Competitive = (Test-JuicerCompetitiveGame $exe); TwoGpus = ((Get-JuicerGpuCount) -ge 2)
         Last = $(if ($last) { @{ Date = $last.Date; AvgFps = $last.AvgFps; Low1 = $last.Low1; Steady = $last.Steady; JitterMs = $last.JitterMs; InputLatency = $last.InputLatency; Latency = $last.Latency } } else { $null })
         Chart = (Get-JuicerFrameChart $exe); Tips = $tips; Cover = $cover
+        Running = (Test-JuicerGameRunning $exe); Safe = (Get-JuicerGameSafe $exe); Minimal = [bool]$g.Minimal
+        AntiCheat = $(if ($g.Dir) { Get-JuicerGameAntiCheat ([string]$g.Dir) } else { '' })
     }
 }
 
@@ -2120,10 +2214,11 @@ function Show-JuicerGuiGamePage {
         $c.GamePacerNote.Text = if (-not $engine) {
             'Para marcar el ritmo hace falta una gráfica NVIDIA o RivaTuner Statistics Server, que es gratis: instálalo, ábrelo una vez y vuelve aquí.'
         } elseif ($g.Fps) {
-            'Activo: {0} FPS, un fotograma cada {1:N2} ms. Se aplica solo cada vez que abres el juego, sin inyectar nada en él.' -f $g.Fps, (1000 / $g.Fps)
+            ('Activo: {0} FPS, un fotograma cada {1:N2} ms. Se aplica solo cada vez que abres el juego, {2}.' -f $g.Fps, (1000 / $g.Fps), $(if ($P.Engine -eq 'rtss') { 'con el enganche de RivaTuner' } else { 'desde el driver, sin inyectar nada en él' })) + $(if ($P.Minimal) { ' Modo prudente: sólo el límite.' } else { '' })
         } else {
             'Desactivado. Actívalo para tener frametimes estables y menos latencia, a la medida de tu monitor.'
         }
+        $c.GamePrudent.IsChecked = [bool]$P.Minimal
         $c.GameFluidez.IsChecked = $P.Priority -ne 'Latencia'
         $c.GameLatencia.IsChecked = $P.Priority -eq 'Latencia'
         $c.GameLatenciaNote.Text = 'Para juegos competitivos. Al calibrar, si tu PC da para el doble de tus Hz o más, sube ahí: cada fotograma llega antes a la pantalla.' + $(if ($P.Competitive) { ' Recomendado para este juego.' } else { '' })
@@ -2142,6 +2237,15 @@ function Show-JuicerGuiGamePage {
     } finally {
         $script:Gui.SettingPage = $false
     }
+    # What the user should know before touching anything: the game is open
+    # (changes wait for it), Win Juicer protected it, or RivaTuner and an anti-cheat.
+    $notes = @()
+    if ($P.Safe) { $notes += Format-JuicerSafeNote $P.Safe $g.Name }
+    if ($P.Running) { $notes += 'El juego está abierto: lo que cambies del frame pacer se aplicará en cuanto lo cierres. Win Juicer no toca el perfil de un juego en marcha, para que no se congele.' }
+    elseif ($g.Waiting) { $notes += 'Hay un cambio del frame pacer esperando: se aplica en unos segundos.' }
+    if ($P.Engine -eq 'rtss' -and $P.AntiCheat) { $notes += "Este juego usa $($P.AntiCheat). RivaTuner se engancha al juego para marcar el ritmo; la mayoría de anti-trampas lo admiten, pero si se cierra o te expulsa, quítale el frame pacer y usa el límite de FPS del propio juego." }
+    $c.GameNoticeText.Text = $notes -join "`n`n"
+    $c.GameNotice.Visibility = $(if ($notes.Count -gt 0) { 'Visible' } else { 'Collapsed' })
     $c.GameMeasurePanel.Children.Clear()
     if ($P.Last) {
         $l = $P.Last
@@ -2171,7 +2275,9 @@ function Start-JuicerGuiGameAction {
         if ($bad.Count -gt 0) { Show-JuicerGuiMessage (@($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message } | Select-Object -Unique) -join "`n") 'Warning' | Out-Null }
         Show-JuicerGuiUndo
         Show-JuicerGuiHome
-        Set-JuicerGuiStatus 'Hecho: se aplica solo cada vez que abras el juego.'
+        Update-JuicerGuiPendingWatch $r.Pending
+        $wait = @($r.Results | Where-Object { $_.Outcome -eq 'Pendiente' })
+        Set-JuicerGuiStatus $(if ($wait.Count -gt 0) { 'El juego está abierto: el cambio se aplicará en cuanto lo cierres.' } else { 'Hecho: se aplica solo cada vez que abras el juego.' })
     } -First
 }
 
@@ -2191,6 +2297,7 @@ function Start-JuicerGuiGameMeasure {
             foreach ($f in @($r.Findings)) { $p.Children.Insert($i, (New-JuicerFindingCard $f)); $i++ }
         }
         Show-JuicerGuiUndo
+        Update-JuicerGuiPendingWatch $r.Pending
         Set-JuicerGuiStatus 'Terminado: el resultado está en la página del juego, en «Medir».'
     }
 }
@@ -2212,6 +2319,8 @@ function Start-JuicerGuiGameSetup {
         param($r)
         Show-JuicerGuiGallery $r.Games
         Show-JuicerGuiLimiter $r.Limiter
+        Show-JuicerGuiSafety $r.Safety
+        Update-JuicerGuiPendingWatch $r.Pending
         $res = @($r.Results)
         $ok = @($res | Where-Object { $_.Outcome -in 'Aplicado', 'YaEstaba', 'Deshecho' })
         $bad = @($res | Where-Object { $_.Outcome -in 'Error', 'NoAplica' })
@@ -2222,7 +2331,8 @@ function Start-JuicerGuiGameSetup {
         }
         Show-JuicerGuiUndo
         Show-JuicerGuiHome
-        Set-JuicerGuiStatus $(if ($res.Count -gt 0) { "Juegos optimizados ($(Format-JuicerCount $ok.Count 'cambio')): se aplica solo cada vez que los abras." } else { 'Juegos al día.' })
+        $wait = @($res | Where-Object { $_.Outcome -eq 'Pendiente' })
+        Set-JuicerGuiStatus ($(if ($res.Count -gt 0) { "Juegos optimizados ($(Format-JuicerCount $ok.Count 'cambio')): se aplica solo cada vez que los abras." } else { 'Juegos al día.' }) + $(if ($wait.Count -gt 0) { " $(Format-JuicerCount $wait.Count 'juego abierto' 'juegos abiertos'): al cerrarse." } else { '' }))
         Start-JuicerGuiCovers
     }
 }
@@ -2301,7 +2411,9 @@ function Start-JuicerGuiLimiter {
         $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica' })
         if ($bad.Count -gt 0) { Show-JuicerGuiMessage (($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message }) -join "`n") 'Warning' | Out-Null }
         Show-JuicerGuiUndo
-        Set-JuicerGuiStatus 'Frame pacer actualizado: se aplica solo cada vez que abras esos juegos.'
+        Update-JuicerGuiPendingWatch $r.Pending
+        $wait = @($r.Results | Where-Object { $_.Outcome -eq 'Pendiente' })
+        Set-JuicerGuiStatus ('Frame pacer actualizado: se aplica solo cada vez que abras esos juegos.' + $(if ($wait.Count -gt 0) { " $(Format-JuicerCount $wait.Count 'juego abierto' 'juegos abiertos') lo recibirá$(if ($wait.Count -ne 1) { 'n' }) al cerrarse." } else { '' }))
         if ($script:Gui.GamesLoaded) { Start-JuicerGuiGameSetup 'Refresh' }
         if ($script:Gui.Game) { Start-JuicerGuiTask 'Leyendo el juego…' 'GamePage' @{ Game = $script:Gui.Game.Clone() } { param($r2) Show-JuicerGuiGamePage $r2.Page } }
     }
@@ -2642,6 +2754,7 @@ function Register-JuicerGuiHandlers {
     $c.GameRateManual.Add_Checked({ if (-not $script:Gui.SettingPage) { [void]$script:Gui.C.GameFps.Focus() } })
     $c.GameGpuOn.Add_Click({ if (-not $script:Gui.SettingPage) { Start-JuicerGuiGameAction $(if ($script:Gui.C.GameGpuOn.IsChecked) { 'GpuOn' } else { 'GpuOff' }) } })
     $c.GamePrioOn.Add_Click({ if (-not $script:Gui.SettingPage) { Start-JuicerGuiGameAction $(if ($script:Gui.C.GamePrioOn.IsChecked) { 'PrioOn' } else { 'PrioOff' }) } })
+    $c.GamePrudent.Add_Click({ if (-not $script:Gui.SettingPage) { Start-JuicerGuiGameAction 'Prudente' ([bool]$script:Gui.C.GamePrudent.IsChecked) } })
     $c.GameSearch.Add_TextChanged({ Set-JuicerGuiGallerySearch })
     $c.ChkAdvanced.Add_Click({
             if ($script:Gui.SettingAdvanced) { return }
@@ -2743,7 +2856,7 @@ function Save-JuicerGuiPlacement {
 
 # What changes the system: closing the window in the middle of it would
 # leave the change half done.
-$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore')
+$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore', 'PacerPending', 'GameCalibrate')
 
 # Keys: Esc goes back from a game's page, Ctrl+F searches in the tab that
 # has a search box, F5 reads the tab again.
@@ -2882,7 +2995,9 @@ function Complete-JuicerGuiInit {
     Show-JuicerGuiUndo
     $script:Gui.Ready = $true
     Show-JuicerGuiHome
-    Set-JuicerGuiStatus 'Listo. El diagnóstico completo está en marcha.'
+    Update-JuicerGuiPendingWatch $R.Pending
+    $fixes = @($R.GameFixes | Where-Object { $_.Outcome -in 'Aplicado', 'Deshecho' })
+    Set-JuicerGuiStatus $(if ($fixes.Count -gt 0) { "Listo. Puesto al día lo de tus juegos ($(Format-JuicerCount $fixes.Count 'cambio')). El diagnóstico completo está en marcha." } else { 'Listo. El diagnóstico completo está en marcha.' })
     Start-JuicerGuiAudit
 }
 
@@ -2894,13 +3009,13 @@ function Show-JuicerGui {
     $reader = New-Object System.Xml.XmlNodeReader ([xml]$script:GuiXaml)
     $win = ('System.Windows.Markup.XamlReader' -as [type])::Load($reader)
     $script:Gui = @{
-        Window = $win; C = @{}; Sync = [hashtable]::Synchronized(@{ Status = '' }); Task = $null
+        Window = $win; C = @{}; Sync = [hashtable]::Synchronized(@{ Status = ''; Mutating = $false }); Task = $null
         Checks = @{}; AppChecks = @{}; InstallChecks = @{}; UndoChecks = @{}
         Hw = @{ Cpu = @{}; Gpus = @() }; Advice = @{}; Snapshot = @{ States = @{}; Dns = @() }
         Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
         Games = @(); Covers = @{}; CoverTried = @{}; Tiles = @{}; Sections = (New-Object System.Collections.ArrayList); Game = $null; Page = $null
-        Off = @{}; Busy = $false
+        Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
     # An error in a click, a key or a search must not close the window.
@@ -2922,6 +3037,12 @@ function Show-JuicerGui {
     $timer.Interval = [TimeSpan]::FromMilliseconds(150)
     $timer.Add_Tick({ Complete-JuicerGuiTask })
     $script:Gui.Timer = $timer
+    # A game with a change waiting is looked at every few seconds, here and
+    # cheaply: the work to apply it only starts once the game has closed.
+    $watch = New-Object System.Windows.Threading.DispatcherTimer
+    $watch.Interval = [TimeSpan]::FromSeconds(5)
+    $watch.Add_Tick({ Test-JuicerGuiPendingClosed })
+    $script:Gui.PendingTimer = $watch
     Register-JuicerGuiHandlers
     Initialize-JuicerGuiMonitorModes
     Show-JuicerGuiMyths
@@ -2939,7 +3060,7 @@ function Show-JuicerGui {
     # Closing kills the background runspace: never in the middle of a change.
     $win.Add_Closing({
             $t = $script:Gui.Task
-            if ($t -and $script:MutatingWork -contains $t.Work -and -not $t.Handle.IsCompleted) {
+            if ($t -and ($script:MutatingWork -contains $t.Work -or $script:Gui.Sync.Mutating) -and -not $t.Handle.IsCompleted) {
                 $_.Cancel = $true
                 Show-JuicerGuiMessage 'Win Juicer está aplicando cambios. Espera a que termine para cerrar: cortarlo a medias dejaría el cambio en curso a medio hacer.' 'Warning' | Out-Null
                 return
@@ -2948,6 +3069,9 @@ function Show-JuicerGui {
             if ($waiting.Count -gt 0 -and -not (Confirm-JuicerGui "$(if ($waiting.Count -eq 1) { 'Hay 1 cambio esperando su turno' } else { "Hay $($waiting.Count) cambios esperando su turno" }): si cierras ahora, no se aplicará$(if ($waiting.Count -ne 1) { 'n' }). ¿Cerrar igualmente?" 'Warning')) {
                 $_.Cancel = $true
                 return
+            }
+            if (@($script:Gui.Pending).Count -gt 0) {
+                Show-JuicerGuiMessage "Hay un cambio del frame pacer esperando a que cierres $(@($script:Gui.Pending) -join ', '). No se pierde: se aplicará la próxima vez que abras Win Juicer, o al iniciar sesión si tienes marcado «Optimizar automáticamente los juegos que instale»." | Out-Null
             }
             try { Save-JuicerGuiPlacement $script:Gui.Window } catch { Write-JuicerLog "No se pudo recordar el tamaño de la ventana: $_" }
         })

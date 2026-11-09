@@ -187,8 +187,9 @@ function Show-JuicerResults {
     $marks = @{
         Aplicado = @('[ok]', 'Green'); Deshecho = @('[ok]', 'Green'); YaEstaba = @('[= ]', 'DarkGray'); Simulado = @('[..]', 'Cyan')
         NoAplica = @('[--]', 'DarkGray'); NadaQueDeshacer = @('[--]', 'DarkGray'); Error = @('[!!]', 'Red'); NoSeMantuvo = @('[~ ]', 'Yellow')
+        Pendiente = @('[>>]', 'Yellow')
     }
-    $notes = @{ YaEstaba = 'ya estaba así'; NoAplica = 'no aplica'; NadaQueDeshacer = 'nada que deshacer' }
+    $notes = @{ YaEstaba = 'ya estaba así'; NoAplica = 'no aplica'; NadaQueDeshacer = 'nada que deshacer'; Pendiente = 'al cerrar el juego' }
     foreach ($r in $Results) {
         $m = $marks[$r.Outcome]
         Write-Host "  $($m[0]) " -ForegroundColor $m[1] -NoNewline
@@ -589,8 +590,17 @@ function Show-JuicerGameList {
 }
 
 function Show-JuicerLimiter {
+    # What waited for a game to close, what an older recipe left behind, and
+    # a game that started failing after it was optimized.
+    $fixes = @(@(Invoke-JuicerPacerPending) + @(Repair-JuicerGameSetups) | Where-Object { $_.Outcome -in 'Aplicado', 'Deshecho', 'Error' })
+    $safety = Update-JuicerGameSafety
     while ($true) {
         Write-JuicerHeader 'Frame pacer'
+        if ($fixes.Count -gt 0) { Show-JuicerResults $fixes; $fixes = @() }
+        foreach ($p in @($safety.Protected)) { Write-JuicerWrapped (Format-JuicerSafeNote (Get-JuicerGameSafe $p.Exe) $p.Name) 2 'Yellow'; Write-Host '' }
+        $safety = @{ Protected = @() }
+        $waiting = @(Get-JuicerPacerPending)
+        if ($waiting.Count -gt 0) { Write-JuicerWrapped "Esperando a que cierres $($waiting -join ', '): Win Juicer no toca el perfil de un juego abierto. Se aplicará la próxima vez que abras este menú con el juego cerrado." 2 'Yellow' }
         $m = $null
         try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
         $pacer = Read-JuicerPacer

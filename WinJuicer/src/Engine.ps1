@@ -445,9 +445,32 @@ function Save-JuicerActionState {
     $c
 }
 
+# Whether a program with this .exe name is open now (false when the backend
+# cannot tell).
+function Test-JuicerGameRunning {
+    param([string]$Exe)
+    $b = Get-JuicerBackend
+    if (-not $Exe -or -not $b.ProcRunning) { return $false }
+    try { [bool](& $b.ProcRunning $Exe) } catch { Write-JuicerLog "No se pudo ver si $Exe está abierto: $_"; $false }
+}
+
+# The last line of defence: a game's frame pacer or driver profile is never
+# written while that game runs. The driver hands a running game the new
+# values at once, and changing its sync or its frame queue under it can
+# freeze it or crash it. The frame pacer waits for the game to close (see
+# Add-JuicerPacerPending); anything else that gets here stops with a reason.
+function Assert-JuicerGameClosed {
+    param($Action)
+    if ($Action.Type -notin 'FpsLimit', 'NvSetting') { return }
+    if (Test-JuicerGameRunning $Action.Exe) {
+        throw "$($Action.Exe) está abierto: Win Juicer no toca el perfil de un juego en marcha, porque podría congelarlo. Ciérralo y vuelve a intentarlo."
+    }
+}
+
 function Invoke-JuicerAction {
     param([Parameter(Mandatory)]$Action, [Parameter(Mandatory)]$Capture)
     $b = Get-JuicerBackend
+    Assert-JuicerGameClosed $Action
     switch ($Action.Type) {
         'Registry' {
             if ($Action.Delete) { Remove-JuicerReg $Action.Path $Action.Name; return }
@@ -483,6 +506,7 @@ function Restore-JuicerActionState {
     param([Parameter(Mandatory)]$Capture)
     $b = Get-JuicerBackend
     $c = $Capture
+    Assert-JuicerGameClosed $c
     switch ($c.Type) {
         'Registry' {
             if ($null -eq $c.Old) { Remove-JuicerReg $c.Path $c.Name } else { Write-JuicerReg $c.Path $c.Name $c.Old.Kind $c.Old.Value }
@@ -591,6 +615,11 @@ function Invoke-JuicerTweak {
     $result = New-JuicerResult $Tweak 'Aplicado'
     $result.Changes = @($pending | ForEach-Object { Format-JuicerAction $_ })
     if ($Simulate) { $result.Outcome = 'Simulado'; return $result }
+    # Checked before anything is written, so that nothing half-applied needs undoing.
+    $open = @($pending | Where-Object { $_.Type -in 'FpsLimit', 'NvSetting' } | ForEach-Object { [string]$_.Exe } | Select-Object -Unique | Where-Object { Test-JuicerGameRunning $_ })
+    if ($open.Count -gt 0) {
+        return (New-JuicerResult $Tweak 'Error' "$($open -join ', ') está abierto: Win Juicer no toca el perfil de un juego en marcha, porque podría congelarlo. Ciérralo y vuelve a intentarlo.")
+    }
     # The «before» of Antes y después, the first time anything changes.
     if ((Get-JuicerBackend).Name -eq 'Windows') { Save-JuicerBaseline }
 
@@ -677,6 +706,55 @@ function Undo-JuicerTweak {
     }
     Write-JuicerLog "Deshecho $Id"
     New-JuicerResult $info 'Deshecho'
+}
+
+# One setting of a tweak back to how it was, and out of its journal entry
+# (the entry goes when it was the last). False when there was none.
+function Undo-JuicerCapture {
+    param([Parameter(Mandatory)][string]$TweakId, [Parameter(Mandatory)][string]$CaptureId)
+    $journal = Read-JuicerJournal
+    $entry = Get-JuicerJournalEntry $journal $TweakId
+    if ($null -eq $entry) { return $false }
+    $c = @($entry.Actions | Where-Object { $_.Id -eq $CaptureId }) | Select-Object -First 1
+    if ($null -eq $c) { return $false }
+    Restore-JuicerActionState $c
+    $keep = New-Object System.Collections.ArrayList
+    foreach ($a in $entry.Actions) { if ($a.Id -ne $CaptureId) { [void]$keep.Add($a) } }
+    $entry.Actions = $keep
+    if ($keep.Count -eq 0) { $journal.Remove($entry) }
+    Save-JuicerJournal $journal
+    Write-JuicerLog "Devuelto $CaptureId de $TweakId"
+    $true
+}
+
+# When a tweak's recipe changes (a setting no longer part of it), what Win
+# Juicer set for the old recipe goes back to how it was, and out of the
+# journal: re-applying alone would leave it in place. Returns what was
+# restored.
+function Remove-JuicerStaleCaptures {
+    param([Parameter(Mandatory)][hashtable]$Tweak)
+    $journal = Read-JuicerJournal
+    $entry = Get-JuicerJournalEntry $journal $Tweak.Id
+    if ($null -eq $entry) { return @() }
+    $want = @(foreach ($a in (Resolve-JuicerActions $Tweak)) { Get-JuicerActionId $a $Tweak.Id })
+    $keep = New-Object System.Collections.ArrayList
+    $gone = @()
+    foreach ($c in @($entry.Actions)) {
+        if ($want -contains $c.Id) { [void]$keep.Add($c); continue }
+        try {
+            Restore-JuicerActionState $c
+            $gone += $c.Id
+        } catch {
+            Write-JuicerLog "No se pudo devolver $($c.Id) de $($Tweak.Id): $_"
+            [void]$keep.Add($c)
+        }
+    }
+    if ($gone.Count -eq 0) { return @() }
+    $entry.Actions = $keep
+    if ($keep.Count -eq 0) { $journal.Remove($entry) }
+    Save-JuicerJournal $journal
+    Write-JuicerLog "Devuelto de $($Tweak.Id), que ya no lo usa: $($gone -join ', ')"
+    $gone
 }
 
 function Undo-JuicerAll {

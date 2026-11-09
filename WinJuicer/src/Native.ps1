@@ -451,6 +451,27 @@ namespace WinJuicer {
             } finally { Close(s); }
         }
 
+        // What this program's own profile says about a setting: { the user's
+        // value, NVIDIA's predefined one }, -1 for none. NVIDIA predefines a
+        // value in a game's profile when the game needs it to run right, so
+        // Win Juicer leaves those alone.
+        public static long[] GetInfo(string exe, uint id) {
+            var res = new long[] { -1, -1 };
+            IntPtr s = Open();
+            try {
+                IntPtr profile = FindApp(s, exe);
+                if (profile == IntPtr.Zero) return res;
+                var st = NewSetting();
+                int r = Fn<GetSettingFn>(0x73BF8338)(s, profile, id, ref st);
+                if (r == NotFoundSetting) return res;
+                Check(r, "GetSetting");
+                if (st.settingLocation != 0) return res;
+                if (st.isCurrentPredefined == 0) res[0] = (long)BitConverter.ToUInt32(st.currentValue, 0);
+                if (st.isPredefinedValid != 0) res[1] = (long)BitConverter.ToUInt32(st.predefinedValue, 0);
+                return res;
+            } finally { Close(s); }
+        }
+
         // The same, in the global profile (Manage 3D settings > Global): what
         // every program without its own value gets.
         public static long GetGlobalDword(uint id) {

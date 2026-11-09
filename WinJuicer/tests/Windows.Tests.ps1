@@ -229,6 +229,22 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         { Get-JuicerCurrentDns } | Should -Not -Throw
     }
 
+    It 've qué programas están abiertos y lee los cierres con error del registro' {
+        $b = Get-JuicerBackend
+        & $b.ProcRunning ((Get-Process -Id $PID).ProcessName + '.exe') | Should -BeTrue
+        & $b.ProcRunning 'no-existe-de-verdad-123.exe' | Should -BeFalse
+        & $b.ProcRunning 'raro[1].exe' | Should -BeFalse
+        $inc = & $b.AppIncidents ((Get-Date).AddDays(-30))
+        # A list, maybe empty, with the program and the time of each.
+        $null -eq $inc | Should -BeFalse
+        foreach ($i in @($inc)) {
+            $i.Exe | Should -Not -BeNullOrEmpty
+            { [datetime]$i.Time } | Should -Not -Throw
+        }
+        $nv = & $b.NvRead 'cs2.exe' ([uint32]0x00A879CF)
+        if ($nv) { $nv.ContainsKey('Predefined') | Should -BeTrue }
+    }
+
     It 'la ventana se construye y dibuja cada pestaña' {
         # WPF needs a single-threaded apartment, whatever the test host uses.
         $rs = [runspacefactory]::CreateRunspace()
@@ -293,6 +309,14 @@ Import-Module '$psm' -Force
     `$realStatus = [string]`$script:Gui.C.GameStatus.Text
     Show-JuicerGuiGamePage `$page
     `$pageShown = `$script:Gui.C.GamePage.Visibility -eq 'Visible'
+    # An open game, one Win Juicer protected after it failed: the page says so.
+    `$page2 = `$page.Clone()
+    `$page2.Running = `$true; `$page2.Minimal = `$true
+    `$page2.Safe = @{ Kind = 'Cierre'; Time = (Get-Date).ToString('s'); Module = 'x.dll' }
+    Show-JuicerGuiGamePage `$page2
+    `$notice = (`$script:Gui.C.GameNotice.Visibility -eq 'Visible') -and ([string]`$script:Gui.C.GameNoticeText.Text -like '*está abierto*') -and [bool]`$script:Gui.C.GamePrudent.IsChecked
+    Show-JuicerGuiSafety @{ Protected = @(@{ Exe = 'uno.exe'; Name = 'Uno'; Kind = 'Cuelgue'; Time = (Get-Date).ToString('s'); Module = '' }); Warned = @() }
+    `$alerts = `$script:Gui.C.SafetyAlerts.Children.Count
     Close-JuicerGuiGame
     Set-JuicerGuiAdvanced `$false
     `$hidden = @(`$script:AdvancedTabs | Where-Object { `$script:Gui.C[`$_].Visibility -ne 'Visible' }).Count
@@ -337,7 +361,7 @@ Import-Module '$psm' -Force
         PageErrors = `$pageErrors; RealStatus = `$realStatus; Pending = [bool]`$script:Gui.Task
         Detail = `$detail; Searched = `$searched; Extreme = `$extreme; Picked = `$picked; CountText = `$countText
         OffStays = `$offStays; Stale = `$stale; Esc = `$esc; Find = `$find; None = `$none; Cleared = `$cleared
-        UndoNote = [string]`$script:Gui.C.HomeUndoNote.Text; Journal = (Read-JuicerJournal).Count
+        UndoNote = [string]`$script:Gui.C.HomeUndoNote.Text; Journal = (Read-JuicerJournal).Count; Notice = `$notice; Alerts = `$alerts
         Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
@@ -389,6 +413,8 @@ Import-Module '$psm' -Force
             $r.Find | Should -BeTrue
             $r.None | Should -BeTrue
             $r.Cleared | Should -BeTrue
+            $r.Notice | Should -BeTrue
+            $r.Alerts | Should -Be 1
             # Empezar counts the changes the journal holds, not the journal itself.
             if ($r.Journal -eq 0) { $r.UndoNote | Should -BeLike 'Todavía no*' } else { $r.UndoNote | Should -BeLike "*ha hecho $($r.Journal) cambio*" }
         } finally {

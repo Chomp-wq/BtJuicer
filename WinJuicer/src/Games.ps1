@@ -92,16 +92,20 @@ function New-JuicerGpuTweak {
     }
 }
 
+# «Above normal», not «high»: a game that spins on a core at high priority
+# starves what it needs itself (its own workers, the audio, the input, the
+# desktop compositor) and the whole PC can freeze. Above normal still puts
+# it ahead of everything running in the background.
 function New-JuicerPriorityTweak {
     param([Parameter(Mandatory)][string]$Exe)
     $name = Split-JuicerFileName $Exe
     @{
         Id = 'juego:prioridad:' + $name.ToLowerInvariant(); Category = 'Juegos'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
-        Title = "Prioridad alta: $name"
-        What = "Windows arranca $name siempre con prioridad de CPU alta (no tiempo real)."
+        Title = "Prioridad por encima de lo normal: $name"
+        What = "Windows arranca $name siempre con prioridad de CPU por encima de lo normal: por delante de lo que corre en segundo plano."
         Gain = 'Ayuda cuando otros programas compiten por la CPU mientras juegas. Si el juego ya está limitado por la GPU, no cambia nada.'
-        Cost = "Afecta a cualquier programa que se llame $name. Algunos anti-trampas fijan su propia prioridad y lo ignoran."
-        Actions = @(@{ Type = 'Registry'; Path = "$script:IfeoKey\$name\PerfOptions"; Name = 'CpuPriorityClass'; Value = 3 })
+        Cost = "Afecta a cualquier programa que se llame $name. No es «alta» a propósito: con prioridad alta, un juego que ocupa un núcleo entero deja sin turno al sonido, al ratón y a sus propios hilos, y el equipo se puede congelar. Algunos anti-trampas fijan su propia prioridad y lo ignoran."
+        Actions = @(@{ Type = 'Registry'; Path = "$script:IfeoKey\$name\PerfOptions"; Name = 'CpuPriorityClass'; Value = 6 })
     }
 }
 

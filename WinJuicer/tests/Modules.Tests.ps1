@@ -818,7 +818,8 @@ Describe 'Frame pacer' {
         $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
         $M.Backend.State.NvSettings['cs2.exe|8102046'] | Should -Be 1
         $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x47814940
-        $M.Backend.State.NvSettings['cs2.exe|274197361'] | Should -Be 1
+        # No «prefer maximum performance» any more (PREFERRED_PSTATE).
+        $M.Backend.State.NvSettings.ContainsKey('cs2.exe|274197361') | Should -BeFalse
         @(Get-JuicerFpsLimits)[0].Fps | Should -Be 157
         (Undo-JuicerTweak 'fps:cs2.exe').Outcome | Should -Be 'Deshecho'
         $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
@@ -833,6 +834,142 @@ Describe 'Frame pacer' {
         $M.Backend.State.NvSettings['game.exe|11041231'] | Should -Be 0x60925292
         Undo-JuicerTweak 'fps:game.exe' | Out-Null
         $M.Backend.State.FpsLimits['game.exe'] | Should -Be 100
+    }
+
+    It 'no toca el perfil de un juego abierto: espera a que se cierre y entonces lo aplica' {
+        $vrr = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' } }
+        [void]$M.Backend.State.Running.Add('cs2.exe')
+        $r = Add-JuicerFpsLimit 'C:\Juegos\cs2.exe' 0 $vrr
+        $r.Outcome | Should -Be 'Pendiente'
+        $r.Message | Should -BeLike '*cs2.exe está abierto*'
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+        $M.Backend.State.NvSettings.Count | Should -Be 0
+        @(Get-JuicerPacerPending) | Should -Be @('cs2.exe')
+        # The engine refuses on its own too, before writing anything.
+        (Invoke-JuicerTweak (New-JuicerFpsLimitTweak 'cs2.exe' 100)).Outcome | Should -Be 'Error'
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+        Get-JuicerJournalEntry (Read-JuicerJournal) 'fps:cs2.exe' | Should -BeNullOrEmpty
+        # Still open: nothing yet. Closed: applied, and off the list.
+        @(Invoke-JuicerPacerPending $vrr) | Should -BeNullOrEmpty
+        $M.Backend.State.Running.Clear()
+        $done = @(Invoke-JuicerPacerPending $vrr)
+        $done[0].Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
+        @(Get-JuicerPacerPending) | Should -BeNullOrEmpty
+        # Taking it away while it runs waits too; undoing it by hand is refused.
+        [void]$M.Backend.State.Running.Add('cs2.exe')
+        (Remove-JuicerFpsLimit 'cs2.exe').Outcome | Should -Be 'Pendiente'
+        (Undo-JuicerTweak 'fps:cs2.exe').Outcome | Should -Be 'Error'
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
+        $M.Backend.State.Running.Clear()
+        [void](Invoke-JuicerPacerPending $vrr)
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+        $M.Backend.State.NvSettings.Count | Should -Be 0
+        Get-JuicerJournalEntry (Read-JuicerJournal) 'fps:cs2.exe' | Should -BeNullOrEmpty
+    }
+
+    It 'respeta lo que NVIDIA pone en el perfil de cada juego y no sube su propio límite' {
+        $vrr = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' } }
+        $M.Backend.State.NvPredefined['cs2.exe|11041231'] = 0x60925292
+        $M.Backend.State.NvPredefined[('old.exe|{0}' -f [uint32]0x10835002)] = 60
+        (Add-JuicerFpsLimit 'cs2.exe' 0 $vrr).Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.NvSettings.ContainsKey('cs2.exe|11041231') | Should -BeFalse
+        $M.Backend.State.NvSettings['cs2.exe|8102046'] | Should -Be 1
+        $r = Add-JuicerFpsLimit 'old.exe' 0 $vrr
+        $r.Title | Should -BeLike 'Frame pacer a 60 FPS*'
+        $M.Backend.State.FpsLimits['old.exe'] | Should -Be 60
+    }
+
+    It 'pone al día lo que aplicó una versión anterior, una sola vez' {
+        $old = New-JuicerFpsLimitTweak 'cs2.exe' 157 -VSync -Use 'VRR'
+        $old.Actions += @{ Type = 'NvSetting'; Exe = 'cs2.exe'; Id = [uint32]0x1057EB71; Value = [uint32]1; Label = 'Modo de energía: preferir rendimiento máximo' }
+        (Invoke-JuicerTweak $old).Outcome | Should -Be 'Aplicado'
+        $prio = New-JuicerPriorityTweak 'C:\Juegos\cs2.exe'
+        $prio.Actions[0].Value = 3
+        (Invoke-JuicerTweak $prio).Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.NvSettings['cs2.exe|274197361'] | Should -Be 1
+        $fixed = @(Repair-JuicerGameSetups)
+        $fixed.Count | Should -Be 2
+        $M.Backend.State.NvSettings.ContainsKey('cs2.exe|274197361') | Should -BeFalse
+        $M.Backend.State.NvSettings['cs2.exe|11041231'] | Should -Be 0x47814940
+        (Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\cs2.exe\PerfOptions' 'CpuPriorityClass').Value | Should -Be 6
+        @(Repair-JuicerGameSetups) | Should -BeNullOrEmpty
+        # Undoing still leaves everything as it was before Win Juicer.
+        [void](Undo-JuicerAll)
+        $M.Backend.State.NvSettings.Count | Should -Be 0
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+        Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\cs2.exe\PerfOptions' 'CpuPriorityClass' | Should -BeNullOrEmpty
+    }
+
+    It 'el modo prudente deja sólo el límite y devuelve lo demás como estaba' {
+        $vrr = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' } }
+        (Add-JuicerFpsLimit 'cs2.exe' 0 $vrr).Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.NvSettings.Count | Should -Be 2
+        [void](Set-JuicerPacerMinimal 'cs2.exe' $true $vrr)
+        $M.Backend.State.NvSettings.Count | Should -Be 0
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
+        (Get-JuicerJournalEntry (Read-JuicerJournal) 'fps:cs2.exe').Actions.Count | Should -Be 1
+        [void](Set-JuicerPacerMinimal 'cs2.exe' $false $vrr)
+        $M.Backend.State.NvSettings.Count | Should -Be 2
+        Undo-JuicerTweak 'fps:cs2.exe' | Out-Null
+        $M.Backend.State.NvSettings.Count | Should -Be 0
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+    }
+
+    It 'si un juego empieza a fallar después de optimizarlo, le quita los cambios' {
+        $vrr = @{ Display = [pscustomobject]@{ Hz = 165; MaxHz = 165; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 165; Kind = 'FreeSync' } }
+        (Add-JuicerFpsLimit 'cs2.exe' 0 $vrr).Outcome | Should -Be 'Aplicado'
+        (Add-JuicerFpsLimit 'eldenring.exe' 0 $vrr).Outcome | Should -Be 'Aplicado'
+        # Optimized two hours ago.
+        $j = Read-JuicerJournal
+        foreach ($e in $j) { $e.AppliedAt = (Get-Date).AddHours(-2).ToString('s') }
+        Save-JuicerJournal $j
+        # cs2 never failed before and fails since; Elden Ring already failed before.
+        [void]$M.Backend.State.Incidents.Add(@{ Exe = 'cs2.exe'; Kind = 'Cierre'; Time = (Get-Date).AddHours(-1).ToString('s'); Module = 'nvwgf2umx.dll' })
+        [void]$M.Backend.State.Incidents.Add(@{ Exe = 'eldenring.exe'; Kind = 'Cuelgue'; Time = (Get-Date).AddHours(-1).ToString('s'); Module = '' })
+        [void]$M.Backend.State.Incidents.Add(@{ Exe = 'eldenring.exe'; Kind = 'Cierre'; Time = (Get-Date).AddHours(-10).ToString('s'); Module = '' })
+        $s = Update-JuicerGameSafety @(@{ ExeName = 'cs2.exe'; Name = 'Counter-Strike 2' })
+        @($s.Protected).Count | Should -Be 1
+        $s.Protected[0].Name | Should -Be 'Counter-Strike 2'
+        @($s.Warned).Count | Should -Be 1
+        $s.Warned[0].Exe | Should -Be 'eldenring.exe'
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+        $M.Backend.State.FpsLimits['eldenring.exe'] | Should -Be 157
+        Get-JuicerGameSafe 'cs2.exe' | Should -Not -BeNullOrEmpty
+        Test-JuicerPacerMinimal 'cs2.exe' | Should -BeTrue
+        Format-JuicerSafeNote (Get-JuicerGameSafe 'cs2.exe') 'Counter-Strike 2' | Should -BeLike '*se cerró con un error*nvwgf2umx.dll*'
+        # «Optimizar todos» leaves it alone; asked for that game, prudent mode.
+        $g = @{ Id = 'steam:1'; Name = 'Counter-Strike 2'; Exe = 'cs2.exe'; ExeName = 'cs2.exe' }
+        (@(Invoke-JuicerGameSetup @($g) 'Recomendado' -GpuCount 1 -Monitor $vrr))[0].Outcome | Should -Be 'NoAplica'
+        $M.Backend.State.FpsLimits.ContainsKey('cs2.exe') | Should -BeFalse
+        [void](Invoke-JuicerGameSetup @($g) 'Recomendado' -GpuCount 1 -Monitor $vrr -Force)
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 157
+        $M.Backend.State.NvSettings.ContainsKey('cs2.exe|11041231') | Should -BeFalse
+        Get-JuicerGameSafe 'cs2.exe' | Should -BeNullOrEmpty
+        # The same failure, from before optimizing it again, does not count twice.
+        @((Update-JuicerGameSafety).Protected).Count | Should -Be 0
+    }
+
+    It 'decide por los fallos de antes y de después, y ve los anti-trampas' {
+        Get-JuicerSafetyVerdict 0 0 | Should -Be ''
+        Get-JuicerSafetyVerdict 1 0 | Should -Be 'Proteger'
+        Get-JuicerSafetyVerdict 2 1 | Should -Be 'Avisar'
+        # A first failure after weeks of working fine: only pointed out.
+        Get-JuicerSafetyVerdict 1 0 0 | Should -Be 'Avisar'
+        $inc = @(@{ Exe = 'A.exe'; Time = '2026-01-02T10:00:00' }, @{ Exe = 'a.exe'; Time = '2026-01-01T10:00:00' }, @{ Exe = 'b.exe'; Time = '2026-01-02T11:00:00' })
+        $sel = @(Select-JuicerGameIncidents $inc 'a' ([datetime]'2026-01-01'))
+        $sel.Count | Should -Be 2
+        $sel[0].Time | Should -Be '2026-01-01T10:00:00'
+        @(Select-JuicerGameIncidents $inc 'a.exe' ([datetime]'2026-01-01T12:00:00')).Count | Should -Be 1
+        Format-JuicerSafeNote @{ Kind = 'Cuelgue'; Time = '2026-01-02T10:00:00' } 'Juego' | Should -BeLike 'Juego se quedó colgado y Windows lo cerró*'
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('wj-ac-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $dir 'EasyAntiCheat') -Force | Out-Null
+        try {
+            Get-JuicerGameAntiCheat $dir | Should -Be 'Easy Anti-Cheat'
+            Get-JuicerGameAntiCheat (Join-Path $dir 'EasyAntiCheat') | Should -Be ''
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force
+        }
     }
 
     It 'con RivaTuner sólo pone el límite, y sin motor lo dice' {

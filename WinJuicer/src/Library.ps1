@@ -269,11 +269,16 @@ function Get-JuicerGameStatus {
     foreach ($e in $journal) { $ids[([string]$e.Id).ToLowerInvariant()] = 1 }
     $fps = @{}
     foreach ($l in @(Get-JuicerFpsLimits)) { $fps[$l.Exe] = $l.Fps }
+    $pacer = Read-JuicerPacer
     foreach ($g in $Games) {
         $g.Fps = $fps[$g.ExeName]
         $g.Limited = $ids.ContainsKey("fps:$($g.ExeName)")
         $g.Gpu = $ids.ContainsKey('juego:gpu:' + $g.Exe.ToLowerInvariant())
         $g.Priority = $ids.ContainsKey("juego:prioridad:$($g.ExeName)")
+        $p = $pacer.Games[[string]$g.ExeName]
+        $g.Safe = [bool]($p -is [hashtable] -and $p.Safe)
+        $g.Minimal = [bool]($p -is [hashtable] -and $p.Minimal)
+        $g.Waiting = $pacer.Pending.ContainsKey([string]$g.ExeName)
         $g
     }
 }
@@ -283,15 +288,20 @@ function Format-JuicerGameStatus {
     $p = @()
     if ($Game.Fps) { $p += '{0} FPS ({1:N2} ms)' -f $Game.Fps, (1000 / $Game.Fps) } elseif ($Game.Limited) { $p += 'frame pacer quitado fuera de Win Juicer' }
     if ($Game.Gpu) { $p += 'GPU dedicada' }
-    if ($Game.Priority) { $p += 'prioridad alta' }
+    if ($Game.Priority) { $p += 'prioridad por encima de lo normal' }
+    if ($Game.Minimal -and $Game.Fps) { $p += 'modo prudente' }
+    if ($Game.Waiting) { $p += 'cambio en espera hasta que lo cierres' }
+    if ($Game.Safe) { $p += 'sin tocar: falló después de optimizarlo' }
     if ($p.Count -eq 0) { 'sin configurar' } else { $p -join ' · ' }
 }
 
 # What = Recomendado (FPS limit for this monitor and, with two graphics
 # cards, the dedicated one), Fps, Gpu, Prioridad or Quitar (everything Win
-# Juicer set on these games).
+# Juicer set on these games). A game Win Juicer protected after it failed
+# (Update-JuicerGameSafety) is left alone unless Force: the user asked for
+# that very game.
 function Invoke-JuicerGameSetup {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Games, [ValidateSet('Recomendado', 'Fps', 'Gpu', 'Prioridad', 'Quitar')][string]$What, [int]$Fps, [int]$GpuCount = -1, [hashtable]$Monitor)
+    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Games, [ValidateSet('Recomendado', 'Fps', 'Gpu', 'Prioridad', 'Quitar')][string]$What, [int]$Fps, [int]$GpuCount = -1, [hashtable]$Monitor, [switch]$Force)
     if ($GpuCount -lt 0) { $GpuCount = Get-JuicerGpuCount }
     if (-not $Monitor -and $What -in 'Recomendado', 'Fps') { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" } }
     $journal = Read-JuicerJournal
@@ -299,6 +309,13 @@ function Invoke-JuicerGameSetup {
         # One game failing (no monitor to size the limit, a driver error)
         # does not stop the others.
         try {
+            if ($What -ne 'Quitar' -and (Get-JuicerGameSafe $g.ExeName)) {
+                if (-not $Force) {
+                    New-JuicerResult @{ Id = "juego:$($g.ExeName)"; Title = $g.Name; Reboot = 'No' } 'NoAplica' 'Sin tocar: falló después de optimizarlo. Ábrelo en la galería y pulsa «Optimizar este juego» si quieres volver a intentarlo, en modo prudente.'
+                    continue
+                }
+                Clear-JuicerGameSafe $g.ExeName
+            }
             switch ($What) {
                 'Recomendado' {
                     Add-JuicerFpsLimit $g.ExeName $Fps $Monitor
@@ -309,7 +326,9 @@ function Invoke-JuicerGameSetup {
                 'Gpu' { if ([IO.Path]::IsPathRooted($g.Exe)) { Invoke-JuicerTweak (New-JuicerGpuTweak $g.Exe) } }
                 'Prioridad' { Invoke-JuicerTweak (New-JuicerPriorityTweak $g.Exe) }
                 'Quitar' {
-                    foreach ($id in "fps:$($g.ExeName)", ('juego:gpu:' + $g.Exe.ToLowerInvariant()), "juego:prioridad:$($g.ExeName)") {
+                    # The frame pacer of an open game goes when it closes.
+                    Remove-JuicerFpsLimit $g.ExeName
+                    foreach ($id in ('juego:gpu:' + $g.Exe.ToLowerInvariant()), "juego:prioridad:$($g.ExeName)") {
                         if (@($journal | Where-Object { ([string]$_.Id).ToLowerInvariant() -eq $id }).Count -gt 0) { Undo-JuicerTweak $id }
                     }
                 }

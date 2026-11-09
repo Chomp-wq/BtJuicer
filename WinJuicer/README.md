@@ -101,7 +101,7 @@ Las pestañas:
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Arranque** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
-| **Juegos** | La galería de tus juegos, con sus portadas, que encuentra solo. «Optimizar todos» en un clic, o pulsa un juego para su página: frame pacer (fluidez o latencia, ritmo automático o el tuyo, calibrar), gráfica potente, prioridad alta, medir FPS y frametimes, y qué poner dentro del juego. En «Mi pantalla y el frame pacer…», cómo usas el monitor, el motor y, con todas las opciones, medir cualquier juego y las exclusiones de Defender. |
+| **Juegos** | La galería de tus juegos, con sus portadas, que encuentra solo. «Optimizar todos» en un clic, o pulsa un juego para su página: frame pacer (fluidez o latencia, ritmo automático o el tuyo, calibrar), gráfica potente, prioridad por encima de lo normal, modo prudente, medir FPS y frametimes, y qué poner dentro del juego. En «Mi pantalla y el frame pacer…», cómo usas el monitor, el motor y, con todas las opciones, medir cualquier juego y las exclusiones de Defender. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
 | **No hacemos** | Los «trucos» que circulan, y por qué no. |
@@ -330,7 +330,7 @@ planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar»
 | Sin atajos de Teclas especiales (Mayús ×5) | Rendimiento | Bajo |
 
 Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
-de alto rendimiento y prioridad alta para un `.exe`, y exclusiones de Microsoft
+de alto rendimiento y prioridad por encima de lo normal para un `.exe`, y exclusiones de Microsoft
 Defender para las bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
 
 ### Tus juegos
@@ -377,13 +377,50 @@ si tienes dos. Se aplica solo cada vez que abras el juego.
   **Ritmo**: *automático* (el recomendado o el calibrado para tu PC) o *elegido
   por ti*, que se respeta aunque cambies de monitor o de modo. **Calibrar**,
   con los pasos explicados antes de empezar. Sin NVIDIA ni RivaTuner, un botón
-  para instalar RivaTuner.
-- **Más rendimiento**: la gráfica potente (con dos gráficas) y prioridad alta.
+  para instalar RivaTuner. **Modo prudente**: sólo el límite de FPS, sin tocar
+  la sincronización vertical ni la cola de fotogramas, para un juego que se
+  porta mal con lo demás.
+- **Más rendimiento**: la gráfica potente (con dos gráficas) y prioridad por
+  encima de lo normal (no «alta»: con prioridad alta, un juego que ocupa un
+  núcleo entero deja sin turno al sonido, al ratón y a sus propios hilos, y el
+  equipo se puede congelar).
 - **Medir**: tu última medida con su gráfica de frametimes, y un botón para
   medir este juego en concreto.
 - **Dentro del juego**: los consejos de abajo.
 
 Cada cambio en la página se aplica al momento y se deshace como todo lo demás.
+
+**Que un juego no se congele ni se cierre por optimizarlo.**
+- **Nunca con el juego abierto.** El driver le pasa los valores nuevos a un
+  juego en marcha al momento, y cambiarle la sincronización vertical o la
+  cola de fotogramas en plena partida puede congelarlo o cerrarlo. Si el juego
+  está abierto (también al calibrar, que se hace jugando), el cambio espera:
+  la galería lo marca «→ al cerrarlo» y se aplica solo en cuanto lo cierras.
+  Si cierras Win Juicer antes, se aplica la próxima vez que lo abras o al
+  iniciar sesión.
+- **Lo que NVIDIA pone para cada juego, se queda.** Si el perfil del driver de
+  un juego trae su propio valor de sincronización vertical o de cola de
+  fotogramas, es porque ese juego lo necesita: Win Juicer no lo sobrescribe.
+  Y si NVIDIA limita un juego a ciertos FPS porque por encima falla (física,
+  temporizadores), el frame pacer no pasa de ahí.
+- **Una receta más prudente.** Ya no pone «Preferir rendimiento máximo»: tenía
+  la gráfica a tope incluso en menús y pantallas de carga, justo donde cede un
+  overclock o un undervolt al límite o la refrigeración de un portátil. Lo que
+  ya estaba aplicado de versiones anteriores se pone al día solo, una vez.
+- **Si un juego empieza a fallar después de optimizarlo**, Win Juicer lo ve en
+  el registro de Windows (un cierre con error o un cuelgue que Windows tuvo
+  que cerrar) y, si antes no le pasaba, le quita sus cambios por si eran la
+  causa, lo marca «⚠ protegido» y te lo explica. «Optimizar todos» y el
+  mantenimiento automático lo dejan en paz; si lo vuelves a optimizar desde su
+  página, es en modo prudente. Si ya fallaba antes, sólo te avisa: entonces no
+  parece cosa de Win Juicer.
+- **Con RivaTuner** el ritmo se marca a través de su enganche al juego (el
+  mismo de su contador de FPS). Si el juego trae anti-trampas (Easy Anti-Cheat,
+  BattlEye…), su página lo dice: la mayoría lo admiten, pero si se cierra o te
+  expulsa, mejor su propio límite de FPS.
+- Si sospechas de las «Optimizaciones para juegos en ventana» (de Ajustes),
+  Windows deja quitarlas para un solo juego: Configuración > Sistema >
+  Pantalla > Gráficos, el juego, Opciones.
 
 **Dentro del juego**, en su página: lo que hay que poner en las opciones del
 juego, que Win Juicer no puede cambiar desde fuera, para tu gráfica, tu
@@ -493,11 +530,9 @@ con Win Juicer cerrado:
   través de él) y, con G-SYNC, la sincronización vertical forzada, que con el
   límite por debajo de los Hz no llega a actuar más que para tapar un corte en
   un pico (con estroboscopio sin VRR, para que cada destello tenga su
-  fotograma). También el modo de energía «Preferir rendimiento máximo», sólo
-  para ese juego: con el límite la gráfica no va al 100 % y el driver podría
-  bajarle la frecuencia en escenas ligeras, y el siguiente fotograma pesado
-  llegaría tarde. El modo «Ultra» no tiene un identificador público y no se
-  toca. La sincronización vertical del perfil siempre queda en uno de tres
+  fotograma). Lo que el perfil de NVIDIA de ese juego ya trae se respeta, y no
+  se fuerza «Preferir rendimiento máximo». El modo «Ultra» no tiene un
+  identificador público y no se toca. La sincronización vertical del perfil siempre queda en uno de tres
   estados (forzada, desactivada o la del juego), así que cambiar de modo o de
   prioridad nunca deja puesta la del anterior. Un ritmo por encima de los Hz
   (escrito a mano o calibrado) nunca la fuerza: haría esperar cada fotograma
