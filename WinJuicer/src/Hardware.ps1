@@ -350,6 +350,25 @@ function Get-JuicerHardwareProfile {
     $hw
 }
 
+# One line, the way a player names their PC: processor, memory, graphics
+# card and screen, without the trademarks or the «8-Core Processor».
+function Format-JuicerHardwareShort {
+    param([hashtable]$Hw)
+    $parts = @()
+    $c = $Hw.Cpu
+    if ($c -and $c.Name) {
+        $name = (([string]$c.Name -replace '\((R|TM)\)', '' -replace '\s+(\d+-Core\s+)?Processor\b.*$', '' -replace '\s+(CPU\b|with Radeon).*$', '' -replace '\s{2,}', ' ')).Trim()
+        $parts += $(if ($c.Cores) { '{0} ({1})' -f $name, (Format-JuicerCount $c.Cores 'núcleo') } else { $name })
+    }
+    if ($Hw.RamBytes -gt 0) { $parts += '{0:N0} GB de RAM' -f ($Hw.RamBytes / 1GB) }
+    $gpus = @($Hw.Gpus | Where-Object { $_ -and $_.Name -and $_.Name -notmatch $script:VirtualGpuPattern })
+    $gpu = @(@($gpus | Where-Object { $_.Discrete }) + $gpus) | Select-Object -First 1
+    if ($gpu) { $parts += ([string]$gpu.Name -replace '\((R|TM)\)', '').Trim() }
+    $d = if ($Hw.Monitor) { $Hw.Monitor.Display } else { $null }
+    if ($d -and $d.MaxHz) { $parts += "pantalla de $($d.MaxHz) Hz" + $(if ($Hw.Monitor.Vrr) { ' con VRR' } else { '' }) }
+    $parts -join ' · '
+}
+
 function Format-JuicerHardwareSummary {
     param([hashtable]$Hw)
     $lines = @()
@@ -365,7 +384,7 @@ function Format-JuicerHardwareSummary {
         $mem = if ($g.Vram -gt 0) { ', ' + (Format-JuicerBytes $g.Vram) } else { '' }
         $lines += ('Gráfica: {0} ({1}{2})' -f $g.Name, $(if ($g.Discrete) { 'dedicada' } else { 'integrada' }), $mem)
     }
-    if ($Hw.RamBytes -gt 0) { $lines += ('Memoria: {0} en {1} módulo(s)' -f (Format-JuicerBytes $Hw.RamBytes), @($Hw.Modules).Count) }
+    if ($Hw.RamBytes -gt 0) { $lines += ('Memoria: {0} en {1}' -f (Format-JuicerBytes $Hw.RamBytes), (Format-JuicerCount @($Hw.Modules).Count 'módulo')) }
     if ($Hw.Monitor) { $lines += 'Monitor: ' + (Format-JuicerMonitor $Hw.Monitor) }
     if ($Hw.SystemDisk) { $lines += ('Disco de Windows: {0} ({1}, {2})' -f $Hw.SystemDisk.Name, $Hw.SystemDisk.Media, $Hw.SystemDisk.Bus) }
     if ($Hw.Support) {

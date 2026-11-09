@@ -79,15 +79,17 @@ optimizaciones. Se recuerda para la próxima vez.
   equipo, sólo los seleccionados). Los filtros cambian lo que ves, no lo que has
   elegido: «Aplicar» aplica todo lo seleccionado, se vea o no.
 - **todos / ninguno** en cada categoría, y la cuenta de seleccionados en el
-  botón de aplicar.
+  botón de aplicar. Aplicar, simular y deshacer van debajo de la lista,
+  siempre a la vista.
 - **Detalles**, a la derecha, del ajuste que tengas bajo el ratón: qué hace,
   qué ganas, qué cuesta, su estado, si conviene a tu equipo y por qué, y **qué
   cambia exactamente**: cada valor del registro, servicio o tarea, tal como lo
   escribirá. Y su identificador, para `-Aplicar` y `-Deshacer`.
 - **Simular** dice qué cambiaría todo lo seleccionado, sin cambiar nada.
-- **Guardar selección…** guarda lo que has marcado como perfil propio;
-  **Cargar selección…** lo vuelve a marcar (aquí o en otro PC) sin aplicar nada,
-  para revisarlo antes. **Importar…** lo aplica directamente.
+- En **Perfiles**, a la derecha: **Guardar selección…** guarda lo que has
+  marcado como perfil propio; **Cargar selección…** lo vuelve a marcar (aquí o
+  en otro PC) sin aplicar nada, para revisarlo antes. **Importar…** te enseña
+  lo que va a aplicar y lo aplica si dices que sí.
 
 Las pestañas:
 
@@ -95,7 +97,7 @@ Las pestañas:
 |---|---|
 | **Empezar** | Los cuatro botones de arriba, con el estado de cada cosa. |
 | **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo», «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro) y «Medir antes y después». |
-| **Ajustes** | Todos los ajustes, para elegirlos uno a uno (arriba). Selección rápida: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, los detalles del ajuste y, en su otra pestaña, las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS. *Exportar lo aplicado…* e *Importar…* llevan tu configuración a otro PC. |
+| **Ajustes** | Todos los ajustes en una lista, para elegirlos uno a uno (arriba). Selección rápida: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, los detalles del ajuste; las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS; y los perfiles: guardar y cargar tu selección, y *Exportar lo aplicado…* e *Importar…* para llevar tu configuración a otro PC. |
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
 | **Arranque** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
@@ -108,6 +110,11 @@ Lo lento (leer el hardware, el diagnóstico, aplicar) va en segundo plano, y la
 barra de estado dice qué está haciendo. La ventana no se deja cerrar mientras
 está aplicando un cambio, para que nada quede a medias. Lo muy largo (winget, DISM, SFC) se abre
 en su propia ventana para que veas su progreso.
+
+La ventana recuerda su tamaño y dónde estaba, y cabe en pantallas pequeñas.
+Atajos: **Esc** borra lo escrito en un buscador y vuelve de la página de un
+juego a la galería, **Ctrl+F** lleva al buscador de la pestaña (juegos, ajustes
+o programas) y **F5** vuelve a leer la pestaña.
 
 Si prefieres la consola, o la ventana no puede abrirse, `WinJuicer.cmd -Consola`
 abre el menú de texto, con lo mismo:
@@ -394,7 +401,7 @@ monitor y cómo lo usas:
   Siege, Marvel Rivals, THE FINALS, PUBG, Cyberpunk 2077…) y lo particular de
   algunos, como que Elden Ring no pasa de 60 FPS. A los demás les da lo general.
 
-**Optimizar solos los juegos que instale** (casilla en la pestaña, o
+**Optimizar automáticamente los juegos que instale** (casilla en la pestaña, o
 `-MantenerJuegos Activar`): al iniciar sesión, sin abrir Win Juicer, optimiza
 los juegos que hayas instalado desde la última vez y recalcula el frame pacer si
 ha cambiado el monitor, sus Hz o cómo lo usas, y te avisa con una

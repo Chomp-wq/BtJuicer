@@ -322,6 +322,44 @@ Describe 'Ventana (sin pantalla)' {
         }
     }
 
+    It 'la ventana cabe en pantallas pequeñas y vuelve a abrirse donde estaba' {
+        $big = @{ Left = 0; Top = 0; Width = 1920; Height = 1040 }
+        $screens = @{ Left = 0; Top = 0; Width = 1920; Height = 1080 }
+        $p = Get-JuicerWindowPlacement $null $big $screens
+        $p.Width | Should -Be 1220; $p.Height | Should -Be 800; $p.Manual | Should -BeFalse
+        # A 1366x768 laptop at 125 %: 1093x614 of work area.
+        $small = Get-JuicerWindowPlacement $null @{ Left = 0; Top = 0; Width = 1093; Height = 574 } @{ Left = 0; Top = 0; Width = 1093; Height = 614 }
+        $small.Height | Should -Be 574
+        $small.MinHeight | Should -Be 574
+        $small.Width | Should -Be 1093
+        $small.MinWidth | Should -Be 960
+        # Where it was, if that is still on a screen; maximized, too.
+        $back = Get-JuicerWindowPlacement @{ Left = 300; Top = 120; Width = 1400; Height = 900; Maximized = $true } $big $screens
+        $back.Manual | Should -BeTrue
+        $back.Left | Should -Be 300
+        $back.Width | Should -Be 1400
+        $back.Maximized | Should -BeTrue
+        # A screen that is no longer there: centred instead.
+        (Get-JuicerWindowPlacement @{ Left = 2500; Top = 100; Width = 1220; Height = 800 } $big $screens).Manual | Should -BeFalse
+        (Get-JuicerWindowPlacement @{ Left = 100; Top = -500; Width = 1220; Height = 800 } $big $screens).Manual | Should -BeFalse
+        # A size too small to be real is ignored.
+        (Get-JuicerWindowPlacement @{ Width = 10; Height = 10 } $big $screens).Width | Should -Be 1220
+    }
+
+    It 'las preferencias de la ventana no se pisan entre sí' {
+        Remove-Item -LiteralPath (Get-JuicerUiPrefsPath) -ErrorAction SilentlyContinue
+        Save-JuicerUiPrefs @{ Advanced = $true }
+        Save-JuicerUiPrefs @{ Window = @{ Left = 10; Top = 20; Width = 1300; Height = 850; Maximized = $false } }
+        $p = Read-JuicerUiPrefs
+        $p.Advanced | Should -BeTrue
+        $p.Window.Width | Should -Be 1300
+        Save-JuicerUiPrefs @{ Advanced = $false }
+        (Read-JuicerUiPrefs).Window.Left | Should -Be 10
+        Set-Content -LiteralPath (Get-JuicerUiPrefsPath) -Value 'no es json'
+        (Read-JuicerUiPrefs).Advanced | Should -BeFalse
+        Remove-Item -LiteralPath (Get-JuicerUiPrefsPath) -ErrorAction SilentlyContinue
+    }
+
     It 'resume resultados con sus avisos de reinicio' {
         $text = Format-JuicerResultsText @(
             @{ Title = 'A'; Outcome = 'Aplicado'; Reboot = 'Reinicio' }
@@ -337,10 +375,44 @@ Describe 'Ventana (sin pantalla)' {
         $text | Should -Not -BeLike '*Explorador para: D*'
     }
 
-    It 'reparte categorías en dos columnas parecidas' {
-        $cols = Split-JuicerColumns @(@{ Items = 1..10 }, @{ Items = 1..3 }, @{ Items = 1..4 }, @{ Items = 1..2 })
-        $cols.Count | Should -Be 2
-        @($cols[0]).Count + @($cols[1]).Count | Should -Be 4
+    It 'lee la lista que devuelve Windows PowerShell sin meterla en otra lista' {
+        $l = ConvertFrom-JuicerWinPsJson '[{"Name":"a","Installed":true},{"Name":"b","Installed":false}]'
+        $l.Count | Should -Be 2
+        $l[0] | Should -BeOfType [hashtable]
+        $l[1].Name | Should -Be 'b'
+        $l[0].Installed | Should -BeTrue
+        $one = ConvertFrom-JuicerWinPsJson '{"Name":"a"}'
+        $one.Count | Should -Be 1
+        $one[0].Name | Should -Be 'a'
+        (ConvertFrom-JuicerWinPsJson '').Count | Should -Be 0
+        (ConvertFrom-JuicerWinPsJson '[]').Count | Should -Be 0
+    }
+
+    It 'las cuentas concuerdan con el número' {
+        Format-JuicerCount 1 'cambio' | Should -Be '1 cambio'
+        Format-JuicerCount 0 'cambio' | Should -Be '0 cambios'
+        Format-JuicerCount 3 'juego encontrado' 'juegos encontrados' | Should -Be '3 juegos encontrados'
+        Format-JuicerCount 1 'juego encontrado' 'juegos encontrados' | Should -Be '1 juego encontrado'
+        (Format-JuicerHardwareSummary @{ Cpu = @{}; Gpus = @(); RamBytes = 16GB; Modules = @(@{ Size = 16GB }) }) -join ' ' | Should -BeLike '*GB en 1 módulo *'
+    }
+
+    It 'resume el equipo en una línea, sin marcas registradas ni adaptadores virtuales' {
+        $hw = @{
+            Cpu = @{ Name = 'AMD Ryzen 7 7800X3D 8-Core Processor'; Cores = 8 }; RamBytes = 32GB
+            Gpus = @(@{ Name = 'Microsoft Basic Display Adapter' }, @{ Name = 'Intel(R) UHD Graphics 770' }, @{ Name = 'NVIDIA GeForce RTX 4070'; Discrete = $true })
+            Monitor = @{ Display = @{ MaxHz = 165 }; Vrr = @{ Kind = 'G-SYNC Compatible' } }
+        }
+        Format-JuicerHardwareShort $hw | Should -Be 'AMD Ryzen 7 7800X3D (8 núcleos) · 32 GB de RAM · NVIDIA GeForce RTX 4070 · pantalla de 165 Hz con VRR'
+        Format-JuicerHardwareShort @{ Cpu = @{ Name = 'Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz'; Cores = 6 }; Gpus = @(@{ Name = 'Intel(R) UHD Graphics 630' }) } | Should -Be 'Intel Core i7-8700 (6 núcleos) · Intel UHD Graphics 630'
+        Format-JuicerHardwareShort @{ Cpu = @{ Name = 'AMD Ryzen 5 5600G with Radeon Graphics' }; Gpus = @() } | Should -Be 'AMD Ryzen 5 5600G'
+        Format-JuicerHardwareShort @{ Cpu = @{}; Gpus = @() } | Should -Be ''
+    }
+
+    It 'Optimizar ahora aplica lo mismo que Empezar cuenta: lo recomendado sin el nivel Extremo' {
+        $t = @(@{ Id = 'a'; Level = 1 }, @{ Id = 'b'; Level = 3 }, @{ Id = 'c'; Level = 2 }, @{ Id = 'd'; Level = 2 })
+        $states = @{ a = @{ State = 'Pendiente' }; b = @{ State = 'Pendiente' }; c = @{ State = 'Parcial' }; d = @{ State = 'Aplicado' } }
+        $advice = @{ a = @{ Verdict = 'Recomendado' }; b = @{ Verdict = 'Recomendado' }; c = @{ Verdict = 'Recomendado' }; d = @{ Verdict = 'Recomendado' } }
+        @(Get-JuicerHomeSelection $t $states $advice) | Should -Be @('a', 'c')
     }
 
     It 'los botones de selección marcan lo que toca y sólo lo pendiente' {

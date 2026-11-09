@@ -23,6 +23,14 @@ function Format-JuicerBytes {
     '{0:N0} KB' -f ($Bytes / 1KB)
 }
 
+# «1 cambio», «3 cambios»: the words agree with the number. Many is One plus
+# «s» unless given («1 juego encontrado», «2 juegos encontrados»).
+function Format-JuicerCount {
+    param([int]$Count, [string]$One, [string]$Many)
+    if (-not $Many) { $Many = $One + 's' }
+    '{0} {1}' -f $Count, $(if ($Count -eq 1) { $One } else { $Many })
+}
+
 # --- Pure pieces, testable without Windows ---------------------------------
 
 # Boards name slots every way imaginable: "ChannelA-DIMM0", "DIMM_A1",
@@ -45,7 +53,7 @@ function Get-JuicerRamFindings {
     $type = @($Modules)[0].SMBIOSMemoryType
     $typeName = switch ($type) { 26 { 'DDR4' } 34 { 'DDR5' } 24 { 'DDR3' } default { 'RAM' } }
     $at = if ($speed -gt 0) { ", a $speed MT/s" } else { '' }
-    $out += New-JuicerFinding $area 'Info' ('{0} de {1} en {2} módulo(s){3}' -f (Format-JuicerBytes $total), $typeName, $Modules.Count, $at)
+    $out += New-JuicerFinding $area 'Info' ('{0} de {1} en {2}{3}' -f (Format-JuicerBytes $total), $typeName, (Format-JuicerCount $Modules.Count 'módulo'), $at)
 
     if ($total -lt 15GB) {
         $out += New-JuicerFinding $area 'Bajo' 'Menos de 16 GB de RAM' 'Muchos juegos actuales piden 16 GB; con menos, Windows pagina a disco y aparecen tirones.'
@@ -520,7 +528,7 @@ function Get-JuicerBootAudit {
         $sev = if ($on.Count -gt 12 -or $junk.Count -ge 4) { 'Medio' } elseif ($on.Count -gt 6 -or $junk.Count -gt 0) { 'Bajo' } else { 'Ok' }
         $detail = 'Desactiva en Programas de inicio los que no necesites nada más encender.'
         if ($junk.Count -gt 0) { $detail = "$($junk.Count) son prescindibles: $(($junk | ForEach-Object { $_.Name }) -join ', '). Funcionan igual abriéndolos cuando los necesites. " + $detail }
-        $out += New-JuicerFinding 'Arranque' $sev "$($on.Count) programas, tareas y servicios arrancan con Windows" $detail
+        $out += New-JuicerFinding 'Arranque' $sev $(if ($on.Count -eq 1) { 'Un programa, tarea o servicio arranca con Windows' } else { "$($on.Count) programas, tareas y servicios arrancan con Windows" }) $detail
     } catch {
         Write-Verbose "Sin programas de inicio: $_"
     }
@@ -539,7 +547,7 @@ function Get-JuicerCatalogAudit {
     }
     $pending = @(Get-JuicerProfile 1 | Where-Object { $_.Category -ne 'Reparación' -and (Get-JuicerTweakState $_ $journal).State -in 'Pendiente', 'Parcial' })
     if ($pending.Count -gt 0) {
-        $out += New-JuicerFinding 'Ajustes' 'Bajo' "$($pending.Count) ajustes del perfil Seguro sin aplicar" (($pending | ForEach-Object { $_.Title }) -join ', ')
+        $out += New-JuicerFinding 'Ajustes' 'Bajo' "$(Format-JuicerCount $pending.Count 'ajuste') del perfil Seguro sin aplicar" (($pending | ForEach-Object { $_.Title }) -join ', ')
     }
     $out
 }

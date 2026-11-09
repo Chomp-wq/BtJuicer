@@ -213,6 +213,13 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
 
     It 'lista las apps de la Tienda y las características de Windows' {
         { @(Get-JuicerDebloatState (Get-JuicerHardwareProfile)) } | Should -Not -Throw
+        # What powershell.exe prints comes back as a flat list, from 5.1 and from 7.
+        $l = & (Get-Module WinJuicer) { Invoke-WinPowerShell "[pscustomobject]@{ Name = 'a' }; [pscustomobject]@{ Name = 'b' }" }
+        $l.Count | Should -Be 2
+        $l[1].Name | Should -Be 'b'
+        # Every app is kept under its own name, not all of them under one.
+        $cache = & (Get-Module WinJuicer) { $script:AppxCache = $null; [void](Read-WinAppx 'x'); $script:AppxCache }
+        @($cache.Keys | Where-Object { $cache[$_].Name -ne $_ }) | Should -BeNullOrEmpty
         $b = Get-JuicerBackend
         # The window asks for every component when it opens: dism took about
         # a minute here, which is why reading goes through WMI.
@@ -265,6 +272,10 @@ Import-Module '$psm' -Force
     Show-JuicerGuiGallery `$games
     `$script:Gui.C.GameSearch.Text = 'dos'
     `$found = @(`$script:Gui.Sections | ForEach-Object { `$_.Tiles } | Where-Object { `$_.Button.Visibility -eq 'Visible' }).Count
+    # Nothing found says so; Esc in the box clears it and everything is back.
+    `$script:Gui.C.GameSearch.Text = 'no existe [x'
+    `$none = `$script:Gui.C.GameSearchNone.Visibility -eq 'Visible'
+    `$cleared = (Invoke-JuicerGuiKey 'Escape' `$false `$script:Gui.C.GameSearch) -and -not `$script:Gui.C.GameSearch.Text -and `$script:Gui.C.GameSearchNone.Visibility -ne 'Visible'
     `$script:Gui.C.GameSearch.Text = ''
     `$page = @{
         Game = `$games[0]; Engine = 'nvidia'; Priority = 'Latencia'; Manual = 0; Auto = @{ Fps = 171; Why = 'x'; Calibrated = `$false }; Competitive = `$true; TwoGpus = `$false
@@ -297,6 +308,24 @@ Import-Module '$psm' -Force
     `$script:Gui.C.TweakLevel.SelectedIndex = 3
     `$extreme = @(`$script:Gui.Checks.Keys | Where-Object { `$script:Gui.Checks[`$_].Visibility -eq 'Visible' } | ForEach-Object { (Find-JuicerTweak `$_).Level } | Select-Object -Unique)
     `$script:Gui.C.TweakLevel.SelectedIndex = 0
+    # A button off for what the window shows stays off when a task ends.
+    Set-JuicerGuiButton 'BtnPacerForget' `$false
+    Set-JuicerGuiBusy `$true
+    Set-JuicerGuiBusy `$false
+    `$offStays = -not `$script:Gui.C.BtnPacerForget.IsEnabled -and `$script:Gui.C.BtnApply.IsEnabled
+    # A late page of a game no longer on screen does not paint over the gallery.
+    `$c2 = `$script:Gui.C
+    `$c2.GamePage.Visibility = 'Collapsed'; `$c2.GalleryPage.Visibility = 'Visible'; `$script:Gui.Game = `$null
+    `$c2.GameTitle.Text = 'antes'
+    Show-JuicerGuiGamePage `$page
+    `$stale = (`$c2.GameTitle.Text -eq 'antes') -and (`$c2.GalleryPage.Visibility -eq 'Visible')
+    # Keys: Esc from a game's page, Ctrl+F in the gallery. The gallery was
+    # drawn by hand: going to its tab must not start looking for games.
+    `$script:Gui.GamesLoaded = `$true
+    `$c2.Tabs.SelectedItem = `$c2.TabJuegos
+    `$c2.GalleryPage.Visibility = 'Collapsed'; `$c2.GamePage.Visibility = 'Visible'; `$script:Gui.Game = `$games[0]
+    `$esc = (Invoke-JuicerGuiKey 'Escape' `$false) -and `$c2.GalleryPage.Visibility -eq 'Visible'
+    `$find = Invoke-JuicerGuiKey 'F' `$true
     Select-JuicerGuiTweaks 'Ninguno'
     Set-JuicerGuiCategoryChecks 'Interfaz' `$true
     `$picked = @(Get-JuicerGuiCheckedTweaks).Count
@@ -307,6 +336,8 @@ Import-Module '$psm' -Force
         Tips = `$script:Gui.C.GameTipsPanel.Children.Count; Hidden = `$hidden; Back = (`$script:Gui.C.GalleryPage.Visibility -eq 'Visible'); Home = [string]`$script:Gui.C.HomeHw.Text
         PageErrors = `$pageErrors; RealStatus = `$realStatus; Pending = [bool]`$script:Gui.Task
         Detail = `$detail; Searched = `$searched; Extreme = `$extreme; Picked = `$picked; CountText = `$countText
+        OffStays = `$offStays; Stale = `$stale; Esc = `$esc; Find = `$find; None = `$none; Cleared = `$cleared
+        UndoNote = [string]`$script:Gui.C.HomeUndoNote.Text; Journal = (Read-JuicerJournal).Count
         Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
@@ -351,7 +382,15 @@ Import-Module '$psm' -Force
             $r.Searched | Should -BeLessThan 5
             @($r.Extreme) | Should -Be @(3)
             $r.Picked | Should -BeGreaterThan 0
-            $r.CountText | Should -BeLike "$($r.Picked) seleccionados*"
+            $r.CountText | Should -BeLike "$($r.Picked) seleccionado*"
+            $r.OffStays | Should -BeTrue
+            $r.Stale | Should -BeTrue
+            $r.Esc | Should -BeTrue
+            $r.Find | Should -BeTrue
+            $r.None | Should -BeTrue
+            $r.Cleared | Should -BeTrue
+            # Empezar counts the changes the journal holds, not the journal itself.
+            if ($r.Journal -eq 0) { $r.UndoNote | Should -BeLike 'Todavía no*' } else { $r.UndoNote | Should -BeLike "*ha hecho $($r.Journal) cambio*" }
         } finally {
             $ps.Dispose()
             $rs.Dispose()
