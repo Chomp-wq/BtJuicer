@@ -587,13 +587,42 @@ namespace WinJuicer {
     }
 }
 
-# Any other DWORD of a program's NVIDIA profile: @{ Value } with null when
-# the user has none.
+# Any other DWORD of a program's NVIDIA profile: @{ Value; Predefined },
+# the user's value and the one NVIDIA ships for that game, null for none.
 function Read-WinNvSetting {
     param([string]$Exe, [uint32]$Id)
     if (-not (Test-WinNvApi)) { return $null }
-    $v = [WinJuicer.NvDrs]::GetDword($Exe, $Id)
-    @{ Value = $(if ($v -ge 0) { [uint32]$v } else { $null }) }
+    $v = [WinJuicer.NvDrs]::GetInfo($Exe, $Id)
+    @{ Value = $(if ($v[0] -ge 0) { [uint32]$v[0] } else { $null }); Predefined = $(if ($v[1] -ge 0) { [uint32]$v[1] } else { $null }) }
+}
+
+# Whether a program with this .exe name is running now. A game's profile is
+# never written while it runs: the driver hands a running game the new
+# values, and changing its sync or its queue under it can freeze it.
+function Test-WinProcessRunning {
+    param([string]$Exe)
+    $name = [IO.Path]::GetFileNameWithoutExtension(([string]$Exe).Trim().Trim('"'))
+    if (-not $name) { return $false }
+    $null -ne (Get-Process -Name ([WildcardPattern]::Escape($name)) -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
+# Programs that closed with an error or stopped responding since a date,
+# from the Application log: «Application Error» 1000 (it crashed) and
+# «Application Hang» 1002 (it hung and was closed). @{ Exe; Kind; Time;
+# Module } each; null when the log cannot be read.
+function Read-WinAppIncidents {
+    param([datetime]$Since)
+    $out = @()
+    foreach ($f in @(@{ Provider = 'Application Error'; Id = 1000; Kind = 'Cierre' }, @{ Provider = 'Application Hang'; Id = 1002; Kind = 'Cuelgue' })) {
+        $ev = Get-JuicerEvents @{ LogName = 'Application'; ProviderName = $f.Provider; Id = $f.Id; StartTime = $Since }
+        if ($null -eq $ev) { return $null }
+        foreach ($e in $ev) {
+            $p = @($e.Properties | ForEach-Object { $_.Value })
+            if ($p.Count -eq 0 -or -not $p[0]) { continue }
+            $out += @{ Exe = ([string]$p[0]).ToLowerInvariant(); Kind = $f.Kind; Time = $e.TimeCreated.ToString('s'); Module = $(if ($f.Id -eq 1000 -and $p.Count -gt 3) { [string]$p[3] } else { '' }) }
+        }
+    }
+    , $out
 }
 
 function Set-WinNvSetting {
@@ -639,6 +668,8 @@ function New-JuicerWindowsBackend {
         FpsWrite     = ${function:Set-WinFpsLimit}
         NvRead       = ${function:Read-WinNvSetting}
         NvWrite      = ${function:Set-WinNvSetting}
+        ProcRunning  = ${function:Test-WinProcessRunning}
+        AppIncidents = ${function:Read-WinAppIncidents}
         PacerState   = ${function:Get-WinPacerState}
     }
 }
@@ -667,6 +698,9 @@ function New-JuicerMemoryBackend {
         FpsBackend = ''   # 'nvidia', 'rtss' or '' for none
         FpsLimits = @{}   # exe -> fps; an entry with 0 is a profile without a limit
         NvSettings = @{}  # 'exe|id' -> value, the user values of NVIDIA profiles
+        NvPredefined = @{}  # 'exe|id' -> value NVIDIA ships for that game
+        Running  = New-Object System.Collections.ArrayList   # .exe names open now
+        Incidents = New-Object System.Collections.ArrayList  # @{ Exe; Kind; Time; Module }
         FpsExact = @{}    # exe -> fractional cap (RTSS)
         FpsEngines = $null  # engines the PC has; null = just FpsBackend
         Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
@@ -772,7 +806,10 @@ function New-JuicerMemoryBackend {
             param($Exe, $Id)
             if (@(& (Get-JuicerBackend).FpsEngines) -notcontains 'nvidia') { return $null }
             $k = '{0}|{1}' -f $Exe, [uint32]$Id
-            @{ Value = $(if ($script:Mem.NvSettings.ContainsKey($k)) { [uint32]$script:Mem.NvSettings[$k] } else { $null }) }
+            @{
+                Value = $(if ($script:Mem.NvSettings.ContainsKey($k)) { [uint32]$script:Mem.NvSettings[$k] } else { $null })
+                Predefined = $(if ($script:Mem.NvPredefined.ContainsKey($k)) { [uint32]$script:Mem.NvPredefined[$k] } else { $null })
+            }
         }
         NvWrite     = {
             param($Exe, $Id, $Value)
@@ -780,6 +817,8 @@ function New-JuicerMemoryBackend {
             if ($null -eq $Value) { $script:Mem.NvSettings.Remove($k) } else { $script:Mem.NvSettings[$k] = [uint32]$Value }
         }
         PacerState  = { $script:Mem.Pacer }
+        ProcRunning = { param($Exe) $script:Mem.Running -contains (ConvertTo-JuicerExeName $Exe) }
+        AppIncidents = { param($Since) , @($script:Mem.Incidents | Where-Object { [datetime]$_.Time -ge $Since }) }
     }
 }
 

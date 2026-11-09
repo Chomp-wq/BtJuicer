@@ -71,7 +71,8 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
                 $i++
                 $png = Join-Path $art "$i.png"
                 & $paint $s[0] $png $s[4]
-                $games += @{ Id = ('{0}:{1}' -f $s[1], $i).ToLowerInvariant(); Name = $s[0]; Launcher = $s[1]; Dir = 'C:\Juegos'; Exe = "C:\Juegos\$($s[2])"; ExeName = $s[2]; Fps = $(if ($s[3]) { $s[3] } else { $null }); New = ($i -eq 4); Cover = @{ Path = $png; Kind = 'cover' } }
+                # One protected after it failed, one with a change waiting for it to close.
+                $games += @{ Id = ('{0}:{1}' -f $s[1], $i).ToLowerInvariant(); Name = $s[0]; Launcher = $s[1]; Dir = 'C:\Juegos'; Exe = "C:\Juegos\$($s[2])"; ExeName = $s[2]; Fps = $(if ($s[3]) { $s[3] } else { $null }); New = ($i -eq 4); Safe = ($i -eq 2); Waiting = ($i -eq 6); Cover = @{ Path = $png; Kind = 'cover' } }
             }
             $icon = Join-Path $art 'icono.png'
             [void](Save-JuicerExeIcon (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') $icon)
@@ -79,6 +80,7 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             $games += @{ Id = 'medido:otro.exe'; Name = 'otro'; Launcher = 'Medido o limitado'; Dir = ''; Exe = 'otro.exe'; ExeName = 'otro.exe' }
             $script:Gui.GamesLoaded = $true
             Show-JuicerGuiGallery $games
+            Show-JuicerGuiSafety @{ Protected = @(@{ Exe = 'cyberpunk2077.exe'; Name = 'Cyberpunk 2077'; Kind = 'Cierre'; Time = (Get-Date).AddHours(-3).ToString('s'); Module = 'nvwgf2umx.dll' }); Warned = @() }
             Show-JuicerGuiHome
 
             $shot = {
@@ -107,7 +109,7 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             $c.PacerOptions.Visibility = 'Collapsed'
             $page = @{
                 Game = $games[0]; Engine = 'nvidia'; Priority = 'Latencia'; Manual = 0; Auto = @{ Fps = 171; Why = 'Pantalla de 180 Hz con frecuencia variable.'; Calibrated = $true }
-                Competitive = $true; TwoGpus = $false
+                Competitive = $true; TwoGpus = $false; Running = $true
                 Last = @{ Date = (Get-Date).ToString('s'); AvgFps = 170.2; Low1 = 151; Steady = 96; JitterMs = 0.21; InputLatency = 12.3 }
                 Chart = @{ Series = [double[]](@(5.85) * 50 + @(9.5) + @(5.85) * 40 + @(7.1) + @(5.85) * 60); TargetMs = 5.85; MaxMs = 9.5 }
                 Tips = @(Get-JuicerGameTips -ExeName 'cs2.exe' -GpuVendor 'NVIDIA' -Use 'VRR' -Hz 180); Cover = $games[0].Cover

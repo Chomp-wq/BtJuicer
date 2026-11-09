@@ -59,15 +59,22 @@ function Invoke-JuicerUpkeep {
     $sig = Get-JuicerLimitSignature $monitor
     $plan = Get-JuicerUpkeepPlan $games $state.Seen $sig $state.Signature (@(Get-JuicerFpsLimits).Count -gt 0)
     $results = @()
+    # What waited for a game to close, and what an older recipe left behind.
+    $results += @(Invoke-JuicerPacerPending $monitor)
+    $results += @(Repair-JuicerGameSetups)
     if ($plan.Recalc) { $results += @(Update-JuicerFpsLimits $monitor) }
     if ($plan.New.Count -gt 0 -and (Get-JuicerFpsBackend)) { $results += @(Invoke-JuicerGameSetup $plan.New 'Recomendado' -Monitor $monitor) }
     $state.Seen = @($games | ForEach-Object { $_.Id })
     if ($sig) { $state.Signature = $sig }
     Save-JuicerUpkeepState $state
+    # A game that started failing after it was optimized gets its changes taken away.
+    $safety = Update-JuicerGameSafety $games
     $ok = @($results | Where-Object { $_.Outcome -eq 'Aplicado' })
     $msg = @()
-    if ($plan.New.Count -gt 0) { $msg += 'Juegos nuevos optimizados: ' + (($plan.New | ForEach-Object { $_.Name }) -join ', ') + '.' }
+    $done = @($plan.New | Where-Object { -not (Get-JuicerGameSafe $_.ExeName) })
+    if ($done.Count -gt 0) { $msg += 'Juegos nuevos optimizados: ' + (($done | ForEach-Object { $_.Name }) -join ', ') + '.' }
     if ($plan.Recalc) { $msg += 'Ha cambiado tu monitor o cómo lo usas: frame pacer recalculado.' }
+    foreach ($p in @($safety.Protected)) { $msg += "$($p.Name) falló después de optimizarlo: Win Juicer le ha quitado sus cambios por si eran la causa." }
     Write-JuicerLog ('Mantener: {0} nuevos, recalcular {1}, {2} cambios' -f $plan.New.Count, $plan.Recalc, $ok.Count)
     if ($msg.Count -gt 0 -and -not $Quiet) { Show-JuicerToast ($msg -join ' ') }
     $results

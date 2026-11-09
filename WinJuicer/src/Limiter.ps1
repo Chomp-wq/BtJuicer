@@ -12,7 +12,17 @@
 # which Reflex overrides in games that have it, and those games pace the cap
 # through Reflex itself) and, with variable refresh, VSync forced on, which
 # under a cap below the refresh never engages except to hide a tear on a
-# spike. «Ultra» has no public setting id, so it is left to the user.
+# spike. «Ultra» has no public setting id, so it is left to the user. The
+# driver's «prefer maximum performance» is not part of it any more: it held
+# the card at its top clocks through menus and loading screens, which is
+# where a borderline overclock or undervolt, or a laptop's cooling, gives
+# way, and the cap already keeps frame times even. Whatever NVIDIA set in a
+# game's own profile stays as it is: it is there because that game needs it.
+#
+# Never under a running game: the driver hands an open game the new values
+# at once, and switching its sync or its frame queue under it can freeze it.
+# A change for a game that is open waits for it to close
+# (Add-JuicerPacerPending).
 #
 # What Win Juicer adds is the number, from how the monitor is used (see
 # Resolve-JuicerMonitorUse):
@@ -41,19 +51,26 @@ function Get-JuicerFpsBackend { [string](& (Get-JuicerBackend).FpsBackend) }
 
 # --- What the frame pacer remembers ------------------------------------------
 # Engine: Auto, nvidia or rtss. Calibrated: exe -> @{ Fps; Why; Signature; Date }.
-# Games: exe -> @{ Priority = Fluidez | Latencia; Fps = a rate chosen by hand }.
+# Games: exe -> @{ Priority = Fluidez | Latencia; Fps = a rate chosen by hand;
+# Minimal = prudent mode, the cap alone; Safe = why Win Juicer took its
+# changes away (see Update-JuicerGameSafety) }.
+# Pending: exe -> what waits for that game to close (Add-JuicerPacerPending).
+# Recipe: the version of the game recipe already brought up to date
+# (Repair-JuicerGameSetups).
 
 function Get-JuicerPacerPath { Join-Path (Get-JuicerHome) 'frame-pacer.json' }
 
 function Read-JuicerPacer {
     $p = Get-JuicerPacerPath
-    $s = @{ Engine = 'Auto'; Calibrated = @{}; Games = @{} }
+    $s = @{ Engine = 'Auto'; Calibrated = @{}; Games = @{}; Pending = @{}; Recipe = 0 }
     if (Test-Path -LiteralPath $p) {
         try {
             $d = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($p) | ConvertFrom-Json)
             if ($d.Engine -in 'Auto', 'nvidia', 'rtss') { $s.Engine = [string]$d.Engine }
             if ($d.Calibrated -is [hashtable]) { $s.Calibrated = $d.Calibrated }
             if ($d.Games -is [hashtable]) { $s.Games = $d.Games }
+            if ($d.Pending -is [hashtable]) { $s.Pending = $d.Pending }
+            if ($d.Recipe) { $s.Recipe = [int]$d.Recipe }
         } catch {
             Write-JuicerLog "frame-pacer.json dañado, se ignora: $_"
         }
@@ -139,9 +156,13 @@ function Set-JuicerPacerEngine {
     & (Get-JuicerBackend).FpsReset
     if ((Get-JuicerFpsBackend) -eq $before) { return @() }
     $games = @(Get-JuicerFpsLimits)
-    foreach ($g in $games) { [void](Undo-JuicerTweak $g.Id) }
     if (-not $Monitor) { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" } }
-    foreach ($g in $games) { Add-JuicerFpsLimit $g.Exe 0 $Monitor }
+    foreach ($g in $games) {
+        # An open game moves when it closes.
+        if (Test-JuicerGameRunning $g.Exe) { Add-JuicerPacerPending $g.Exe 'Set' -Reset; continue }
+        [void](Undo-JuicerTweak $g.Id)
+        Add-JuicerFpsLimit $g.Exe 0 $Monitor
+    }
 }
 
 # --- RTSS profiles -------------------------------------------------------------
@@ -270,35 +291,32 @@ function ConvertTo-JuicerExeName {
 # VSync forces vertical sync in the game's NVIDIA profile; Use (from
 # Resolve-JuicerMonitorUse) only words it.
 function New-JuicerFpsLimitTweak {
-    param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][int]$Fps, [string]$Why = '', [switch]$VSync, [string]$Use = 'Fijo', [double]$Exact = 0, [switch]$NoVSync)
+    param([Parameter(Mandatory)][string]$Exe, [Parameter(Mandatory)][int]$Fps, [string]$Why = '', [switch]$VSync, [string]$Use = 'Fijo', [double]$Exact = 0, [switch]$NoVSync, [switch]$Minimal)
     $exe = ConvertTo-JuicerExeName $Exe
     # The NVIDIA parts do nothing (and count as done) without an NVIDIA driver.
     # Exact only reaches RivaTuner; the driver keeps Fps.
     $limit = @{ Type = 'FpsLimit'; Exe = $exe; Fps = $Fps }
     if ($Exact -gt 0) { $limit.Exact = $Exact }
-    $actions = @(
-        $limit
-        @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x007BA09E; Value = [uint32]1; Label = 'Fotogramas pre-renderizados: 1 (modo de baja latencia activado)' }
-        # With a cap the card is not at 100 %, and the driver may drop its
-        # clocks in light scenes: the next heavy frame then arrives late.
-        # Only for this game, so the desktop still idles low (PREFERRED_PSTATE_PREFER_MAX).
-        @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x1057EB71; Value = [uint32]1; Label = 'Modo de energía: preferir rendimiento máximo (sin bajadas de frecuencia que den picos de frametime)' }
-    )
-    # Always one of the three, so that changing the mode or the priority
-    # never leaves behind the VSync of the previous one (VSYNCMODE_*).
-    if ($NoVSync) {
-        $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x08416747; Label = 'Sincronización vertical: desactivada (el ritmo pasa de los Hz: sin la espera ni la cola de VSync)' }
-    } elseif ($VSync) {
-        $label = if ($Use -eq 'Estrobo') { 'Sincronización vertical: forzada (un fotograma por destello del estroboscopio)' } else { 'Sincronización vertical: forzada (con G-SYNC y el límite por debajo de los Hz)' }
-        $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x47814940; Label = $label }
-    } else {
-        $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x60925292; Label = 'Sincronización vertical: la que diga el juego' }
+    $actions = @($limit)
+    # Prudent mode: the cap alone, with VSync and the frame queue as the game leaves them.
+    if (-not $Minimal) {
+        $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x007BA09E; Value = [uint32]1; Label = 'Fotogramas pre-renderizados: 1 (modo de baja latencia activado)' }
+        # Always one of the three, so that changing the mode or the priority
+        # never leaves behind the VSync of the previous one (VSYNCMODE_*).
+        if ($NoVSync) {
+            $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x08416747; Label = 'Sincronización vertical: desactivada (el ritmo pasa de los Hz: sin la espera ni la cola de VSync)' }
+        } elseif ($VSync) {
+            $label = if ($Use -eq 'Estrobo') { 'Sincronización vertical: forzada (un fotograma por destello del estroboscopio)' } else { 'Sincronización vertical: forzada (con G-SYNC y el límite por debajo de los Hz)' }
+            $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x47814940; Label = $label }
+        } else {
+            $actions += @{ Type = 'NvSetting'; Exe = $exe; Id = [uint32]0x00A879CF; Value = [uint32]0x60925292; Label = 'Sincronización vertical: la que diga el juego' }
+        }
     }
-    $sync = if ($NoVSync) { ' y sin sincronización vertical, que con un ritmo por encima de los Hz sólo añadiría espera.' } elseif (-not $VSync) { '.' } elseif ($Use -eq 'Estrobo') { ' y con la sincronización vertical que el estroboscopio necesita.' } else { ' y con la sincronización vertical que G-SYNC necesita.' }
+    $sync = if ($Minimal) { '. Modo prudente: sólo el límite; la sincronización vertical y la cola de fotogramas, como las deje el juego.' } elseif ($NoVSync) { ' y sin sincronización vertical, que con un ritmo por encima de los Hz sólo añadiría espera.' } elseif (-not $VSync) { '.' } elseif ($Use -eq 'Estrobo') { ' y con la sincronización vertical que el estroboscopio necesita.' } else { ' y con la sincronización vertical que G-SYNC necesita.' }
     @{
         Id = "fps:$exe"; Category = 'Juegos'; Level = 1; Impact = 'Medio'; Reboot = 'No'
         Title = 'Frame pacer a {0} FPS ({1:N2} ms): {2}' -f $Fps, (1000 / [Math]::Max(1, $Fps)), $exe
-        What = "Marca a $exe un ritmo de $Fps FPS cada vez que se abra, desde el driver de NVIDIA o RivaTuner, sin inyectar nada en el juego. Con NVIDIA, además, sin cola de fotogramas$sync"
+        What = "Marca a $exe un ritmo de $Fps FPS cada vez que se abra: con el driver de NVIDIA, sin inyectar nada en el juego; con RivaTuner, a través de su enganche, el mismo de su contador de FPS. Nunca con el juego abierto$(if (-not $Minimal) { '. Con NVIDIA, además, sin cola de fotogramas' })$sync"
         Gain = $(if ($Why) { $Why } else { 'Frametimes constantes y menos latencia que dejar que la gráfica vaya al máximo.' })
         Cost = 'Si el juego podría ir más rápido, ese margen no se usa (se nota menos que los tirones que quita). Si el juego tiene NVIDIA Reflex, actívalo en sus opciones: el límite se aplica entonces a través de Reflex.'
         Skip = { if (-not (Get-JuicerFpsBackend)) { 'El frame pacer necesita una gráfica NVIDIA o RivaTuner Statistics Server, que es gratis y Win Juicer instala.' } }
@@ -347,9 +365,13 @@ function Get-JuicerRecommendedFps {
     $cap
 }
 
-# Use overrides how the monitor is used, for when it cannot be read.
+# Use overrides how the monitor is used, for when it cannot be read. A game
+# that is open gets it when it closes: the result says so (Pendiente).
 function Add-JuicerFpsLimit {
     param([Parameter(Mandatory)][string]$Exe, [int]$Fps, [hashtable]$Monitor, [string]$Use)
+    $exeName = ConvertTo-JuicerExeName $Exe
+    if (Test-JuicerGameRunning $exeName) { return (Add-JuicerPacerPending $exeName 'Set' $Fps $Use) }
+    Clear-JuicerPacerPending $exeName
     if (-not $Monitor) { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" } }
     $use = if ($Use -and $Use -ne 'Automatico') { $Use } else { Resolve-JuicerMonitorUse $Monitor }
     $why = ''
@@ -359,11 +381,107 @@ function Add-JuicerFpsLimit {
         if (-not $cap) { throw 'No se pudo leer la pantalla para calcular el ritmo: indícalo a mano.' }
         $Fps = $cap.Fps; $why = $cap.Why; $exact = [double]$cap.Exact
     }
+    $b = Get-JuicerBackend
+    # NVIDIA caps a few games in their own profile because they break above
+    # it (physics, timers): the frame pacer never goes higher than that.
+    $frl = & $b.NvRead $exeName ([uint32]0x10835002)
+    if ($frl -and $null -ne $frl.Predefined -and [int]$frl.Predefined -gt 0 -and [int]$frl.Predefined -lt $Fps) {
+        $Fps = [int]$frl.Predefined
+        $exact = 0
+        $why = ("NVIDIA limita este juego a $Fps FPS en su propio perfil porque por encima no funciona bien: el frame pacer no pasa de ahí. " + $why).Trim()
+    }
     # Above the refresh, forcing VSync would hold every frame for the next
     # refresh: what the pace saved, the wait gives back, with a queue.
     $hz = if ($Monitor -and $Monitor.Display) { [int]$Monitor.Display.Hz } else { 0 }
     $over = $hz -gt 0 -and $Fps -gt $hz
-    Invoke-JuicerTweak (New-JuicerFpsLimitTweak $Exe $Fps $why -VSync:(-not $over -and $use -in 'VRR', 'EstroboSync', 'Estrobo') -NoVSync:$over -Use $use -Exact $(if ($over) { 0 } else { $exact }))
+    $t = New-JuicerFpsLimitTweak $Exe $Fps $why -VSync:(-not $over -and $use -in 'VRR', 'EstroboSync', 'Estrobo') -NoVSync:$over -Use $use -Exact $(if ($over) { 0 } else { $exact }) -Minimal:(Test-JuicerPacerMinimal $exeName)
+    # What NVIDIA set in this game's own profile stays: it is there so that
+    # the game runs right, and overriding it is how a game breaks.
+    $t.Actions = @($t.Actions | Where-Object {
+            if ($_.Type -ne 'NvSetting') { return $true }
+            $info = & $b.NvRead $_.Exe $_.Id
+            -not ($info -and $null -ne $info.Predefined)
+        })
+    # What an earlier recipe set and this one no longer does goes back first.
+    [void](Remove-JuicerStaleCaptures $t)
+    Invoke-JuicerTweak $t
+}
+
+# Takes a game's frame pacer away; if the game is open, when it closes.
+function Remove-JuicerFpsLimit {
+    param([Parameter(Mandatory)][string]$Exe)
+    $exe = ConvertTo-JuicerExeName $Exe
+    $has = $null -ne (Get-JuicerJournalEntry (Read-JuicerJournal) "fps:$exe")
+    if ($has -and (Test-JuicerGameRunning $exe)) { return (Add-JuicerPacerPending $exe 'Remove') }
+    Clear-JuicerPacerPending $exe
+    if ($has) { Undo-JuicerTweak "fps:$exe" }
+}
+
+# Prudent mode for one game: the cap alone, with VSync and the frame queue
+# as the game leaves them. For a game that misbehaved with the whole recipe,
+# and what a game gets after Win Juicer took its changes away.
+function Test-JuicerPacerMinimal {
+    param([string]$Exe)
+    $g = (Read-JuicerPacer).Games[(ConvertTo-JuicerExeName $Exe)]
+    [bool]($g -is [hashtable] -and $g.Minimal)
+}
+
+function Set-JuicerPacerMinimal {
+    param([Parameter(Mandatory)][string]$Exe, [bool]$On, [hashtable]$Monitor)
+    $exe = ConvertTo-JuicerExeName $Exe
+    $state = Read-JuicerPacer
+    Set-JuicerPacerGameField $state $exe 'Minimal' $(if ($On) { $true } else { $null })
+    Save-JuicerPacer $state
+    if (@(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe }).Count -gt 0) { Add-JuicerFpsLimit $exe 0 $Monitor }
+}
+
+# --- While a game is open ------------------------------------------------------
+# Its frame pacer waits for it to close. Pending, exe -> @{ Op = Set | Remove;
+# Fps (0: the recommended one); Use; Reset (undo first: a change of engine);
+# Since }. The window applies it as soon as the game closes; failing that,
+# the next time Win Juicer opens or the sign-in upkeep runs.
+
+function Add-JuicerPacerPending {
+    param([Parameter(Mandatory)][string]$Exe, [ValidateSet('Set', 'Remove')][string]$Op, [int]$Fps = 0, [string]$Use = '', [switch]$Reset)
+    $exe = ConvertTo-JuicerExeName $Exe
+    $state = Read-JuicerPacer
+    $old = $state.Pending[$exe]
+    $state.Pending[$exe] = @{ Op = $Op; Fps = $Fps; Use = $Use; Reset = ([bool]$Reset -or ($old -is [hashtable] -and [bool]$old.Reset)); Since = (Get-Date).ToString('s') }
+    Save-JuicerPacer $state
+    Write-JuicerLog "Frame pacer de $exe en espera ($Op): el juego está abierto."
+    $what = if ($Op -eq 'Remove') { 'se quitará' } else { 'se aplicará' }
+    New-JuicerResult @{ Id = "fps:$exe"; Title = "Frame pacer: $exe"; Reboot = 'No' } 'Pendiente' "$exe está abierto: el cambio $what en cuanto lo cierres. Win Juicer no toca un juego en marcha, para que no se congele."
+}
+
+function Clear-JuicerPacerPending {
+    param([string]$Exe)
+    $state = Read-JuicerPacer
+    if ($state.Pending.ContainsKey($Exe)) { $state.Pending.Remove($Exe); Save-JuicerPacer $state }
+}
+
+function Get-JuicerPacerPending { @((Read-JuicerPacer).Pending.Keys) }
+
+# What waited for its game, for the games that are closed now.
+function Invoke-JuicerPacerPending {
+    param([hashtable]$Monitor)
+    $out = @()
+    foreach ($exe in @((Read-JuicerPacer).Pending.Keys)) {
+        if (Test-JuicerGameRunning $exe) { continue }
+        $state = Read-JuicerPacer
+        $p = $state.Pending[$exe]
+        # Off the list first: if the game opens again meanwhile, it goes back on.
+        $state.Pending.Remove($exe)
+        Save-JuicerPacer $state
+        try {
+            if ($p.Op -eq 'Remove' -or $p.Reset) {
+                if (Get-JuicerJournalEntry (Read-JuicerJournal) "fps:$exe") { $out += Undo-JuicerTweak "fps:$exe" }
+            }
+            if ($p.Op -eq 'Set') { $out += Add-JuicerFpsLimit $exe ([int]$p.Fps) $Monitor ([string]$p.Use) }
+        } catch {
+            $out += New-JuicerResult @{ Id = "fps:$exe"; Title = "Frame pacer: $exe"; Reboot = 'No' } 'Error' "$_"
+        }
+    }
+    $out
 }
 
 # Every game already limited, again with today's recommended cap: after
@@ -539,10 +657,14 @@ function Invoke-JuicerPacerCalibration {
     $exe = ConvertTo-JuicerExeName $Exe
     if (-not $Monitor) { $Monitor = Get-JuicerPrimaryMonitor }
     if (-not $Monitor) { throw 'No se pudo leer la pantalla.' }
+    # A game without its pace gets it now if it is closed; if it is open (the
+    # usual way to calibrate), it is measured as it is, and the pace waits for
+    # it to close: its profile is not written under it.
     if (-not @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe -and $_.Fps })) { [void](Add-JuicerFpsLimit $exe 0 $Monitor) }
-    $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe })
-    if ($now.Count -eq 0 -or -not $now[0].Fps) { throw "No se pudo poner el frame pacer a $exe." }
-    $cap = [int]$now[0].Fps
+    $now = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe -and $_.Fps })
+    $unpaced = $now.Count -eq 0
+    $cap = if (-not $unpaced) { [int]$now[0].Fps } else { $rec = Get-JuicerRecommendedFps $exe $Monitor; if ($rec) { [int]$rec.Fps } else { 0 } }
+    if ($cap -le 0) { throw "No se pudo calcular el ritmo de $exe." }
     $started = Get-Date
     $out = @(Invoke-JuicerFrameCapture -Seconds $Seconds -Delay $Delay -Process $exe -OnStatus $OnStatus)
     $result = Get-JuicerPreviousFrameResult $exe
@@ -552,6 +674,11 @@ function Invoke-JuicerPacerCalibration {
     $max = (Get-JuicerFpsCap ([int]$Monitor.Display.Hz) $use $null $vrrMin).Fps
     $c = Get-JuicerPacerCalibration $result $cap $max $use $vrrMin @($Monitor.Display.RefreshRates | Where-Object { $_ }) ([int]$Monitor.Display.Hz) (Get-JuicerPacerPriority $exe)
     $area = "Frame pacer: $exe"
+    if ($unpaced -and $c.Action -eq 'NoActua') {
+        Write-JuicerLog "Calibración de ${exe}: medido sin ritmo (el juego estaba abierto)"
+        $out += New-JuicerFinding $area 'Medio' 'Medido sin frame pacer todavía' "El juego estaba abierto antes de tener su ritmo, y Win Juicer no cambia el perfil de un juego en marcha. Se le pondrá ($cap FPS) en cuanto lo cierres; después, vuelve a calibrar con el ritmo ya puesto."
+        return $out
+    }
     if ($c.Action -in 'Bajar', 'Subir') {
         $state = Read-JuicerPacer
         $state.Calibrated[$exe] = @{ Fps = $c.Fps; Why = $c.Why; Signature = (Get-JuicerLimitSignature $Monitor); Date = (Get-Date).ToString('s') }
@@ -559,8 +686,9 @@ function Invoke-JuicerPacerCalibration {
         Set-JuicerPacerGameField $state $exe 'Fps' $null
         Save-JuicerPacer $state
         $r = Add-JuicerFpsLimit $exe 0 $Monitor
-        $sev = if ($r.Outcome -in 'Aplicado', 'YaEstaba') { 'Ok' } else { 'Medio' }
-        $out += New-JuicerFinding $area $sev ('Calibrado: de {0} a {1} FPS' -f $cap, $c.Fps) $c.Why
+        $sev = if ($r.Outcome -in 'Aplicado', 'YaEstaba', 'Pendiente') { 'Ok' } else { 'Medio' }
+        $when = if ($r.Outcome -eq 'Pendiente') { ' Se aplicará en cuanto cierres el juego: Win Juicer no lo cambia con el juego abierto, para que no se congele.' } else { '' }
+        $out += New-JuicerFinding $area $sev ('Calibrado: de {0} a {1} FPS' -f $cap, $c.Fps) "$($c.Why)$when"
     } else {
         $out += New-JuicerFinding $area $(if ($c.Action -eq 'Mantener') { 'Ok' } else { 'Medio' }) $(switch ($c.Action) { 'Mantener' { "Calibrado: se queda en $cap FPS" } 'Estrobo' { 'Con estrobo no se baja el ritmo' } default { 'Sin calibrar' } }) $c.Why
     }

@@ -420,7 +420,8 @@ Describe 'Juegos' {
             (Invoke-JuicerTweak $t).Outcome | Should -Be 'Aplicado'
         }
         @(Get-JuicerConfiguredGames).Count | Should -Be 3
-        (Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\juego.exe\PerfOptions' 'CpuPriorityClass').Value | Should -Be 3
+        # Above normal (6), not high (3): high can freeze the whole PC.
+        (Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\juego.exe\PerfOptions' 'CpuPriorityClass').Value | Should -Be 6
         [void](Undo-JuicerAll)
         Get-MachineSnapshot $m | Should -Be $before
     }

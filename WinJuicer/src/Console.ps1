@@ -187,8 +187,9 @@ function Show-JuicerResults {
     $marks = @{
         Aplicado = @('[ok]', 'Green'); Deshecho = @('[ok]', 'Green'); YaEstaba = @('[= ]', 'DarkGray'); Simulado = @('[..]', 'Cyan')
         NoAplica = @('[--]', 'DarkGray'); NadaQueDeshacer = @('[--]', 'DarkGray'); Error = @('[!!]', 'Red'); NoSeMantuvo = @('[~ ]', 'Yellow')
+        Pendiente = @('[>>]', 'Yellow')
     }
-    $notes = @{ YaEstaba = 'ya estaba así'; NoAplica = 'no aplica'; NadaQueDeshacer = 'nada que deshacer' }
+    $notes = @{ YaEstaba = 'ya estaba así'; NoAplica = 'no aplica'; NadaQueDeshacer = 'nada que deshacer'; Pendiente = 'al cerrar el juego' }
     foreach ($r in $Results) {
         $m = $marks[$r.Outcome]
         Write-Host "  $($m[0]) " -ForegroundColor $m[1] -NoNewline
@@ -570,7 +571,7 @@ function Show-JuicerGameList {
         Write-JuicerMenu @(
             @('O', 'Optimizar', 'límite de FPS recomendado y GPU dedicada si hay dos'),
             @('F', 'Sólo límite de FPS', 'el recomendado o el que digas'),
-            @('P', 'Prioridad alta', ''),
+            @('P', 'Prioridad por encima de lo normal', 'no «alta»: con alta, el equipo se puede congelar'),
             @('Q', 'Quitar lo de Win Juicer', 'límite, GPU y prioridad'),
             @('C', 'Consejos', 'qué poner dentro de cada juego para tu gráfica y tu monitor')
         )
@@ -584,13 +585,24 @@ function Show-JuicerGameList {
         if (-not $what) { continue }
         $fps = 0
         if ($what -eq 'Fps') { $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'; if ($f -match '^\d+$') { $fps = [int]$f } }
-        Show-JuicerResults @(Invoke-JuicerGameSetup $sel $what $fps)
+        # Games picked one by one are what the user asked for, even one Win
+        # Juicer protected after it failed; «t» (all of them) leaves those alone.
+        Show-JuicerResults @(Invoke-JuicerGameSetup $sel $what $fps -Force:($pick -notmatch '^[tT]'))
     }
 }
 
 function Show-JuicerLimiter {
+    # What waited for a game to close, what an older recipe left behind, and
+    # a game that started failing after it was optimized.
+    $fixes = @(@(Invoke-JuicerPacerPending) + @(Repair-JuicerGameSetups) | Where-Object { $_.Outcome -in 'Aplicado', 'Deshecho', 'Error' })
+    $safety = Update-JuicerGameSafety
     while ($true) {
         Write-JuicerHeader 'Frame pacer'
+        if ($fixes.Count -gt 0) { Show-JuicerResults $fixes; $fixes = @() }
+        foreach ($p in @($safety.Protected)) { Write-JuicerWrapped (Format-JuicerSafeNote (Get-JuicerGameSafe $p.Exe) $p.Name) 2 'Yellow'; Write-Host '' }
+        $safety = @{ Protected = @() }
+        $waiting = @(Get-JuicerPacerPending)
+        if ($waiting.Count -gt 0) { Write-JuicerWrapped "Esperando a que cierres $($waiting -join ', '): Win Juicer no toca el perfil de un juego abierto. Se aplicará la próxima vez que abras este menú con el juego cerrado." 2 'Yellow' }
         $m = $null
         try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
         $pacer = Read-JuicerPacer
