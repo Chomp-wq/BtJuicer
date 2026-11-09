@@ -76,6 +76,19 @@ jobs:
           path: capturas
           retention-days: 7
 
+      # También en el registro del trabajo, en base64, por si el artefacto no
+      # se puede descargar desde donde se revisan.
+      - name: Capturas en el registro
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem capturas -Filter *.png | Sort-Object Name | ForEach-Object {
+            "=== CAPTURA $($_.Name) ==="
+            $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+            for ($i = 0; $i -lt $b64.Length; $i += 4000) { $b64.Substring($i, [Math]::Min(4000, $b64.Length - $i)) }
+            '=== FIN ==='
+          }
+
   # Lo que descarga «irm …/winjuicer.ps1 | iex»: sólo desde main y con todo lo
   # anterior en verde. Tiene su propia release para no mezclarse con el APK.
   publicar:

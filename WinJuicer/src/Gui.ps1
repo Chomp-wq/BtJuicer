@@ -680,6 +680,14 @@ function Confirm-JuicerGui {
     (Show-JuicerGuiMessage $Text $Kind 'YesNo') -eq 'Yes'
 }
 
+# A button off because of what the window shows (nothing to recalculate,
+# nothing calibrated): the end of a task must not turn it back on.
+function Set-JuicerGuiButton {
+    param([string]$Name, [bool]$Enabled)
+    if ($Enabled) { $script:Gui.Off.Remove($Name) } else { $script:Gui.Off[$Name] = $true }
+    $script:Gui.C[$Name].IsEnabled = $Enabled -and -not $script:Gui.Busy
+}
+
 function Set-JuicerGuiStatus {
     param([string]$Text)
     $script:Gui.C.Status.Text = $Text
@@ -687,9 +695,10 @@ function Set-JuicerGuiStatus {
 
 function Set-JuicerGuiBusy {
     param([bool]$Busy, [string]$Text = '')
+    $script:Gui.Busy = $Busy
     $script:Gui.C.Busy.Visibility = $(if ($Busy) { 'Visible' } else { 'Collapsed' })
     foreach ($name in $script:Gui.C.Keys) {
-        if ($name -like 'Btn*') { $script:Gui.C[$name].IsEnabled = -not $Busy }
+        if ($name -like 'Btn*') { $script:Gui.C[$name].IsEnabled = -not $Busy -and -not $script:Gui.Off.ContainsKey($name) }
     }
     foreach ($p in 'PrefPanel', 'CompPanel', 'StartupPanel') { $script:Gui.C[$p].IsEnabled = -not $Busy }
     if ($Text) { Set-JuicerGuiStatus $Text }
@@ -1858,18 +1867,27 @@ function Format-JuicerGuiStore {
     if ($script:GameStoreNames.Contains($Launcher)) { $script:GameStoreNames[$Launcher] } else { $Launcher }
 }
 
+# Whether the page of this game is the one on screen. Work finishes after
+# the user may have gone back to the gallery, or opened another game.
+function Test-JuicerGuiGameShown {
+    param([string]$Id)
+    [bool]($script:Gui.C.GamePage.Visibility -eq 'Visible' -and $script:Gui.Game -and $script:Gui.Game.Id -eq $Id)
+}
+
 function Show-JuicerGuiGamePage {
     param([hashtable]$P)
     if (-not $P -or -not $P.Game) { return }
     $c = $script:Gui.C
     $g = $P.Game
-    $script:Gui.Game = $g
-    $script:Gui.Page = $P
     # The gallery shows the new state when going back to it.
     for ($i = 0; $i -lt @($script:Gui.Games).Count; $i++) {
         if ($script:Gui.Games[$i].Id -eq $g.Id) { $script:Gui.Games[$i] = $g; $script:Gui.GalleryDirty = $true }
     }
     if ($P.Cover) { $script:Gui.Covers[$g.Id] = $P.Cover }
+    # A page that is no longer on screen only updates the gallery.
+    if (-not (Test-JuicerGuiGameShown $g.Id)) { return }
+    $script:Gui.Game = $g
+    $script:Gui.Page = $P
     $c.GameTitle.Text = $g.Name
     $c.GameStatus.Text = '{0} · {1}' -f (Format-JuicerGuiStore $g.Launcher), (Format-JuicerGameStatus $g)
     $c.GameExe.Text = $g.Exe
@@ -1948,9 +1966,11 @@ function Start-JuicerGuiGameMeasure {
     Start-JuicerGuiTask "Vuelve a $($g.Name): empieza en 10 s…" $Work @{ Game = $g.Clone() } {
         param($r)
         Show-JuicerGuiGamePage $r.Page
-        $p = $script:Gui.C.GameMeasurePanel
-        $i = 0
-        foreach ($f in @($r.Findings)) { $p.Children.Insert($i, (New-JuicerFindingCard $f)); $i++ }
+        if (Test-JuicerGuiGameShown $r.Page.Game.Id) {
+            $p = $script:Gui.C.GameMeasurePanel
+            $i = 0
+            foreach ($f in @($r.Findings)) { $p.Children.Insert($i, (New-JuicerFindingCard $f)); $i++ }
+        }
         Show-JuicerGuiUndo
         Set-JuicerGuiStatus 'Terminado: el resultado está en la página del juego, en «Medir».'
     }
@@ -2044,8 +2064,8 @@ function Show-JuicerGuiLimiter {
     } finally {
         $script:Gui.SettingMode = $false
     }
-    $c.BtnLimitRecalc.IsEnabled = @($L.Limits).Count -gt 0
-    $c.BtnPacerForget.IsEnabled = @($L.Calibrated).Count -gt 0
+    Set-JuicerGuiButton 'BtnLimitRecalc' (@($L.Limits).Count -gt 0)
+    Set-JuicerGuiButton 'BtnPacerForget' (@($L.Calibrated).Count -gt 0)
 }
 
 function Start-JuicerGuiLimiter {
@@ -2176,7 +2196,7 @@ function Register-JuicerGuiHandlers {
             Show-JuicerGuiMessage 'RivaTuner se está instalando en su propia ventana. Cuando acabe, ábrelo una vez (se queda en la bandeja, junto al reloj) y vuelve a abrir esta página.' | Out-Null
         }
         BtnHomeOptimize       = { Invoke-JuicerGuiHomeOptimize }
-        BtnHomeGames          = { $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabJuegos }
+        BtnHomeGames          = { Close-JuicerGuiGame; $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabJuegos }
         BtnHomeAudit          = { $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabEquipo }
         BtnHomeUndo           = { & $script:Gui.Handlers['BtnUndoAll'] }
         BtnGamesAdd           = {
@@ -2431,13 +2451,15 @@ function Register-JuicerGuiHandlers {
 
 function Get-JuicerUiPrefsPath { Join-Path (Get-JuicerHome) 'interfaz.json' }
 
+# Advanced (the mode) and Window (Left, Top, Width, Height, Maximized).
 function Read-JuicerUiPrefs {
     $p = Get-JuicerUiPrefsPath
-    $prefs = @{ Advanced = $false }
+    $prefs = @{ Advanced = $false; Window = $null }
     if (Test-Path -LiteralPath $p) {
         try {
             $d = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($p) | ConvertFrom-Json)
             $prefs.Advanced = [bool]$d.Advanced
+            if ($d.Window -is [hashtable]) { $prefs.Window = $d.Window }
         } catch {
             Write-JuicerLog "interfaz.json dañado, se ignora: $_"
         }
@@ -2445,9 +2467,84 @@ function Read-JuicerUiPrefs {
     $prefs
 }
 
+# Changes the preferences given, keeping the rest.
 function Save-JuicerUiPrefs {
     param([hashtable]$Prefs)
-    [IO.File]::WriteAllText((Get-JuicerUiPrefsPath), (ConvertTo-JuicerJson $Prefs), (New-Object Text.UTF8Encoding $false))
+    $all = Read-JuicerUiPrefs
+    foreach ($k in $Prefs.Keys) { $all[$k] = $Prefs[$k] }
+    [IO.File]::WriteAllText((Get-JuicerUiPrefsPath), (ConvertTo-JuicerJson $all), (New-Object Text.UTF8Encoding $false))
+}
+
+# Where the window opens: the size it had last time, never bigger than the
+# screen (a 1366x768 laptop at 125 % has 1093x614), and the place it had if
+# that place is still on a screen. Areas are @{ Left; Top; Width; Height }.
+function Get-JuicerWindowPlacement {
+    param([hashtable]$Saved, [hashtable]$WorkArea, [hashtable]$Screens, [double]$Width = 1220, [double]$Height = 800, [double]$MinWidth = 960, [double]$MinHeight = 620)
+    $w = $Width; $h = $Height
+    if ($Saved -and [double]$Saved.Width -ge 600 -and [double]$Saved.Height -ge 400) { $w = [double]$Saved.Width; $h = [double]$Saved.Height }
+    $w = [Math]::Min($w, $WorkArea.Width); $h = [Math]::Min($h, $WorkArea.Height)
+    $out = @{ Width = $w; Height = $h; MinWidth = [Math]::Min($MinWidth, $w); MinHeight = [Math]::Min($MinHeight, $h); Manual = $false; Left = 0; Top = 0; Maximized = [bool]($Saved -and $Saved.Maximized) }
+    if ($Saved -and $null -ne $Saved.Left -and $null -ne $Saved.Top -and $Screens) {
+        $l = [double]$Saved.Left; $t = [double]$Saved.Top
+        # At least its title bar on some screen, so it can always be dragged back.
+        $onScreen = $l + 120 -le $Screens.Left + $Screens.Width -and $l + $w - 120 -ge $Screens.Left -and $t -ge $Screens.Top - 4 -and $t + 40 -le $Screens.Top + $Screens.Height
+        if ($onScreen) { $out.Manual = $true; $out.Left = $l; $out.Top = $t }
+    }
+    $out
+}
+
+function Set-JuicerGuiPlacement {
+    param($Window)
+    $sp = 'System.Windows.SystemParameters' -as [type]
+    $wa = $sp::WorkArea
+    $saved = $null
+    try { $saved = (Read-JuicerUiPrefs).Window } catch { Write-JuicerLog "Sin preferencias de la ventana: $_" }
+    $pl = Get-JuicerWindowPlacement $saved @{ Left = $wa.Left; Top = $wa.Top; Width = $wa.Width; Height = $wa.Height } @{ Left = $sp::VirtualScreenLeft; Top = $sp::VirtualScreenTop; Width = $sp::VirtualScreenWidth; Height = $sp::VirtualScreenHeight } $Window.Width $Window.Height $Window.MinWidth $Window.MinHeight
+    $Window.MinWidth = $pl.MinWidth; $Window.MinHeight = $pl.MinHeight
+    $Window.Width = $pl.Width; $Window.Height = $pl.Height
+    if ($pl.Manual) { $Window.WindowStartupLocation = 'Manual'; $Window.Left = $pl.Left; $Window.Top = $pl.Top }
+    if ($pl.Maximized) { $Window.WindowState = 'Maximized' }
+}
+
+function Save-JuicerGuiPlacement {
+    param($Window)
+    $max = $Window.WindowState -eq 'Maximized'
+    $b = if ($max) { $Window.RestoreBounds } else { $null }
+    $place = if ($b -and -not $b.IsEmpty) { @{ Left = $b.Left; Top = $b.Top; Width = $b.Width; Height = $b.Height } } else { @{ Left = $Window.Left; Top = $Window.Top; Width = $Window.ActualWidth; Height = $Window.ActualHeight } }
+    $place.Maximized = $max
+    Save-JuicerUiPrefs @{ Window = $place }
+}
+
+# What changes the system: closing the window in the middle of it would
+# leave the change half done.
+$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore')
+
+# Keys: Esc goes back from a game's page, Ctrl+F searches in the tab that
+# has a search box, F5 reads the tab again.
+function Invoke-JuicerGuiKey {
+    param([string]$Key, [bool]$Control)
+    $c = $script:Gui.C
+    $tab = $c.Tabs.SelectedItem
+    if ($Key -eq 'Escape' -and $tab -eq $c.TabJuegos -and $c.GamePage.Visibility -eq 'Visible') { Close-JuicerGuiGame; return $true }
+    if ($Control -and $Key -eq 'F') {
+        $box = if ($tab -eq $c.TabJuegos) { Close-JuicerGuiGame; $c.GameSearch } elseif ($tab -eq $c.TabAjustes) { $c.TweakSearch } elseif ($tab -eq $c.TabInstalar) { $c.SearchBox } else { $null }
+        if ($box) { [void]$box.Focus(); $box.SelectAll(); return $true }
+        return $false
+    }
+    if ($Key -eq 'F5') {
+        if ($script:Gui.Busy) { return $true }
+        if ($tab -eq $c.TabJuegos) { Start-JuicerGuiGameSetup 'Refresh' }
+        elseif ($tab -eq $c.TabEquipo) { Start-JuicerGuiAudit }
+        elseif ($tab -eq $c.TabInstalar) { Start-JuicerGuiInstalled }
+        elseif ($tab -eq $c.TabInicio) { Start-JuicerGuiStartupList }
+        elseif ($tab -eq $c.TabDebloat) { Start-JuicerGuiDebloat }
+        elseif ($tab -eq $c.TabAjusteFino) { Start-JuicerGuiFineTune }
+        elseif ($tab -eq $c.TabDeshacer) { Show-JuicerGuiUndo }
+        elseif ($tab -eq $c.TabHome) { Show-JuicerGuiHome }
+        else { return $false }
+        return $true
+    }
+    $false
 }
 
 # The tabs only someone who wants to choose setting by setting needs. The
@@ -2476,7 +2573,8 @@ function Show-JuicerGuiHome {
         } else {
             '✓ Ya tienes aplicado todo lo que conviene a tu equipo.'
         }
-        $c.BtnHomeOptimize.Content = $(if ($pending.Count -gt 0) { 'Optimizar ahora' } else { 'Volver a comprobar' })
+        $c.BtnHomeOptimize.Content = $(if ($pending.Count -gt 0) { 'Optimizar ahora' } else { 'Todo aplicado ✓' })
+        Set-JuicerGuiButton 'BtnHomeOptimize' ($pending.Count -gt 0)
     }
     $games = @($script:Gui.Games)
     if ($script:Gui.GamesLoaded -and $games.Count -gt 0) {
@@ -2566,8 +2664,24 @@ function Show-JuicerGui {
         Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
         Games = @(); Covers = @{}; CoverTried = @{}; Tiles = @{}; Sections = (New-Object System.Collections.ArrayList); Game = $null; Page = $null
+        Off = @{}; Busy = $false
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
+    # An error in a click, a key or a search must not close the window.
+    $win.Dispatcher.Add_UnhandledException({
+            $_.Handled = $true
+            $ex = $_.Exception
+            try {
+                Write-JuicerLog "Error en la ventana: $ex"
+                Show-JuicerGuiMessage "Algo falló, pero Win Juicer sigue abierto y no ha cambiado nada a medias:`n`n$($ex.Message)" 'Error' | Out-Null
+            } catch {
+                Write-Verbose "Sin poder avisar del error: $_"
+            }
+        })
+    $win.Add_PreviewKeyDown({
+            $ctrl = ([string](('System.Windows.Input.Keyboard' -as [type])::Modifiers)) -match 'Control'
+            if (Invoke-JuicerGuiKey ([string]$_.Key) $ctrl) { $_.Handled = $true }
+        })
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromMilliseconds(150)
     $timer.Add_Tick({ Complete-JuicerGuiTask })
@@ -2584,14 +2698,22 @@ function Show-JuicerGui {
         $script:Gui.Silent = New-Object System.Collections.ArrayList
         return $script:Gui
     }
+    Set-JuicerGuiPlacement $win
     $win.Add_ContentRendered({ Start-JuicerGuiTask 'Leyendo el equipo…' 'Init' @{} { param($r) Complete-JuicerGuiInit $r } })
     # Closing kills the background runspace: never in the middle of a change.
     $win.Add_Closing({
             $t = $script:Gui.Task
-            if ($t -and $t.Work -eq 'Run' -and -not $t.Handle.IsCompleted) {
+            if ($t -and $script:MutatingWork -contains $t.Work -and -not $t.Handle.IsCompleted) {
                 $_.Cancel = $true
                 Show-JuicerGuiMessage 'Win Juicer está aplicando cambios. Espera a que termine para cerrar: cortarlo a medias dejaría el cambio en curso a medio hacer.' 'Warning' | Out-Null
+                return
             }
+            $waiting = @($script:Gui.Queue | Where-Object { $script:MutatingWork -contains $_.Work })
+            if ($waiting.Count -gt 0 -and -not (Confirm-JuicerGui "Hay $($waiting.Count) cambios esperando su turno: si cierras ahora, no se aplicarán. ¿Cerrar igualmente?" 'Warning')) {
+                $_.Cancel = $true
+                return
+            }
+            try { Save-JuicerGuiPlacement $script:Gui.Window } catch { Write-JuicerLog "No se pudo recordar el tamaño de la ventana: $_" }
         })
     [void]$win.ShowDialog()
 }
