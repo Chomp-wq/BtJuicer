@@ -58,6 +58,24 @@ jobs:
         shell: pwsh
         run: ./WinJuicer/tests/Invoke-Tests.ps1
 
+  # Capturas de cada pestaña de la ventana, dibujada con el hardware real del
+  # runner, para revisar cómo se ve sin tener Windows a mano. No bloquea nada.
+  capturas:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dibujar la ventana
+        shell: powershell
+        run: ./WinJuicer/tests/Save-Screenshots.ps1 -Out capturas
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capturas
+          path: capturas
+          retention-days: 7
+
   # Lo que descarga «irm …/winjuicer.ps1 | iex»: sólo desde main y con todo lo
   # anterior en verde. Tiene su propia release para no mezclarse con el APK.
   publicar:
