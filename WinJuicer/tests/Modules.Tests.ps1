@@ -375,6 +375,19 @@ Describe 'Ventana (sin pantalla)' {
         $text | Should -Not -BeLike '*Explorador para: D*'
     }
 
+    It 'lee la lista que devuelve Windows PowerShell sin meterla en otra lista' {
+        $l = ConvertFrom-JuicerWinPsJson '[{"Name":"a","Installed":true},{"Name":"b","Installed":false}]'
+        $l.Count | Should -Be 2
+        $l[0] | Should -BeOfType [hashtable]
+        $l[1].Name | Should -Be 'b'
+        $l[0].Installed | Should -BeTrue
+        $one = ConvertFrom-JuicerWinPsJson '{"Name":"a"}'
+        $one.Count | Should -Be 1
+        $one[0].Name | Should -Be 'a'
+        (ConvertFrom-JuicerWinPsJson '').Count | Should -Be 0
+        (ConvertFrom-JuicerWinPsJson '[]').Count | Should -Be 0
+    }
+
     It 'las cuentas concuerdan con el número' {
         Format-JuicerCount 1 'cambio' | Should -Be '1 cambio'
         Format-JuicerCount 0 'cambio' | Should -Be '0 cambios'

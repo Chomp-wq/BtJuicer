@@ -2808,7 +2808,8 @@ function Show-JuicerGuiHome {
         $bad = @($f | Where-Object { $_.Severity -in 'Alto', 'Medio' })
         $c.HomeAuditNote.Text = if ($bad.Count -gt 0) { $(if ($bad.Count -eq 1) { 'Ha encontrado 1 cosa que conviene arreglar: dice dónde y cómo.' } else { "Ha encontrado $($bad.Count) cosas que conviene arreglar: cada una dice dónde y cómo." }) } else { '✓ No ha encontrado nada importante en tu equipo.' }
     }
-    $n = @(Read-JuicerJournal).Count
+    # Not @(…): the journal comes back as one list, and @() would count it as one.
+    $n = (Read-JuicerJournal).Count
     $c.HomeUndoNote.Text = if ($n -gt 0) { $(if ($n -eq 1) { 'Win Juicer ha hecho 1 cambio en este equipo. Puedes deshacerlo aquí o en la pestaña Deshacer.' } else { "Win Juicer ha hecho $n cambios en este equipo. Puedes deshacerlos todos, o uno a uno en la pestaña Deshacer." }) } else { 'Todavía no has cambiado nada. Todo lo que haga Win Juicer se podrá deshacer.' }
 }
 

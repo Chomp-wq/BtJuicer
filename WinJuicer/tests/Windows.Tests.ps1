@@ -213,6 +213,13 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
 
     It 'lista las apps de la Tienda y las características de Windows' {
         { @(Get-JuicerDebloatState (Get-JuicerHardwareProfile)) } | Should -Not -Throw
+        # What powershell.exe prints comes back as a flat list, from 5.1 and from 7.
+        $l = & (Get-Module WinJuicer) { Invoke-WinPowerShell "[pscustomobject]@{ Name = 'a' }; [pscustomobject]@{ Name = 'b' }" }
+        $l.Count | Should -Be 2
+        $l[1].Name | Should -Be 'b'
+        # Every app is kept under its own name, not all of them under one.
+        $cache = & (Get-Module WinJuicer) { $script:AppxCache = $null; [void](Read-WinAppx 'x'); $script:AppxCache }
+        @($cache.Keys | Where-Object { $cache[$_].Name -ne $_ }) | Should -BeNullOrEmpty
         $b = Get-JuicerBackend
         # The window asks for every component when it opens: dism took about
         # a minute here, which is why reading goes through WMI.
@@ -330,6 +337,7 @@ Import-Module '$psm' -Force
         PageErrors = `$pageErrors; RealStatus = `$realStatus; Pending = [bool]`$script:Gui.Task
         Detail = `$detail; Searched = `$searched; Extreme = `$extreme; Picked = `$picked; CountText = `$countText
         OffStays = `$offStays; Stale = `$stale; Esc = `$esc; Find = `$find; None = `$none; Cleared = `$cleared
+        UndoNote = [string]`$script:Gui.C.HomeUndoNote.Text; Journal = (Read-JuicerJournal).Count
         Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
@@ -381,6 +389,8 @@ Import-Module '$psm' -Force
             $r.Find | Should -BeTrue
             $r.None | Should -BeTrue
             $r.Cleared | Should -BeTrue
+            # Empezar counts the changes the journal holds, not the journal itself.
+            if ($r.Journal -eq 0) { $r.UndoNote | Should -BeLike 'Todavía no*' } else { $r.UndoNote | Should -BeLike "*ha hecho $($r.Journal) cambio*" }
         } finally {
             $ps.Dispose()
             $rs.Dispose()

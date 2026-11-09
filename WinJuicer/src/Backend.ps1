@@ -286,8 +286,17 @@ function Invoke-WinPowerShell {
     $r = Invoke-WinNative $exe @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($full)))
     if ($r.Code -ne 0) { throw "Windows PowerShell: $($r.Output)" }
     $json = @($r.Output -split "`n" | Where-Object { $_ -match '^\s*[\[{]' })[-1]
-    if (-not $json) { return , @() }
-    , @(ConvertTo-JuicerHashtable ($json | ConvertFrom-Json))
+    ConvertFrom-JuicerWinPsJson $json
+}
+
+# What the Windows PowerShell child printed, as one flat list of hashtables.
+# ConvertFrom-Json hands a JSON array over item by item in PowerShell 7 and
+# whole in 5.1 and 6; read as one array, the list came back inside another
+# list, and every Store app read as not installed.
+function ConvertFrom-JuicerWinPsJson {
+    param([string]$Json)
+    if (-not $Json) { return , @() }
+    , @($Json | ConvertFrom-Json | ForEach-Object { $_ } | ForEach-Object { ConvertTo-JuicerHashtable $_ })
 }
 
 function ConvertTo-WinPsLiteral {
