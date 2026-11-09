@@ -112,9 +112,9 @@ está aplicando un cambio, para que nada quede a medias. Lo muy largo (winget, D
 en su propia ventana para que veas su progreso.
 
 La ventana recuerda su tamaño y dónde estaba, y cabe en pantallas pequeñas.
-Atajos: **Esc** vuelve de la página de un juego a la galería, **Ctrl+F** lleva
-al buscador de la pestaña (juegos, ajustes o programas) y **F5** vuelve a leer
-la pestaña.
+Atajos: **Esc** borra lo escrito en un buscador y vuelve de la página de un
+juego a la galería, **Ctrl+F** lleva al buscador de la pestaña (juegos, ajustes
+o programas) y **F5** vuelve a leer la pestaña.
 
 Si prefieres la consola, o la ventana no puede abrirse, `WinJuicer.cmd -Consola`
 abre el menú de texto, con lo mismo:

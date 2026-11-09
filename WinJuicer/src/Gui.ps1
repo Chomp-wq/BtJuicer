@@ -100,10 +100,37 @@ $script:GuiXaml = @'
       <Setter Property="BorderBrush" Value="#F5B400"/>
       <Setter Property="FontWeight" Value="SemiBold"/>
     </Style>
+    <!-- Dark check boxes and option buttons: a white square on a dark window
+         is the first thing the eye goes to. Underscores in a name stay
+         underscores (no access keys). -->
     <Style TargetType="CheckBox">
       <Setter Property="Foreground" Value="#E8E8E8"/>
       <Setter Property="Margin" Value="2,3"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
+      <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="CheckBox">
+            <Grid Background="Transparent">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Border x:Name="Box" Width="16" Height="16" CornerRadius="3" Background="#2A2A31" BorderBrush="#6E6E78" BorderThickness="1"
+                      VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="0,1,0,1">
+                <Path x:Name="Mark" Data="M 3,7 L 6,10 L 11,4" Stroke="#1B1B1F" StrokeThickness="2" StrokeStartLineCap="Round" StrokeEndLineCap="Round" Visibility="Collapsed"/>
+              </Border>
+              <ContentPresenter Grid.Column="1" Margin="7,0,0,0" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="False"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Box" Property="BorderBrush" Value="#F5B400"/></Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Box" Property="Background" Value="#F5B400"/>
+                <Setter TargetName="Box" Property="BorderBrush" Value="#F5B400"/>
+                <Setter TargetName="Mark" Property="Visibility" Value="Visible"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
     <Style TargetType="ToolTip">
       <Setter Property="Background" Value="#2A2A31"/>
@@ -278,6 +305,28 @@ $script:GuiXaml = @'
       <Setter Property="Margin" Value="2,4"/>
       <Setter Property="VerticalContentAlignment" Value="Center"/>
       <Setter Property="Cursor" Value="Hand"/>
+      <Setter Property="Template">
+        <Setter.Value>
+          <ControlTemplate TargetType="RadioButton">
+            <Grid Background="Transparent">
+              <Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
+              <Grid VerticalAlignment="{TemplateBinding VerticalContentAlignment}" Margin="0,1,0,1">
+                <Ellipse x:Name="Ring" Width="16" Height="16" Fill="#2A2A31" Stroke="#6E6E78" StrokeThickness="1"/>
+                <Ellipse x:Name="Dot" Width="8" Height="8" Fill="#F5B400" Visibility="Collapsed"/>
+              </Grid>
+              <ContentPresenter Grid.Column="1" Margin="7,0,0,0" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" RecognizesAccessKey="False"/>
+            </Grid>
+            <ControlTemplate.Triggers>
+              <Trigger Property="IsMouseOver" Value="True"><Setter TargetName="Ring" Property="Stroke" Value="#F5B400"/></Trigger>
+              <Trigger Property="IsChecked" Value="True">
+                <Setter TargetName="Ring" Property="Stroke" Value="#F5B400"/>
+                <Setter TargetName="Dot" Property="Visibility" Value="Visible"/>
+              </Trigger>
+              <Trigger Property="IsEnabled" Value="False"><Setter Property="Opacity" Value="0.5"/></Trigger>
+            </ControlTemplate.Triggers>
+          </ControlTemplate>
+        </Setter.Value>
+      </Setter>
     </Style>
     <Style x:Key="Field" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
       <Setter Property="Margin" Value="3"/>
@@ -519,33 +568,35 @@ $script:GuiXaml = @'
 
       <TabItem Header="Instalar" x:Name="TabInstalar">
         <Grid Margin="14,10,14,10">
-          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/></Grid.RowDefinitions>
           <WrapPanel Grid.Row="0">
             <TextBlock Text="Buscar:" VerticalAlignment="Center" Margin="2,0,6,0" Foreground="#9A9AA5"/>
-            <TextBox x:Name="SearchBox" Width="220" Margin="3" Padding="4,3" Background="#33333C" Foreground="#E8E8E8" BorderBrush="#46464F"/>
+            <TextBox x:Name="SearchBox" Style="{StaticResource Field}" Width="220" ToolTip="Por nombre o por lo que hace (Ctrl+F)"/>
             <Button x:Name="BtnInstallSuggested" Content="Sugeridos para este equipo"/>
             <Button x:Name="BtnInstallNone" Content="Ninguno"/>
-            <Button x:Name="BtnInstall" Content="Instalar seleccionados" Style="{StaticResource Accent}"/>
-            <Button x:Name="BtnUninstall" Content="Desinstalar seleccionados"/>
-            <Button x:Name="BtnUpgradeAll" Content="Actualizar todo"/>
+            <Button x:Name="BtnUpgradeAll" Content="Actualizar todo" Margin="16,3,3,3" ToolTip="Actualiza con winget todo lo que tenga versión nueva"/>
             <Button x:Name="BtnInstalledRefresh" Content="Ver lo instalado"/>
           </WrapPanel>
           <TextBlock x:Name="InstallNote" Grid.Row="1" Style="{StaticResource Note}" Text="Con winget, en su propia ventana para que veas el progreso. ✓ ya instalado · ★ sugerido para este equipo."/>
           <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
             <WrapPanel x:Name="AppsPanel" Margin="0,0,8,0"/>
           </ScrollViewer>
+          <DockPanel Grid.Row="3" Margin="0,8,0,0" LastChildFill="False">
+            <Button x:Name="BtnInstall" Content="Instalar seleccionados" Style="{StaticResource Accent}" DockPanel.Dock="Right" FontSize="14"/>
+            <Button x:Name="BtnUninstall" Content="Desinstalar seleccionados" DockPanel.Dock="Right"/>
+          </DockPanel>
         </Grid>
       </TabItem>
 
       <TabItem Header="Arranque" x:Name="TabInicio">
         <Grid Margin="14,10,14,10">
-          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-          <DockPanel Grid.Row="0">
-            <Button x:Name="BtnStartupRefresh" Content="Volver a leer" DockPanel.Dock="Right"/>
-            <Button x:Name="BtnStartupJunk" Content="Desactivar los prescindibles" Style="{StaticResource Accent}" DockPanel.Dock="Right"/>
-            <TextBlock Style="{StaticResource Note}" VerticalAlignment="Center" Text="Lo que arranca solo al iniciar sesión. Desmarcar no borra nada: es el mismo interruptor del Administrador de tareas, y se aplica al momento. Prescindible: funciona igual abriéndolo cuando lo necesites."/>
-          </DockPanel>
-          <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+          <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
+          <WrapPanel Grid.Row="0">
+            <Button x:Name="BtnStartupJunk" Content="Desactivar los prescindibles" Style="{StaticResource Accent}"/>
+            <Button x:Name="BtnStartupRefresh" Content="Volver a leer"/>
+          </WrapPanel>
+          <TextBlock Grid.Row="1" Style="{StaticResource Note}" Text="Lo que arranca solo al iniciar sesión. Desmarcar no borra nada: es el mismo interruptor del Administrador de tareas, y se aplica al momento. Prescindible: funciona igual abriéndolo cuando lo necesites."/>
+          <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
             <StackPanel x:Name="StartupPanel" Margin="0,4,8,0"/>
           </ScrollViewer>
         </Grid>
@@ -580,7 +631,7 @@ $script:GuiXaml = @'
                   </WrapPanel>
                   <WrapPanel>
                     <TextBlock Text="Motor:" VerticalAlignment="Center" Margin="4,0,6,0" Foreground="#9A9AA5"/>
-                    <ComboBox x:Name="PacerEngine" Width="250" Margin="3" IsEnabled="False" ToolTip="Con estrobo, RivaTuner admite décimas y puede ir justo por debajo del refresco real; el driver de NVIDIA, sólo números enteros">
+                    <ComboBox x:Name="PacerEngine" Width="290" Margin="3" IsEnabled="False" ToolTip="Con estrobo, RivaTuner admite décimas y puede ir justo por debajo del refresco real; el driver de NVIDIA, sólo números enteros">
                       <ComboBoxItem Content="Automático (el driver si hay NVIDIA)" Tag="Auto"/>
                       <ComboBoxItem Content="Driver de NVIDIA" Tag="nvidia"/>
                       <ComboBoxItem Content="RivaTuner (admite décimas)" Tag="rtss"/>
@@ -614,7 +665,10 @@ $script:GuiXaml = @'
               </Border>
             </StackPanel>
             <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto">
-              <StackPanel x:Name="GalleryPanel" Margin="0,2,8,8"/>
+              <StackPanel>
+                <TextBlock x:Name="GameSearchNone" Style="{StaticResource Note}" FontSize="14" Margin="4,14,4,4" Visibility="Collapsed"/>
+                <StackPanel x:Name="GalleryPanel" Margin="0,2,8,8"/>
+              </StackPanel>
             </ScrollViewer>
           </Grid>
 
@@ -643,13 +697,13 @@ $script:GuiXaml = @'
                   <Button x:Name="BtnGameInstallRtss" Content="Instalar RivaTuner (gratis)" HorizontalAlignment="Left" Visibility="Collapsed"/>
                   <StackPanel x:Name="GamePacerBox" Margin="22,2,0,0">
                     <TextBlock Text="¿Qué prefieres?" Foreground="#9A9AA5" Margin="2,8,2,2"/>
-                    <RadioButton x:Name="GameFluidez" GroupName="GamePriority">
+                    <RadioButton x:Name="GameFluidez" GroupName="GamePriority" VerticalContentAlignment="Top">
                       <StackPanel>
                         <TextBlock Text="Fluidez" FontWeight="SemiBold"/>
                         <TextBlock Text="El ritmo más estable posible, sin tirones. Lo mejor para la mayoría de juegos." Foreground="#9A9AA5" TextWrapping="Wrap"/>
                       </StackPanel>
                     </RadioButton>
-                    <RadioButton x:Name="GameLatencia" GroupName="GamePriority">
+                    <RadioButton x:Name="GameLatencia" GroupName="GamePriority" VerticalContentAlignment="Top">
                       <StackPanel>
                         <TextBlock Text="Latencia mínima" FontWeight="SemiBold"/>
                         <TextBlock x:Name="GameLatenciaNote" Text="Para juegos competitivos. Al calibrar, si tu PC da para el doble de tus Hz o más, sube ahí: cada fotograma llega antes a la pantalla." Foreground="#9A9AA5" TextWrapping="Wrap"/>
@@ -767,7 +821,7 @@ $script:GuiXaml = @'
 
     <Border Grid.Row="2" Background="#141417" Padding="16,6">
       <DockPanel>
-        <ProgressBar x:Name="Busy" Width="140" Height="6" IsIndeterminate="True" Visibility="Collapsed" DockPanel.Dock="Right" Margin="12,0,0,0"/>
+        <ProgressBar x:Name="Busy" Width="140" Height="4" IsIndeterminate="True" Visibility="Collapsed" DockPanel.Dock="Right" Margin="12,0,0,0" Foreground="#F5B400" Background="#33333C" BorderThickness="0"/>
         <TextBlock x:Name="RebootNote" Foreground="#F5B400" DockPanel.Dock="Right" Margin="12,0,0,0" TextTrimming="CharacterEllipsis" MaxWidth="520"/>
         <TextBlock x:Name="Status" Foreground="#9A9AA5" TextTrimming="CharacterEllipsis" Text="Listo."/>
       </DockPanel>
@@ -1908,17 +1962,23 @@ function Show-JuicerGuiGallery {
 
 # Filtering hides tiles instead of drawing them again: the covers stay decoded.
 function Set-JuicerGuiGallerySearch {
-    $q = ([string]$script:Gui.C.GameSearch.Text).Trim()
+    $c = $script:Gui.C
+    $q = ([string]$c.GameSearch.Text).Trim()
+    $shown = 0
     foreach ($sec in @($script:Gui.Sections)) {
         $any = $false
         foreach ($t in $sec.Tiles) {
             $show = Test-JuicerContains $t.Name $q
             $t.Button.Visibility = $(if ($show) { 'Visible' } else { 'Collapsed' })
-            if ($show) { $any = $true }
+            if ($show) { $any = $true; $shown++ }
         }
         $sec.Head.Visibility = $(if ($any) { 'Visible' } else { 'Collapsed' })
         $sec.Wrap.Visibility = $sec.Head.Visibility
     }
+    # An empty gallery after typing says so, instead of looking broken.
+    $none = $q -and $shown -eq 0 -and @($script:Gui.Sections).Count -gt 0
+    $c.GameSearchNone.Text = $(if ($none) { "Ningún juego se llama «$q». Prueba con otra palabra (Esc la borra), o «Añadir un juego…» si no está." } else { '' })
+    $c.GameSearchNone.Visibility = $(if ($none) { 'Visible' } else { 'Collapsed' })
 }
 
 # Covers from the internet or the games' icons, a few at a time so that
@@ -2674,9 +2734,11 @@ $script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup',
 # Keys: Esc goes back from a game's page, Ctrl+F searches in the tab that
 # has a search box, F5 reads the tab again.
 function Invoke-JuicerGuiKey {
-    param([string]$Key, [bool]$Control)
+    param([string]$Key, [bool]$Control, $Source)
     $c = $script:Gui.C
     $tab = $c.Tabs.SelectedItem
+    # Esc in a search box with something typed clears it, and shows everything again.
+    if ($Key -eq 'Escape' -and $null -ne $Source -and ($Source -eq $c.GameSearch -or $Source -eq $c.TweakSearch -or $Source -eq $c.SearchBox) -and $Source.Text) { $Source.Text = ''; return $true }
     if ($Key -eq 'Escape' -and $tab -eq $c.TabJuegos -and $c.GamePage.Visibility -eq 'Visible') { Close-JuicerGuiGame; return $true }
     if ($Control -and $Key -eq 'F') {
         $box = $null
@@ -2838,7 +2900,7 @@ function Show-JuicerGui {
         })
     $win.Add_PreviewKeyDown({
             $ctrl = ([string](('System.Windows.Input.Keyboard' -as [type])::Modifiers)) -match 'Control'
-            if (Invoke-JuicerGuiKey ([string]$_.Key) $ctrl) { $_.Handled = $true }
+            if (Invoke-JuicerGuiKey ([string]$_.Key) $ctrl $_.OriginalSource) { $_.Handled = $true }
         })
     $timer = New-Object System.Windows.Threading.DispatcherTimer
     $timer.Interval = [TimeSpan]::FromMilliseconds(150)

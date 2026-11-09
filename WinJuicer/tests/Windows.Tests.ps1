@@ -265,6 +265,10 @@ Import-Module '$psm' -Force
     Show-JuicerGuiGallery `$games
     `$script:Gui.C.GameSearch.Text = 'dos'
     `$found = @(`$script:Gui.Sections | ForEach-Object { `$_.Tiles } | Where-Object { `$_.Button.Visibility -eq 'Visible' }).Count
+    # Nothing found says so; Esc in the box clears it and everything is back.
+    `$script:Gui.C.GameSearch.Text = 'no existe [x'
+    `$none = `$script:Gui.C.GameSearchNone.Visibility -eq 'Visible'
+    `$cleared = (Invoke-JuicerGuiKey 'Escape' `$false `$script:Gui.C.GameSearch) -and -not `$script:Gui.C.GameSearch.Text -and `$script:Gui.C.GameSearchNone.Visibility -ne 'Visible'
     `$script:Gui.C.GameSearch.Text = ''
     `$page = @{
         Game = `$games[0]; Engine = 'nvidia'; Priority = 'Latencia'; Manual = 0; Auto = @{ Fps = 171; Why = 'x'; Calibrated = `$false }; Competitive = `$true; TwoGpus = `$false
@@ -308,7 +312,9 @@ Import-Module '$psm' -Force
     `$c2.GameTitle.Text = 'antes'
     Show-JuicerGuiGamePage `$page
     `$stale = (`$c2.GameTitle.Text -eq 'antes') -and (`$c2.GalleryPage.Visibility -eq 'Visible')
-    # Keys: Esc from a game's page, Ctrl+F in the gallery.
+    # Keys: Esc from a game's page, Ctrl+F in the gallery. The gallery was
+    # drawn by hand: going to its tab must not start looking for games.
+    `$script:Gui.GamesLoaded = `$true
     `$c2.Tabs.SelectedItem = `$c2.TabJuegos
     `$c2.GalleryPage.Visibility = 'Collapsed'; `$c2.GamePage.Visibility = 'Visible'; `$script:Gui.Game = `$games[0]
     `$esc = (Invoke-JuicerGuiKey 'Escape' `$false) -and `$c2.GalleryPage.Visibility -eq 'Visible'
@@ -323,7 +329,7 @@ Import-Module '$psm' -Force
         Tips = `$script:Gui.C.GameTipsPanel.Children.Count; Hidden = `$hidden; Back = (`$script:Gui.C.GalleryPage.Visibility -eq 'Visible'); Home = [string]`$script:Gui.C.HomeHw.Text
         PageErrors = `$pageErrors; RealStatus = `$realStatus; Pending = [bool]`$script:Gui.Task
         Detail = `$detail; Searched = `$searched; Extreme = `$extreme; Picked = `$picked; CountText = `$countText
-        OffStays = `$offStays; Stale = `$stale; Esc = `$esc; Find = `$find
+        OffStays = `$offStays; Stale = `$stale; Esc = `$esc; Find = `$find; None = `$none; Cleared = `$cleared
         Chart = `$chart.Children.Count; Card = [bool]`$card
         Checks = `$script:Gui.Checks.Count; Apps = `$script:Gui.InstallChecks.Count; Cards = `$script:Gui.C.AuditPanel.Children.Count
         Missing = @(`$script:Gui.C.Keys | Where-Object { `$null -eq `$script:Gui.C[`$_] })
@@ -373,6 +379,8 @@ Import-Module '$psm' -Force
             $r.Stale | Should -BeTrue
             $r.Esc | Should -BeTrue
             $r.Find | Should -BeTrue
+            $r.None | Should -BeTrue
+            $r.Cleared | Should -BeTrue
         } finally {
             $ps.Dispose()
             $rs.Dispose()
