@@ -443,6 +443,16 @@ $script:GuiXaml = @'
                 </DockPanel>
               </Border>
             </UniformGrid>
+            <!-- Optional and for good: once on, there is no button to turn it off. -->
+            <Border x:Name="ShieldCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="900" HorizontalAlignment="Left">
+              <DockPanel>
+                <Button x:Name="BtnShieldOn" DockPanel.Dock="Right" Content="Activar…" VerticalAlignment="Center" Margin="14,3,3,3" FontSize="14"/>
+                <StackPanel>
+                  <TextBlock x:Name="ShieldTitle" Text="Protección contra contenido adulto" Style="{StaticResource CardTitle}"/>
+                  <TextBlock x:Name="ShieldNote" Style="{StaticResource Note}" Margin="0" Text="Bloquea las webs para adultos en todo el equipo y obliga a la búsqueda segura, sin que nada vaya más lento. Opcional, y para siempre: una vez activada no se puede desactivar."/>
+                </StackPanel>
+              </DockPanel>
+            </Border>
             <TextBlock Style="{StaticResource Note}" Margin="2,10,2,4" MaxWidth="900" HorizontalAlignment="Left" Text="¿Sabes lo que haces? Activa «Modo avanzado», arriba a la derecha: podrás elegir una a una las optimizaciones, ver qué cambia exactamente cada una, guardar tu selección y usar el resto de herramientas."/>
           </StackPanel>
         </ScrollViewer>
@@ -931,12 +941,15 @@ $script:GuiWork = @{
         $Sync.Status = 'Buscando versiones nuevas…'
         $update = $null
         try { $update = Get-JuicerUpdateNotice } catch { Write-JuicerLog "Sin comprobar versiones nuevas: $_" }
+        # The content protection, put back if something changed it.
+        $shield = $null
+        try { [void](Repair-JuicerShield); $shield = Get-JuicerShieldInfo } catch { Write-JuicerLog "No se pudo revisar la protección: $_" }
         # What waited for a game to close, and what an older recipe left behind.
         $games = @()
         # Writes to the driver: closing the window waits for them (see Add_Closing).
         $Sync.Mutating = $true
         try { $games = @(Invoke-JuicerPacerPending) + @(Repair-JuicerGameSetups) } catch { Write-JuicerLog "No se pudo poner al día lo de los juegos: $_" } finally { $Sync.Mutating = $false }
-        @{ Hw = $hw; Advice = $advice; Snapshot = $snapshot; Update = $update; GameFixes = @($games | ForEach-Object { @{ Title = $_.Title; Outcome = $_.Outcome } }); Pending = @(Get-JuicerPacerPending) }
+        @{ Hw = $hw; Advice = $advice; Snapshot = $snapshot; Update = $update; GameFixes = @($games | ForEach-Object { @{ Title = $_.Title; Outcome = $_.Outcome } }); Pending = @(Get-JuicerPacerPending); Shield = $shield }
     }
     Frames     = {
         @{ Findings = @(Invoke-JuicerFrameCapture -Seconds ([int]$A.Seconds) -Delay 10 -OnStatus { param($t) $Sync.Status = $t }) }
@@ -1067,6 +1080,13 @@ $script:GuiWork = @{
     GameCalibrate = {
         $f = @(Invoke-JuicerPacerCalibration -Exe $A.Game.ExeName -Seconds 60 -Delay 10 -OnStatus { param($t) $Sync.Status = $t })
         @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
+    }
+    # Turning the content protection on: there is no work item that turns it off.
+    Shield     = {
+        $Sync.Mutating = $true
+        $r = @()
+        try { $r = @(Enable-JuicerShield) } finally { $Sync.Mutating = $false }
+        @{ Fixed = $r; Info = (Get-JuicerShieldInfo) }
     }
     # What waited for a game to close, now that it has.
     PacerPending = {
@@ -1505,6 +1525,49 @@ function Show-JuicerGuiPowerAndDns {
         for ($i = 0; $i -lt $c.DnsCombo.Items.Count; $i++) { if ($c.DnsCombo.Items[$i].Tag -eq $first) { $c.DnsCombo.SelectedIndex = $i } }
     }
     $c.BtnDnsUndo.Visibility = $(if (Get-JuicerJournalEntry (Read-JuicerJournal) 'red.dns') { 'Visible' } else { 'Collapsed' })
+    # With the content protection on, the DNS is its and stays put.
+    $shield = $script:Gui.Shield
+    $locked = [bool]($shield -and $shield.Active)
+    $c.DnsCombo.IsEnabled = -not $locked
+    Set-JuicerGuiButton 'BtnDns' (-not $locked)
+    if ($locked) {
+        $c.BtnDnsUndo.Visibility = 'Collapsed'
+        $c.DnsNote.Text = "Lo fija la protección contra contenido adulto ($($shield.ProviderTitle)): no se puede cambiar."
+    }
+}
+
+# The card on Empezar: the button while it is off; once on, what it does and
+# since when, and no button.
+function Show-JuicerGuiShield {
+    param([hashtable]$Info)
+    $c = $script:Gui.C
+    $script:Gui.Shield = $Info
+    if ($Info -and $Info.Active) {
+        $since = ''
+        try { $since = ' desde el ' + ([datetime]$Info.Since).ToString('d') } catch { Write-Verbose "Fecha ilegible: $($Info.Since)" }
+        $c.ShieldTitle.Text = '✓ Protección contra contenido adulto: activa'
+        $c.ShieldNote.Text = "Activa$since, con $($Info.ProviderTitle). Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, y obliga a la búsqueda segura en Google, Bing y YouTube. Es para siempre: no se puede desactivar."
+        $c.BtnShieldOn.Visibility = 'Collapsed'
+    } else {
+        $c.ShieldTitle.Text = 'Protección contra contenido adulto'
+        $c.ShieldNote.Text = 'Bloquea las webs para adultos en todo el equipo y obliga a la búsqueda segura, sin que nada vaya más lento. Opcional, y para siempre: una vez activada no se puede desactivar.'
+        $c.BtnShieldOn.Visibility = 'Visible'
+    }
+}
+
+# Two questions, the second a warning: there is no way back from Win Juicer.
+function Invoke-JuicerGuiShieldOn {
+    if ($script:Gui.Shield -and $script:Gui.Shield.Active) { return }
+    $text = (@('Protección contra contenido adulto') + @(Get-JuicerShieldExplanation) + @('¿Activarla?')) -join "`n`n"
+    if (-not (Confirm-JuicerGui $text)) { return }
+    if (-not (Confirm-JuicerGui 'Última confirmación: después no se puede desactivar desde Win Juicer, ni con «Deshacer todo». ¿Activar la protección contra contenido adulto para siempre en este equipo?' 'Warning')) { return }
+    Start-JuicerGuiTask 'Activando la protección contra contenido adulto…' 'Shield' @{} {
+        param($r)
+        Show-JuicerGuiShield $r.Info
+        Show-JuicerGuiPowerAndDns
+        Show-JuicerGuiMessage ("Protección activada:`n`n" + (@($r.Fixed | ForEach-Object { "✓ $_" }) -join "`n") + "`n`nLos navegadores abiertos la aplican al cerrarlos y abrirlos de nuevo.") | Out-Null
+        Set-JuicerGuiStatus 'Protección contra contenido adulto activa.'
+    }
 }
 
 # The frame times of a measurement: a line, the target as a dashed line,
@@ -2534,6 +2597,7 @@ function Register-JuicerGuiHandlers {
         }
         BtnPacerInstallRtss   = { & $script:Gui.Handlers['BtnGameInstallRtss'] }
         BtnHomeOptimize       = { Invoke-JuicerGuiHomeOptimize }
+        BtnShieldOn           = { Invoke-JuicerGuiShieldOn }
         BtnHomeGames          = { Close-JuicerGuiGame; $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabJuegos }
         BtnHomeAudit          = { $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabEquipo }
         BtnHomeUndo           = { & $script:Gui.Handlers['BtnUndoAll'] }
@@ -2856,7 +2920,7 @@ function Save-JuicerGuiPlacement {
 
 # What changes the system: closing the window in the middle of it would
 # leave the change half done.
-$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore', 'PacerPending', 'GameCalibrate')
+$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore', 'PacerPending', 'GameCalibrate', 'Shield')
 
 # Keys: Esc goes back from a game's page, Ctrl+F searches in the tab that
 # has a search box, F5 reads the tab again.
@@ -2985,6 +3049,7 @@ function Complete-JuicerGuiInit {
     $script:Gui.Hw = $R.Hw
     $script:Gui.Advice = $R.Advice
     $script:Gui.Snapshot = $R.Snapshot
+    if ($R.Shield) { Show-JuicerGuiShield $R.Shield }
     if ($R.Update) {
         $script:Gui.C.UpdateNote.Text = "Hay una versión nueva ($($R.Update.Latest)); tienes la $($R.Update.Local)."
         $script:Gui.C.UpdatePanel.ToolTip = $R.Update.Command
@@ -3015,7 +3080,7 @@ function Show-JuicerGui {
         Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
         Games = @(); Covers = @{}; CoverTried = @{}; Tiles = @{}; Sections = (New-Object System.Collections.ArrayList); Game = $null; Page = $null
-        Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null
+        Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null; Shield = $null
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
     # An error in a click, a key or a search must not close the window.

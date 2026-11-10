@@ -525,4 +525,39 @@ Import-Module '$psm' -Force
         & $ps -NoProfile -ExecutionPolicy Bypass -File $script -Recomendado -Simular -Si | Out-Host
         $LASTEXITCODE | Should -Be 0
     }
+
+    # Last: it is for good, and the runner is thrown away after.
+    It 'activa la protección contra contenido adulto: políticas, su tarea y su copia, sin tocar el DNS del runner' {
+        $b = Get-JuicerBackend
+        $saved = @{ DnsSet = $b.DnsSet; All = $b.NetAdaptersAll }
+        $calls = New-Object System.Collections.ArrayList
+        try {
+            # The runner's real DNS stays as it is: a pretend adapter takes it.
+            $b.NetAdaptersAll = { , @(@{ Guid = '{0F0F0F0F-0000-0000-0000-000000000001}'; Name = 'Prueba'; Ipv6 = $true }) }
+            $b.DnsSet = { param($i, $v4, $v6) [void]$calls.Add(@($i) + @($v4)) }.GetNewClosure()
+            $r = @(Enable-JuicerShield)
+            foreach ($x in $r) { Write-Host "    $x" }
+            Test-JuicerShield | Should -BeTrue
+            $calls.Count | Should -Be 1
+            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Google\Chrome').ForceGoogleSafeSearch | Should -Be 1
+            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Google\Chrome').DnsOverHttpsMode | Should -Be 'off'
+            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge').ForceBingSafeSearch | Should -Be 2
+            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox\DNSOverHTTPS').Locked | Should -Be 1
+            $t = Get-ScheduledTask -TaskName 'Win Juicer - Protección contra contenido adulto' -ErrorAction Stop
+            $t.Principal.UserId | Should -Be 'SYSTEM'
+            @($t.Triggers).Count | Should -BeGreaterOrEqual 3
+            $t.Actions[0].Arguments | Should -BeLike '*-ProteccionAdultos Mantener*'
+            # Policies and task in place: only the pretend adapter, which keeps nothing, is redone.
+            @(Repair-JuicerShield | Where-Object { $_ -notlike 'DNS filtrado*' }) | Should -BeNullOrEmpty
+            # The copy the task runs answers, from Windows PowerShell.
+            $copy = Join-Path $env:ProgramFiles 'WinJuicer\WinJuicer.ps1'
+            Test-Path -LiteralPath $copy | Should -BeTrue
+            $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $copy -ProteccionAdultos Estado 2>&1
+            $LASTEXITCODE | Should -Be 0
+            ($out -join ' ') | Should -BeLike '*ACTIVA*'
+        } finally {
+            $b.DnsSet = $saved.DnsSet
+            $b.NetAdaptersAll = $saved.All
+        }
+    }
 }

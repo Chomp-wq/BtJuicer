@@ -126,6 +126,8 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             & $shot '07-deshacer'
             Set-JuicerGuiAdvanced $true
             $c.Tabs.SelectedItem = $c.TabHome
+            # The content protection, as it looks once on (drawn only: the runner keeps its DNS).
+            Show-JuicerGuiShield @{ Active = $true; Since = (Get-Date).ToString('s'); Provider = 'CleanBrowsing'; ProviderTitle = 'CleanBrowsing, filtro de adultos' }
             & $shot '08-empezar-avanzado'
             $c.Tabs.SelectedItem = $c.TabAjustes
             Show-JuicerGuiTweakDetail 'ui.carpetas' -Focus

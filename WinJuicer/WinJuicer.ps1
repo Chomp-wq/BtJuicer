@@ -117,6 +117,13 @@
 .PARAMETER Deshacer
     Nombres de ajustes a devolver a su estado anterior.
 
+.PARAMETER ProteccionAdultos
+    Activar: bloquea las webs para adultos en todo el equipo (DNS filtrado de
+    CleanBrowsing) y obliga a la búsqueda segura en Chrome, Edge y Brave. Es
+    para siempre: una vez activada, Win Juicer no la desactiva, «Deshacer todo»
+    no la toca y una tarea la repone si algo la cambia. Pide escribir ACTIVAR
+    (o -Si). Estado: dice si está activa. Mantener: lo que ejecuta su tarea.
+
 .PARAMETER DeshacerTodo
     Deshace todos los cambios de Win Juicer.
 
@@ -175,6 +182,7 @@ param(
     [switch]$OptimizarJuegos,
     [switch]$Mantener,
     [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
+    [ValidateSet('Activar', 'Mantener', 'Estado')][string]$ProteccionAdultos,
     [int]$Fps,
     [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
     [switch]$Lista,

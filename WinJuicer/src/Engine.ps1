@@ -494,7 +494,11 @@ function Invoke-JuicerAction {
         'Task' { if ($Capture.Exists) { & $b.TaskWrite $Action.Path $Action.Name ([bool]$Action.Enabled) } }
         'DefenderExclusion' { & $b.DefAdd $Action.Path }
         'Appx' { if ($Capture.Exists) { & $b.AppxRemove $Action.Name } }
-        'Dns' { & $b.DnsSet $Action.Interface ([string[]]@($Action.V4)) ([string[]]@($Action.V6)) }
+        'Dns' {
+            # With the content protection on, the DNS is its: nothing else changes it.
+            if (Test-JuicerShield) { throw 'La protección contra contenido adulto fija el DNS de este equipo: no se puede cambiar.' }
+            & $b.DnsSet $Action.Interface ([string[]]@($Action.V4)) ([string[]]@($Action.V6))
+        }
         'Feature' { if ($Capture.Exists) { & $b.FeatSet $Action.Name ([bool]$Action.Enabled) } }
         'FpsLimit' { & $b.FpsWrite $Action.Exe $Action.Fps $Capture.Backend -Exact ([double]$Action.Exact) }
         'NvSetting' { & $b.NvWrite $Action.Exe $Action.Id $Action.Value }
@@ -537,7 +541,11 @@ function Restore-JuicerActionState {
         'Task' { if ($c.Exists) { & $b.TaskWrite $c.Path $c.Name ([bool]$c.Enabled) } }
         'DefenderExclusion' { if (-not $c.Existed) { & $b.DefRemove $c.Path } }
         'Appx' { if ($c.Exists -and $null -eq (& $b.AppxRead $c.Name)) { & $b.AppxAdd $c.Name $c.StoreId } }
-        'Dns' { & $b.DnsSet $c.Interface ([string[]]@($c.V4 | Where-Object { $_ })) ([string[]]@($c.V6 | Where-Object { $_ })) }
+        'Dns' {
+            # Undoing an old DNS change does not undo the content protection's.
+            if (Test-JuicerShield) { Write-JuicerLog "DNS de $($c.Adapter) sin tocar: lo fija la protección contra contenido adulto"; return }
+            & $b.DnsSet $c.Interface ([string[]]@($c.V4 | Where-Object { $_ })) ([string[]]@($c.V6 | Where-Object { $_ }))
+        }
         'Feature' {
             if (-not $c.Exists) { return }
             $f = & $b.FeatRead $c.Name
