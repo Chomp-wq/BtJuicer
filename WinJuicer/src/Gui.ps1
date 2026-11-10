@@ -444,7 +444,7 @@ $script:GuiXaml = @'
               </Border>
             </UniformGrid>
             <!-- Optional and for good: once on, there is no button to turn it off. -->
-            <Border x:Name="ShieldCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="900" HorizontalAlignment="Left">
+            <Border x:Name="ShieldCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="886" HorizontalAlignment="Left">
               <DockPanel>
                 <Button x:Name="BtnShieldOn" DockPanel.Dock="Right" Content="Activar…" VerticalAlignment="Center" Margin="14,3,3,3" FontSize="14"/>
                 <StackPanel>
