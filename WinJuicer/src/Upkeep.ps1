@@ -52,6 +52,9 @@ function Get-JuicerUpkeepPlan {
 # One run: what the sign-in task does, also -Mantener. Returns the results.
 function Invoke-JuicerUpkeep {
     param([switch]$Quiet)
+    # The content protection as well, its task included: one deleted by hand
+    # comes back at the next sign-in.
+    try { [void](Repair-JuicerShield) } catch { Write-JuicerLog "Mantener: no se pudo revisar la protección: $_" }
     $state = Read-JuicerUpkeepState
     $games = @(Get-JuicerGames -KeepNew)
     $monitor = $null

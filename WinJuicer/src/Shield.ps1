@@ -61,8 +61,10 @@ $script:ShieldLevels = @{
 $script:ShieldOpenResolvers = @(
     # Google
     '8.8.8.8', '8.8.4.4', '2001:4860:4860::8888', '2001:4860:4860::8844'
-    # Cloudflare, without a filter and malware only, and its DNS over HTTPS
-    '1.1.1.1', '1.0.0.1', '1.1.1.2', '1.0.0.2', '104.16.248.249', '104.16.249.249'
+    # Cloudflare, without a filter and malware only. Not the addresses its
+    # DNS over HTTPS has had for browsers: they move, and may be serving
+    # websites by now (the browsers' own is off by policy anyway).
+    '1.1.1.1', '1.0.0.1', '1.1.1.2', '1.0.0.2'
     '2606:4700:4700::1111', '2606:4700:4700::1001', '2606:4700:4700::1112', '2606:4700:4700::1002'
     # Quad9
     '9.9.9.9', '149.112.112.112', '9.9.9.10', '149.112.112.10', '9.9.9.11', '149.112.112.11'

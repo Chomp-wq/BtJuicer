@@ -535,7 +535,8 @@ Import-Module '$psm' -Force
         $rule = @{ Name = 'WinJuicer-Prueba-DNS'; Title = 'Win Juicer: prueba'; Description = 'Prueba de Win Juicer'; Protocol = 'UDP'; Port = '53'; Remote = $remote }
         try {
             & $b.FwSet $rule 'Win Juicer - Prueba' -Disabled
-            $r = @(& $b.FwRules @('WinJuicer-Prueba-DNS', 'WinJuicer-No-Existe'))
+            # The backend hands the list over whole: assigned, not wrapped in @().
+            $r = & $b.FwRules @('WinJuicer-Prueba-DNS', 'WinJuicer-No-Existe')
             $r.Count | Should -Be 1
             foreach ($x in $r[0].RemoteAddress) { Write-Host "    $x" }
             $r[0].Enabled | Should -BeFalse

@@ -448,7 +448,7 @@ $script:GuiXaml = @'
             <Border x:Name="ShieldCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="886" HorizontalAlignment="Left">
               <StackPanel>
                 <TextBlock x:Name="ShieldTitle" Text="Protección contra contenido adulto" Style="{StaticResource CardTitle}"/>
-                <TextBlock x:Name="ShieldNote" Style="{StaticResource Note}" Margin="0,0,0,8" Text="Bloquea el porno en todo el equipo y cierra los atajos para saltárselo, sin que nada vaya más lento. Opcional, y para siempre: una vez activada no se puede desactivar."/>
+                <TextBlock x:Name="ShieldNote" Style="{StaticResource Note}" Margin="0,0,0,8" Text="Bloquea el porno en todo el equipo, en cualquier navegador, app o juego, y cierra los atajos para saltárselo, sin que nada vaya más lento. La estricta, la recomendada si es para dejarlo, también cierra proxies, VPN y Reddit y quita las ventanas privadas. Opcional, y para siempre: una vez activada no se puede desactivar."/>
                 <WrapPanel x:Name="ShieldOffPanel">
                   <Button x:Name="BtnShieldOn" Content="Activar la estricta (recomendada)…" Style="{StaticResource Accent}" FontSize="14" Margin="0,3,6,3"/>
                   <Button x:Name="BtnShieldOnSoft" Content="Activar la equilibrada…" FontSize="14"/>
@@ -456,7 +456,7 @@ $script:GuiXaml = @'
                 <StackPanel x:Name="ShieldOnPanel" Visibility="Collapsed">
                   <WrapPanel>
                     <Button x:Name="BtnShieldUp" Content="Pasar a la estricta…" Style="{StaticResource Accent}" Margin="0,3,6,3"/>
-                    <Button x:Name="BtnShieldX" Content="Bloquear X…" Margin="0,3,6,3"/>
+                    <Button x:Name="BtnShieldX" Content="Bloquear X (Twitter)…" Margin="0,3,6,3"/>
                     <Button x:Name="BtnShieldReddit" Content="Bloquear Reddit…" Margin="0,3,6,3"/>
                     <Button x:Name="BtnShieldTumblr" Content="Bloquear Tumblr…" Margin="0,3,6,3"/>
                   </WrapPanel>
@@ -1570,7 +1570,7 @@ function Show-JuicerGuiShield {
     $c.ShieldOnPanel.Visibility = $(if ($on) { 'Visible' } else { 'Collapsed' })
     if (-not $on) {
         $c.ShieldTitle.Text = 'Protección contra contenido adulto'
-        $c.ShieldNote.Text = 'Bloquea el porno en todo el equipo, en cualquier navegador, app o juego, y cierra los atajos para saltárselo (otro DNS, el DNS cifrado, la VPN de Opera, el archivo hosts), sin que nada vaya más lento. La estricta, la recomendada si es para dejarlo, también cierra proxies, VPN y Reddit y quita las ventanas privadas. Opcional, y para siempre: una vez activada no se puede desactivar.'
+        $c.ShieldNote.Text = 'Bloquea el porno en todo el equipo, en cualquier navegador, app o juego, y cierra los atajos para saltárselo, sin que nada vaya más lento. La estricta, la recomendada si es para dejarlo, también cierra proxies, VPN y Reddit y quita las ventanas privadas. Opcional, y para siempre: una vez activada no se puede desactivar.'
         return
     }
     $since = ''
@@ -1586,7 +1586,8 @@ function Show-JuicerGuiShield {
     $presets = @(if ($Info.Blocked) { $Info.Blocked.Presets })
     foreach ($k in 'X', 'Reddit', 'Tumblr') {
         $done = $presets -contains $k
-        $c["BtnShield$k"].Content = $(if ($done) { "✓ $k bloqueado" } else { "Bloquear $k…" })
+        $t = $script:ShieldPresets[$k].Title
+        $c["BtnShield$k"].Content = $(if ($done) { "✓ $t bloqueado" } else { "Bloquear $t…" })
         Set-JuicerGuiButton "BtnShield$k" (-not $done)
     }
     $list = @(Format-JuicerShieldBlocked $Info.Blocked)

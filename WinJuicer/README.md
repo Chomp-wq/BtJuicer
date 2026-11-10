@@ -833,7 +833,9 @@ En los dos:
   conectar una red, en cuanto cambia algo del cortafuegos y cada 15 minutos,
   con la prioridad más baja; si nada ha cambiado, no hace nada. Si otro
   programa deshace lo mismo una y otra vez, no se pelea con él: lo repone en
-  la siguiente revisión.
+  la siguiente revisión. Con «mantener juegos» activado, su tarea también la
+  revisa al iniciar sesión, y vuelve a crear la de la protección si alguien
+  la borró.
 - **En el móvil**, la misma idea: en Android, Ajustes, Red, DNS privado:
   `family-filter-dns.cleanbrowsing.org` (o `adult-filter-dns.cleanbrowsing.org`
   para la equilibrada).
