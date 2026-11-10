@@ -169,6 +169,10 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
 .\WinJuicer.ps1 -QuitarApps Microsoft.BingNews,Clipchamp.Clipchamp
 .\WinJuicer.ps1 -Dns Cloudflare
+.\WinJuicer.ps1 -ProteccionAdultos Activar               # para siempre: estricta (o -NivelProteccion Equilibrado)
+.\WinJuicer.ps1 -ProteccionAdultos Subir                 # de equilibrada a estricta, para siempre
+.\WinJuicer.ps1 -BloquearWeb Reddit,ejemplo.com          # con la protección activa: bloqueadas para siempre
+.\WinJuicer.ps1 -ProteccionAdultos Estado
 .\WinJuicer.ps1 -Instalar Valve.Steam,Discord.Discord
 .\WinJuicer.ps1 -Exportar C:\mi-config.json             # lo que Win Juicer cambió aquí
 .\WinJuicer.ps1 -Importar C:\mi-config.json -Simular    # en otro PC: qué haría
@@ -778,38 +782,73 @@ qué.
 ### Protección contra contenido adulto (opcional, y para siempre)
 
 En **Empezar**, o en la consola (opción 15, o `-ProteccionAdultos Activar`).
-Bloquea las webs para adultos **en todo el equipo**, en cualquier navegador,
-app o juego, y obliga a la búsqueda segura. Nada filtra dentro del PC, así que
-nada va más lento:
+Pensada también para quien quiere **dejar el porno**: bloquea ese contenido
+**en todo el equipo**, en cualquier navegador, app o juego, y cierra los
+atajos con los que se suele saltar un filtro en un mal momento. Nada filtra
+dentro del PC, así que nada va más lento.
 
-- **DNS filtrado** en cada adaptador físico, conectado o no, IPv4 e IPv6: el
-  filtro de adultos de [CleanBrowsing](https://cleanbrowsing.org/filters/),
-  con millones de dominios en listas que ellos mantienen al día. No bloquea
-  Reddit, YouTube ni las VPN. Una consulta cuesta lo mismo que con cualquier
-  DNS público, y Windows guarda las respuestas. Si CleanBrowsing no responde,
-  Cloudflare para familias (1.1.1.3) hasta que vuelva: nunca un DNS sin
-  filtro, y nunca te quedas sin internet.
-- **Navegadores:** en Chrome, Edge y Brave, por política, sin su DNS cifrado
-  propio (preguntan al filtrado), con la búsqueda segura de Google y el modo
-  restringido de YouTube (moderado) obligatorios, y en Edge, la búsqueda
-  segura estricta de Bing. En Firefox, su DNS cifrado propio apagado y
-  bloqueado. Chrome y Edge dirán que los «administra tu organización»: son
+Dos niveles; se puede subir de equilibrada a estricta, nunca bajar:
+
+| | Equilibrada | Estricta (la recomendada para una adicción) |
+|---|---|---|
+| Filtro DNS | [CleanBrowsing](https://cleanbrowsing.org/filters/), filtro de adultos | CleanBrowsing, filtro familiar: además proxies, VPN y webs con contenido mixto, como Reddit |
+| El DNS puede ir a | cualquiera menos los públicos sin filtro (Google, Cloudflare, Quad9, OpenDNS, AdGuard, NextDNS…) | sólo al filtro |
+| YouTube | modo restringido moderado | estricto |
+| Ventanas privadas y de invitado | siguen | no hay (Chrome, Edge, Brave y Firefox) |
+| Proxy en el navegador, Tor y VPN de Brave | siguen | no |
+
+En los dos:
+
+- **DNS filtrado** en cada adaptador físico, conectado o no, IPv4 e IPv6, con
+  millones de dominios en listas que ellos mantienen al día. Una consulta
+  cuesta lo mismo que con cualquier DNS público, y Windows guarda las
+  respuestas. Si CleanBrowsing no responde, Cloudflare para familias
+  (1.1.1.3) hasta que vuelva: nunca un DNS sin filtro, y nunca te quedas sin
+  internet.
+- **Cortafuegos de Windows**, para que cambiar el DNS no sirva de nada: seis
+  reglas que bloquean el DNS que no debe salir (ver la tabla), el DNS cifrado
+  por TLS y QUIC (puerto 853) y el DNS cifrado por HTTPS de los servidores
+  públicos. Si el cortafuegos se apaga, vuelve a encenderse; si lo lleva otro
+  programa (un antivirus con cortafuegos propio), se le deja: entonces sólo
+  queda el filtro.
+- **Navegadores**, por política: sin su DNS cifrado propio (preguntan al
+  filtrado), con la búsqueda segura de Google y el modo restringido de
+  YouTube, y en Edge la búsqueda segura estricta de Bing; en Firefox, su DNS
+  cifrado apagado y bloqueado. La búsqueda de Windows, en búsqueda segura
+  estricta. Chrome y Edge dirán que los «administra tu organización»: son
   estas reglas.
+- **Archivo hosts:** un bloque propio deja sin conexión la VPN que trae Opera,
+  y las líneas que se añadan después enviando un nombre a una dirección de
+  internet (la forma de saltarse un filtro DNS) se convierten en comentario.
+  Lo que ya había antes de activarla, y lo que apunta al propio PC o a la red
+  local, se queda como estaba.
+- **Webs bloqueadas para siempre:** X, Reddit o Tumblr con un botón (con los
+  nombres de sus imágenes y vídeos), u otra cualquiera escribiéndola. Se
+  añaden al archivo hosts y no se pueden quitar.
 - **Para siempre:** se activa tras dos confirmaciones (en la consola,
-  escribiendo ACTIVAR) y después Win Juicer no la desactiva: no hay botón ni
-  orden para quitarla, «Deshacer todo» no la toca y el DNS queda fijo.
-  Una tarea de Windows (como SYSTEM, desde la copia protegida de `Program
-  Files`) la repone sola al arrancar, al iniciar sesión, al conectar una red
-  y cada media hora, con la prioridad más baja; si nada ha cambiado, no hace
-  nada.
+  escribiendo ACTIVAR) y después Win Juicer no la desactiva ni la baja de
+  nivel: no hay botón ni orden para quitarla, «Deshacer todo» no la toca y el
+  DNS queda fijo. Una tarea de Windows (como SYSTEM, desde la copia protegida
+  de `Program Files`) la repone sola al arrancar, al iniciar sesión, al
+  conectar una red, en cuanto cambia algo del cortafuegos y cada 15 minutos,
+  con la prioridad más baja; si nada ha cambiado, no hace nada. Si otro
+  programa deshace lo mismo una y otra vez, no se pelea con él: lo repone en
+  la siguiente revisión. Con «mantener juegos» activado, su tarea también la
+  revisa al iniciar sesión, y vuelve a crear la de la protección si alguien
+  la borró.
+- **En el móvil**, la misma idea: en Android, Ajustes, Red, DNS privado:
+  `family-filter-dns.cleanbrowsing.org` (o `adult-filter-dns.cleanbrowsing.org`
+  para la equilibrada).
 - **Lo que no puede:** ver dentro de redes sociales o apps que sirven ese
-  contenido desde sus propios dominios, impedir una VPN o Tor, ni obligar a
-  la búsqueda segura en Firefox (las webs para adultos sí se bloquean). En
-  redes de empresa con DNS propio, o de hotel cuyo portal sólo responde a su
-  DNS, puede que no se pueda entrar. Y quien administra el equipo siempre
-  puede desmontarla a mano: ningún programa puede impedirlo, y Win Juicer no
-  se esconde ni lucha contra Windows para intentarlo. Lo que hace es no
-  ponerlo fácil.
+  contenido desde sus propios dominios, ni frenar una VPN o Tor instalados
+  como programa. En la equilibrada, Firefox bloquea las webs pero no obliga a
+  la búsqueda segura. En la estricta, una VPN que traiga su propio DNS
+  (también la del trabajo) no resuelve nombres, y alguna Wi-Fi de hotel cuya
+  página de acceso sólo responde a su DNS puede no abrirse. Y quien
+  administra el equipo siempre puede desmontarla a mano: ningún programa
+  puede impedirlo, y Win Juicer no se esconde ni lucha contra Windows para
+  intentarlo. Lo que hace es no ponerlo fácil, y volver a ponerla en cuanto
+  se toca.
 
 ### DNS
 

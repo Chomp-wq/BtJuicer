@@ -396,6 +396,80 @@ function Set-WinDns {
     Clear-DnsClientCache -ErrorAction SilentlyContinue
 }
 
+# --- Firewall and hosts file, for the content protection ---------------------
+
+# The rules with these names as Windows applies them (the active store: a rule
+# there is one that works), with every condition that could narrow them.
+function Get-WinFwRules {
+    param([string[]]$Names)
+    $out = @()
+    foreach ($r in @(Get-NetFirewallRule -PolicyStore ActiveStore -Name $Names -ErrorAction SilentlyContinue)) {
+        $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $r
+        $addr = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $r
+        $app = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r
+        $svc = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $r
+        $nic = Get-NetFirewallInterfaceTypeFilter -AssociatedNetFirewallRule $r
+        $out += @{
+            Name = [string]$r.Name; Enabled = ([string]$r.Enabled -eq 'True'); Action = [string]$r.Action; Direction = [string]$r.Direction; Profile = [string]$r.Profile
+            Protocol = [string]$port.Protocol; RemotePort = @($port.RemotePort | ForEach-Object { [string]$_ }); LocalPort = @($port.LocalPort | ForEach-Object { [string]$_ })
+            RemoteAddress = @($addr.RemoteAddress | ForEach-Object { [string]$_ }); LocalAddress = @($addr.LocalAddress | ForEach-Object { [string]$_ })
+            Program = [string]$app.Program; Service = [string]$svc.Service; InterfaceType = [string]$nic.InterfaceType
+        }
+    }
+    , $out
+}
+
+# A block rule, outbound, for every profile, written anew: a rule someone
+# narrowed is easier to replace than to put back field by field.
+function Set-WinFwRule {
+    param([hashtable]$Rule, [string]$Group, [switch]$Disabled)
+    Remove-NetFirewallRule -Name $Rule.Name -ErrorAction SilentlyContinue
+    $p = @{
+        Name = $Rule.Name; DisplayName = $Rule.Title; Description = $Rule.Description; Group = $Group
+        Direction = 'Outbound'; Action = 'Block'; Protocol = $Rule.Protocol; RemotePort = $Rule.Port; RemoteAddress = @($Rule.Remote)
+        Profile = 'Any'; Enabled = $(if ($Disabled) { 'False' } else { 'True' })
+    }
+    New-NetFirewallRule @p -ErrorAction Stop | Out-Null
+}
+
+# Which profiles of Windows' firewall are off, and whether another program
+# registered as the firewall (it turns Windows' off, and is left in charge).
+function Get-WinFwState {
+    $off = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop | Where-Object { [string]$_.Enabled -eq 'False' } | ForEach-Object { [string]$_.Name })
+    $third = $false
+    try { $third = @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName FirewallProduct -ErrorAction Stop).Count -gt 0 } catch { Write-Verbose "Sin Centro de seguridad (Windows Server): $_" }
+    @{ Off = $off; ThirdParty = $third }
+}
+
+function Get-WinHostsPath { Join-Path $env:SystemRoot 'System32\drivers\etc\hosts' }
+
+# Read and written byte for byte (Latin-1 maps each byte to one character and
+# back), so whatever encoding the file had, the lines it already had stay
+# exactly as they were.
+function Read-WinHosts {
+    $p = Get-WinHostsPath
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($p))
+}
+
+function Write-WinHosts {
+    param([string]$Text)
+    $p = Get-WinHostsPath
+    $attr = $null
+    if (Test-Path -LiteralPath $p) {
+        $item = Get-Item -LiteralPath $p -Force
+        $attr = $item.Attributes
+        # Read-only on purpose, often: it is put back after.
+        if ($attr -band [IO.FileAttributes]::ReadOnly) { $item.Attributes = $attr -band (-bnot [IO.FileAttributes]::ReadOnly) }
+    }
+    try {
+        [IO.File]::WriteAllBytes($p, [Text.Encoding]::GetEncoding(28591).GetBytes($Text))
+    } finally {
+        if ($null -ne $attr) { (Get-Item -LiteralPath $p -Force).Attributes = $attr }
+    }
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+}
+
 # Reading goes through WMI: «dism /Get-Features» takes up to a minute, and
 # the window asks for every component when it opens. Changing goes through
 # dism, which also brings in what a feature depends on.
@@ -683,6 +757,12 @@ function New-JuicerWindowsBackend {
         DnsSet       = ${function:Set-WinDns}
         NetAdaptersAll = ${function:Get-WinNetAdaptersAll}
         DnsProbe     = ${function:Test-WinDnsServer}
+        FwRules      = ${function:Get-WinFwRules}
+        FwSet        = ${function:Set-WinFwRule}
+        FwState      = ${function:Get-WinFwState}
+        FwOn         = { param([string[]]$Profiles) Set-NetFirewallProfile -Name $Profiles -Enabled True -ErrorAction Stop }
+        HostsRead    = ${function:Read-WinHosts}
+        HostsWrite   = ${function:Write-WinHosts}
         FeatRead     = ${function:Read-WinFeature}
         FeatSet      = ${function:Set-WinFeature}
         FpsBackend   = ${function:Get-WinFpsBackend}
@@ -726,6 +806,10 @@ function New-JuicerMemoryBackend {
         Running  = New-Object System.Collections.ArrayList   # .exe names open now
         Incidents = New-Object System.Collections.ArrayList  # @{ Exe; Kind; Time; Module }
         DnsDown  = New-Object System.Collections.ArrayList   # DNS servers that do not answer
+        Firewall = @{}    # rule name -> the rule, as FwRules gives it
+        FwOff    = New-Object System.Collections.ArrayList   # firewall profiles turned off
+        FwThirdParty = $false   # another program is the firewall
+        Hosts    = ((@('# Copyright (c) 1993-2009 Microsoft Corp.', '#', '# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.', '#', "#`t127.0.0.1       localhost", "#`t::1             localhost") -join "`r`n") + "`r`n")
         FpsExact = @{}    # exe -> fractional cap (RTSS)
         FpsEngines = $null  # engines the PC has; null = just FpsBackend
         Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
@@ -792,6 +876,19 @@ function New-JuicerMemoryBackend {
         NetAdapters = { , @($script:Mem.Adapters) }
         NetAdaptersAll = { , @($script:Mem.Adapters) }
         DnsProbe    = { param($Server) $script:Mem.DnsDown -notcontains $Server }
+        FwRules     = { param($Names) , @($Names | ForEach-Object { $script:Mem.Firewall[$_] } | Where-Object { $_ }) }
+        FwSet       = {
+            param($Rule, $Group, [switch]$Disabled)
+            $script:Mem.Firewall[$Rule.Name] = @{
+                Name = $Rule.Name; Group = $Group; Title = $Rule.Title; Enabled = -not $Disabled; Action = 'Block'; Direction = 'Outbound'; Profile = 'Any'
+                Protocol = $Rule.Protocol; RemotePort = @($Rule.Port); LocalPort = @('Any'); RemoteAddress = @($Rule.Remote); LocalAddress = @('Any')
+                Program = 'Any'; Service = 'Any'; InterfaceType = 'Any'
+            }
+        }
+        FwState     = { @{ Off = @($script:Mem.FwOff); ThirdParty = [bool]$script:Mem.FwThirdParty } }
+        FwOn        = { param($Profiles) foreach ($p in @($Profiles)) { $script:Mem.FwOff.Remove($p) } }
+        HostsRead   = { $script:Mem.Hosts }
+        HostsWrite  = { param($Text) $script:Mem.Hosts = $Text }
         # What Windows does: the static servers live in NameServer, empty when
         # they come from DHCP.
         DnsSet      = {

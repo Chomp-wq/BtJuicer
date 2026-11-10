@@ -443,15 +443,31 @@ $script:GuiXaml = @'
                 </DockPanel>
               </Border>
             </UniformGrid>
-            <!-- Optional and for good: once on, there is no button to turn it off. -->
+            <!-- Optional and for good: once on, there is no button to turn it off,
+                 and its level and its list of blocked sites only grow. -->
             <Border x:Name="ShieldCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="886" HorizontalAlignment="Left">
-              <DockPanel>
-                <Button x:Name="BtnShieldOn" DockPanel.Dock="Right" Content="Activar…" VerticalAlignment="Center" Margin="14,3,3,3" FontSize="14"/>
-                <StackPanel>
-                  <TextBlock x:Name="ShieldTitle" Text="Protección contra contenido adulto" Style="{StaticResource CardTitle}"/>
-                  <TextBlock x:Name="ShieldNote" Style="{StaticResource Note}" Margin="0" Text="Bloquea las webs para adultos en todo el equipo y obliga a la búsqueda segura, sin que nada vaya más lento. Opcional, y para siempre: una vez activada no se puede desactivar."/>
+              <StackPanel>
+                <TextBlock x:Name="ShieldTitle" Text="Protección contra contenido adulto" Style="{StaticResource CardTitle}"/>
+                <TextBlock x:Name="ShieldNote" Style="{StaticResource Note}" Margin="0,0,0,8" Text="Bloquea el porno en todo el equipo, en cualquier navegador, app o juego, y cierra los atajos para saltárselo, sin que nada vaya más lento. La estricta, la recomendada si es para dejarlo, también cierra proxies, VPN y Reddit y quita las ventanas privadas. Opcional, y para siempre: una vez activada no se puede desactivar."/>
+                <WrapPanel x:Name="ShieldOffPanel">
+                  <Button x:Name="BtnShieldOn" Content="Activar la estricta (recomendada)…" Style="{StaticResource Accent}" FontSize="14" Margin="0,3,6,3"/>
+                  <Button x:Name="BtnShieldOnSoft" Content="Activar la equilibrada…" FontSize="14"/>
+                </WrapPanel>
+                <StackPanel x:Name="ShieldOnPanel" Visibility="Collapsed">
+                  <WrapPanel>
+                    <Button x:Name="BtnShieldUp" Content="Pasar a la estricta…" Style="{StaticResource Accent}" Margin="0,3,6,3"/>
+                    <Button x:Name="BtnShieldX" Content="Bloquear X (Twitter)…" Margin="0,3,6,3"/>
+                    <Button x:Name="BtnShieldReddit" Content="Bloquear Reddit…" Margin="0,3,6,3"/>
+                    <Button x:Name="BtnShieldTumblr" Content="Bloquear Tumblr…" Margin="0,3,6,3"/>
+                  </WrapPanel>
+                  <DockPanel Margin="0,2,0,0" MaxWidth="560" HorizontalAlignment="Left">
+                    <TextBlock DockPanel.Dock="Left" Text="Otra web:" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                    <Button x:Name="BtnShieldBlock" DockPanel.Dock="Right" Content="Bloquear para siempre…"/>
+                    <TextBox x:Name="ShieldWeb" Style="{StaticResource Field}" MinWidth="200" ToolTip="Una web que bloquear en todo el equipo, para siempre: ejemplo.com, o un enlace"/>
+                  </DockPanel>
+                  <TextBlock x:Name="ShieldBlocked" Style="{StaticResource Note}" Margin="0,6,0,0"/>
                 </StackPanel>
-              </DockPanel>
+              </StackPanel>
             </Border>
             <TextBlock Style="{StaticResource Note}" Margin="2,10,2,4" MaxWidth="900" HorizontalAlignment="Left" Text="¿Sabes lo que haces? Activa «Modo avanzado», arriba a la derecha: podrás elegir una a una las optimizaciones, ver qué cambia exactamente cada una, guardar tu selección y usar el resto de herramientas."/>
           </StackPanel>
@@ -1081,12 +1097,18 @@ $script:GuiWork = @{
         $f = @(Invoke-JuicerPacerCalibration -Exe $A.Game.ExeName -Seconds 60 -Delay 10 -OnStatus { param($t) $Sync.Status = $t })
         @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
     }
-    # Turning the content protection on: there is no work item that turns it off.
+    # Turning the content protection on, raising it or blocking a site for
+    # good: there is no work item that turns it off, lowers it or unblocks.
     Shield     = {
         $Sync.Mutating = $true
         $r = @()
-        try { $r = @(Enable-JuicerShield) } finally { $Sync.Mutating = $false }
-        @{ Fixed = $r; Info = (Get-JuicerShieldInfo) }
+        $added = @()
+        try {
+            if ($A.Block) { $added = @(Add-JuicerShieldBlock $A.Block) } else { $r = @(Enable-JuicerShield -Level ([int]$A.Level)) }
+        } finally {
+            $Sync.Mutating = $false
+        }
+        @{ Fixed = $r; Added = $added; Info = (Get-JuicerShieldInfo) }
     }
     # What waited for a game to close, now that it has.
     PacerPending = {
@@ -1536,37 +1558,105 @@ function Show-JuicerGuiPowerAndDns {
     }
 }
 
-# The card on Empezar: the button while it is off; once on, what it does and
-# since when, and no button.
+# The card on Empezar: the two levels while it is off; once on, what it does,
+# at which level and since when, the way up to estricta, and the sites it
+# blocks for good. Nothing that turns it off.
 function Show-JuicerGuiShield {
     param([hashtable]$Info)
     $c = $script:Gui.C
     $script:Gui.Shield = $Info
-    if ($Info -and $Info.Active) {
-        $since = ''
-        try { $since = ' desde el ' + ([datetime]$Info.Since).ToString('d') } catch { Write-Verbose "Fecha ilegible: $($Info.Since)" }
-        $c.ShieldTitle.Text = '✓ Protección contra contenido adulto: activa'
-        $c.ShieldNote.Text = "Activa$since, con $($Info.ProviderTitle). Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, y obliga a la búsqueda segura en Google, Bing y YouTube. Es para siempre: no se puede desactivar."
-        $c.BtnShieldOn.Visibility = 'Collapsed'
-    } else {
+    $on = [bool]($Info -and $Info.Active)
+    $c.ShieldOffPanel.Visibility = $(if ($on) { 'Collapsed' } else { 'Visible' })
+    $c.ShieldOnPanel.Visibility = $(if ($on) { 'Visible' } else { 'Collapsed' })
+    if (-not $on) {
         $c.ShieldTitle.Text = 'Protección contra contenido adulto'
-        $c.ShieldNote.Text = 'Bloquea las webs para adultos en todo el equipo y obliga a la búsqueda segura, sin que nada vaya más lento. Opcional, y para siempre: una vez activada no se puede desactivar.'
-        $c.BtnShieldOn.Visibility = 'Visible'
+        $c.ShieldNote.Text = 'Bloquea el porno en todo el equipo, en cualquier navegador, app o juego, y cierra los atajos para saltárselo, sin que nada vaya más lento. La estricta, la recomendada si es para dejarlo, también cierra proxies, VPN y Reddit y quita las ventanas privadas. Opcional, y para siempre: una vez activada no se puede desactivar.'
+        return
     }
+    $since = ''
+    try { $since = ' desde el ' + ([datetime]$Info.Since).ToString('d') } catch { Write-Verbose "Fecha ilegible: $($Info.Since)" }
+    $strict = [int]$Info.Level -ge 2
+    $c.ShieldTitle.Text = "✓ Protección contra contenido adulto: activa, $(([string]$Info.LevelTitle).ToLowerInvariant())"
+    $what = if ($strict) { 'Bloquea las webs para adultos, proxies y VPN en todo el equipo, el DNS sólo va al filtro, la búsqueda segura y YouTube estricto son obligatorios, y los navegadores no tienen ventanas privadas.' } else { 'Bloquea las webs para adultos en todo el equipo, cierra los atajos más comunes y obliga a la búsqueda segura. La estricta, además, cierra proxies, VPN y Reddit y quita las ventanas privadas.' }
+    $note = "Activa$since, con $($Info.ProviderTitle). $what Es para siempre: no se puede desactivar ni bajar de nivel."
+    if ($Info.Firewall -eq 'Otro') { $note += ' El cortafuegos lo lleva otro programa: los bloqueos del de Windows no se aplican, el filtro sí.' }
+    if ($Info.Phone) { $note += " En el móvil (Android: Ajustes, Red, DNS privado): $($Info.Phone)." }
+    $c.ShieldNote.Text = $note
+    $c.BtnShieldUp.Visibility = $(if ($strict) { 'Collapsed' } else { 'Visible' })
+    $presets = @(if ($Info.Blocked) { $Info.Blocked.Presets })
+    foreach ($k in 'X', 'Reddit', 'Tumblr') {
+        $done = $presets -contains $k
+        $t = $script:ShieldPresets[$k].Title
+        $c["BtnShield$k"].Content = $(if ($done) { "✓ $t bloqueado" } else { "Bloquear $t…" })
+        Set-JuicerGuiButton "BtnShield$k" (-not $done)
+    }
+    $list = @(Format-JuicerShieldBlocked $Info.Blocked)
+    $c.ShieldBlocked.Text = $(if ($list.Count -gt 0) { 'Bloqueadas para siempre: ' + ($list -join ', ') + '.' } else { 'Puedes bloquear para siempre las webs que quieras, además de las de adultos: no se podrán desbloquear.' })
+}
+
+function Complete-JuicerGuiShieldTask {
+    param($R, [string]$Done)
+    Show-JuicerGuiShield $R.Info
+    Show-JuicerGuiPowerAndDns
+    # The browsers' rules and the firewall's, counted: a first start puts
+    # some thirty, too many lines for a message.
+    $all = @($R.Fixed)
+    $browser = @($all | Where-Object { $_ -match '^(Chrome|Edge|Brave|Firefox):' })
+    $fw = @($all | Where-Object { $_ -like 'Cortafuegos:*' })
+    $lines = @($all | Where-Object { $browser -notcontains $_ -and ($fw.Count -lt 3 -or $fw -notcontains $_) } | ForEach-Object { "✓ $_" })
+    if ($fw.Count -ge 3) { $lines += "✓ Cortafuegos: $($fw.Count) reglas (el DNS no puede salir del filtro, ni cifrado)" }
+    if ($browser.Count -gt 3) { $lines += "✓ Navegadores: $($browser.Count) reglas en Chrome, Edge, Brave y Firefox (búsqueda segura, YouTube restringido, sin DNS cifrado propio$(if ([int]$R.Info.Level -ge 2) { ', sin ventanas privadas ni proxy' }))" }
+    elseif ($browser.Count -gt 0) { $lines += @($browser | ForEach-Object { "✓ $_" }) }
+    $text = if ($lines.Count -gt 0) { "${Done}:`n`n" + ($lines -join "`n") + "`n`nLos navegadores abiertos la aplican al cerrarlos y abrirlos de nuevo." } else { $Done + '.' }
+    Show-JuicerGuiMessage $text | Out-Null
+    Set-JuicerGuiStatus "$Done."
 }
 
 # Two questions, the second a warning: there is no way back from Win Juicer.
 function Invoke-JuicerGuiShieldOn {
+    param([int]$Level = 2)
     if ($script:Gui.Shield -and $script:Gui.Shield.Active) { return }
-    $text = (@('Protección contra contenido adulto') + @(Get-JuicerShieldExplanation) + @('¿Activarla?')) -join "`n`n"
+    $text = (@('Protección contra contenido adulto') + @(Get-JuicerShieldExplanation $Level) + @('¿Activarla?')) -join "`n`n"
     if (-not (Confirm-JuicerGui $text)) { return }
-    if (-not (Confirm-JuicerGui 'Última confirmación: después no se puede desactivar desde Win Juicer, ni con «Deshacer todo». ¿Activar la protección contra contenido adulto para siempre en este equipo?' 'Warning')) { return }
-    Start-JuicerGuiTask 'Activando la protección contra contenido adulto…' 'Shield' @{} {
+    $name = $script:ShieldLevels[$Level].Title.ToLowerInvariant()
+    if (-not (Confirm-JuicerGui "Última confirmación: después no se puede desactivar desde Win Juicer, ni con «Deshacer todo», ni bajar de nivel. ¿Activar la protección contra contenido adulto, $name, para siempre en este equipo?" 'Warning')) { return }
+    Start-JuicerGuiTask 'Activando la protección contra contenido adulto…' 'Shield' @{ Level = $Level } {
+        param($r)
+        Complete-JuicerGuiShieldTask $r 'Protección activada'
+    }
+}
+
+function Invoke-JuicerGuiShieldUp {
+    if (-not ($script:Gui.Shield -and $script:Gui.Shield.Active) -or [int]$script:Gui.Shield.Level -ge 2) { return }
+    $text = (@('Pasar a la estricta') + @(Get-JuicerShieldExplanation 2) + @('¿Pasar a la estricta?')) -join "`n`n"
+    if (-not (Confirm-JuicerGui $text)) { return }
+    if (-not (Confirm-JuicerGui 'Última confirmación: después no se puede volver a la equilibrada. ¿Pasar a la estricta para siempre?' 'Warning')) { return }
+    Start-JuicerGuiTask 'Pasando la protección a la estricta…' 'Shield' @{ Level = 2 } {
+        param($r)
+        Complete-JuicerGuiShieldTask $r 'Protección estricta'
+    }
+}
+
+# A site, X, Reddit or Tumblr, for good, after one question that says so.
+function Invoke-JuicerGuiShieldBlock {
+    param([string]$Site)
+    if (-not ($script:Gui.Shield -and $script:Gui.Shield.Active)) { return }
+    $Site = ([string]$Site).Trim()
+    if (-not $Site) { Show-JuicerGuiMessage 'Escribe la web que quieres bloquear, como ejemplo.com.' | Out-Null; return }
+    $preset = @($script:ShieldPresets.Keys | Where-Object { $_ -eq $Site })
+    if ($preset.Count -gt 0) {
+        $what = $script:ShieldPresets[$preset[0]].Title
+    } else {
+        $names = @(ConvertTo-JuicerBlockHosts $Site)
+        if ($names.Count -eq 0) { Show-JuicerGuiMessage "«$Site» no parece una web. Escríbela como ejemplo.com." 'Warning' | Out-Null; return }
+        $what = $names[0]
+    }
+    if (-not (Confirm-JuicerGui "¿Bloquear $what en todo el equipo, para siempre? No se podrá desbloquear desde Win Juicer." 'Warning')) { return }
+    Start-JuicerGuiTask "Bloqueando $what…" 'Shield' @{ Block = @($Site) } {
         param($r)
         Show-JuicerGuiShield $r.Info
-        Show-JuicerGuiPowerAndDns
-        Show-JuicerGuiMessage ("Protección activada:`n`n" + (@($r.Fixed | ForEach-Object { "✓ $_" }) -join "`n") + "`n`nLos navegadores abiertos la aplican al cerrarlos y abrirlos de nuevo.") | Out-Null
-        Set-JuicerGuiStatus 'Protección contra contenido adulto activa.'
+        $script:Gui.C.ShieldWeb.Text = ''
+        Set-JuicerGuiStatus $(if (@($r.Added).Count -gt 0) { 'Bloqueada para siempre.' } else { 'Ya estaba bloqueada.' })
     }
 }
 
@@ -2597,7 +2687,13 @@ function Register-JuicerGuiHandlers {
         }
         BtnPacerInstallRtss   = { & $script:Gui.Handlers['BtnGameInstallRtss'] }
         BtnHomeOptimize       = { Invoke-JuicerGuiHomeOptimize }
-        BtnShieldOn           = { Invoke-JuicerGuiShieldOn }
+        BtnShieldOn           = { Invoke-JuicerGuiShieldOn 2 }
+        BtnShieldOnSoft       = { Invoke-JuicerGuiShieldOn 1 }
+        BtnShieldUp           = { Invoke-JuicerGuiShieldUp }
+        BtnShieldX            = { Invoke-JuicerGuiShieldBlock 'X' }
+        BtnShieldReddit       = { Invoke-JuicerGuiShieldBlock 'Reddit' }
+        BtnShieldTumblr       = { Invoke-JuicerGuiShieldBlock 'Tumblr' }
+        BtnShieldBlock        = { Invoke-JuicerGuiShieldBlock $script:Gui.C.ShieldWeb.Text }
         BtnHomeGames          = { Close-JuicerGuiGame; $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabJuegos }
         BtnHomeAudit          = { $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabEquipo }
         BtnHomeUndo           = { & $script:Gui.Handlers['BtnUndoAll'] }
