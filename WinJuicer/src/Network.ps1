@@ -34,6 +34,7 @@ function New-JuicerDnsTweak {
         What = "$($p.What) Se aplica a los adaptadores de red físicos conectados: $(@($adapters | ForEach-Object { $_.Name }) -join ', ')."
         Gain = 'Privacidad frente a tu operador, filtrado de malware o anuncios, o simplemente un DNS que no falla. No baja el ping: el DNS sólo se consulta al conectar.'
         Cost = 'Las redes de empresa o de hotel con portal de acceso pueden necesitar el DNS automático: si una no conecta, deshazlo.'
+        Skip = { if (Test-JuicerShield) { 'La protección contra contenido adulto está activa: el DNS lo fija ella, y no se cambia.' } }
         Actions = @(foreach ($a in $adapters) {
                 @{ Type = 'Dns'; Interface = $a.Guid; Adapter = $a.Name; V4 = $p.V4; V6 = $p.V6 }
             })

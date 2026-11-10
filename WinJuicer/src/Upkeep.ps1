@@ -142,15 +142,16 @@ function Register-JuicerUpkeep {
 function Unregister-JuicerUpkeep {
     if (Test-JuicerUpkeep) { Unregister-ScheduledTask -TaskName $script:UpkeepTask -Confirm:$false }
     $dir = Get-JuicerInstallDir
-    # Only the copy this task used; nothing else lives there.
-    if ($env:ProgramFiles -and (Test-Path -LiteralPath (Join-Path $dir 'WinJuicer.psm1'))) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
+    # Only the copy this task used; nothing else lives there. The content
+    # protection's task runs from it too: then it stays.
+    if ($env:ProgramFiles -and -not (Test-JuicerShield) -and (Test-Path -LiteralPath (Join-Path $dir 'WinJuicer.psm1'))) { Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue }
     Remove-Item -LiteralPath (Get-JuicerUpkeepPath) -Force -ErrorAction SilentlyContinue
 }
 
 # Called when Win Juicer opens elevated: the protected copy follows the
 # version in use, so the task never runs an old one.
 function Update-JuicerCopy {
-    if (Test-JuicerUpkeep) {
+    if ((Test-JuicerUpkeep) -or (Test-JuicerShield)) {
         try { [void](Install-JuicerCopy) } catch { Write-JuicerLog "No se pudo actualizar la copia de Program Files: $_" }
     }
 }

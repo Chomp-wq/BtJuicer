@@ -1094,6 +1094,49 @@ function Show-JuicerMyths {
     Wait-JuicerKey
 }
 
+# --- Protección contra contenido adulto ---------------------------------------
+
+function Write-JuicerShieldState {
+    $i = Get-JuicerShieldInfo
+    if ($i.Active) {
+        $since = ''
+        try { $since = ' desde el ' + ([datetime]$i.Since).ToString('d') } catch { Write-Verbose "Fecha ilegible: $($i.Since)" }
+        Write-JuicerWrapped "Protección contra contenido adulto: ACTIVA$since, con $($i.ProviderTitle). No se puede desactivar." 2 'Green'
+    } else {
+        Write-JuicerWrapped 'Protección contra contenido adulto: no activada.' 2 'Gray'
+    }
+}
+
+# -ProteccionAdultos: Activar (the user types ACTIVAR, or -Si), Mantener
+# (what its task runs) or Estado. There is no way to turn it off.
+function Invoke-JuicerShieldCli {
+    param([string]$What, [switch]$Yes)
+    switch ($What) {
+        'Mantener' { [void](Repair-JuicerShield); return 0 }
+        'Estado' { Write-JuicerShieldState; return 0 }
+        'Activar' {
+            if (Test-JuicerShield) { Write-JuicerShieldState; return 0 }
+            foreach ($l in (Get-JuicerShieldExplanation)) { Write-JuicerWrapped $l 2 'Gray'; Write-Host '' }
+            # Typed, not a key that slips.
+            if (-not $Yes -and (Read-JuicerChoice 'Escribe ACTIVAR para activarla para siempre (Intro para no hacerlo)') -cne 'ACTIVAR') {
+                Write-Host '  No se ha activado.'
+                return 0
+            }
+            foreach ($x in @(Enable-JuicerShield)) { Write-Host "  [ok] $x" -ForegroundColor Green }
+            Write-JuicerShieldState
+            Write-JuicerWrapped 'Los navegadores abiertos la aplican al cerrarlos y abrirlos de nuevo.' 2 'Gray'
+            return 0
+        }
+    }
+    2
+}
+
+function Show-JuicerShield {
+    Write-JuicerHeader 'Protección contra contenido adulto'
+    if (Test-JuicerShield) { Write-JuicerShieldState } else { [void](Invoke-JuicerShieldCli 'Activar') }
+    Wait-JuicerKey
+}
+
 function Show-JuicerMainMenu {
     $script:UpdateNotice = Get-JuicerUpdateNotice
     while ($true) {
@@ -1113,6 +1156,7 @@ function Show-JuicerMainMenu {
             @('12', 'Lo que no hacemos', 'los «trucos» que circulan, y por qué no'),
             @('13', 'Antes y después', 'arranque, procesos y memoria: qué han cambiado los ajustes'),
             @('14', 'Ajuste fino', 'undervolt de CPU y overclock de GPU para tus componentes, y vigilarlos'),
+            @('15', 'Protección contra contenido adulto', 'opcional y para siempre: bloquea las webs para adultos'),
             @('0', 'Salir', '')
         )
         if ($script:UpdateNotice) {
@@ -1135,6 +1179,7 @@ function Show-JuicerMainMenu {
             '12' { Show-JuicerMyths }
             '13' { Show-JuicerMeasure }
             '14' { Show-JuicerFineTune }
+            '15' { Show-JuicerShield }
             '0' { return }
         }
     }
@@ -1222,6 +1267,7 @@ function Start-Juicer {
         [switch]$OptimizarJuegos,
         [switch]$Mantener,
         [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
+        [ValidateSet('', 'Activar', 'Mantener', 'Estado')][string]$ProteccionAdultos = '',
         [int]$Fps,
         [string]$ModoMonitor,
         [switch]$Lista,
@@ -1248,11 +1294,11 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     # The protected copy the sign-in task runs follows this version.
-    if ((Test-JuicerWindows) -and -not $Mantener) { Update-JuicerCopy }
+    if ((Test-JuicerWindows) -and -not $Mantener -and -not $ProteccionAdultos) { Update-JuicerCopy }
     if (-not $cli) {
         $script:Screen = $true
         $script:Interactive = $true
@@ -1294,6 +1340,7 @@ function Start-Juicer {
         }
         if ($LimitarFps.Count -eq 0 -and -not $CalibrarJuego -and -not $MotorPacer) { return 0 }
     }
+    if ($ProteccionAdultos) { return (Invoke-JuicerShieldCli $ProteccionAdultos -Yes:$Si) }
     if ($Mantener) {
         $r = @(Invoke-JuicerUpkeep)
         return $(if (@($r | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })

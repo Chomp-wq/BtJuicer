@@ -362,6 +362,28 @@ function Get-WinNetAdapters {
         })
 }
 
+# Every physical adapter that can carry traffic, connected or not, and
+# whether IPv6 is on in it: the content protection covers them all, so that
+# a Wi-Fi that connects later is already filtered.
+function Get-WinNetAdaptersAll {
+    , @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -in 'Up', 'Disconnected' } | ForEach-Object {
+            $v6 = $true
+            try { $v6 = [bool](Get-NetAdapterBinding -Name $_.Name -ComponentID 'ms_tcpip6' -ErrorAction Stop).Enabled } catch { Write-Verbose "Sin datos de IPv6 de $($_.Name)" }
+            @{ Guid = [string]$_.InterfaceGuid; Name = [string]$_.Name; Description = [string]$_.InterfaceDescription; Ipv6 = $v6 }
+        })
+}
+
+# Whether a DNS server answers now: one quick question, from no cache.
+function Test-WinDnsServer {
+    param([string]$Server)
+    try {
+        $null = Resolve-DnsName -Name 'www.msftconnecttest.com' -Server $Server -Type A -DnsOnly -NoHostsFile -QuickTimeout -ErrorAction Stop
+        $true
+    } catch {
+        $false
+    }
+}
+
 # Clearing first and then setting is the only way to bring back exactly what
 # was there: Set-DnsClientServerAddress leaves alone a family it is not given.
 function Set-WinDns {
@@ -659,6 +681,8 @@ function New-JuicerWindowsBackend {
         AppxAdd      = ${function:Add-WinAppx}
         NetAdapters  = ${function:Get-WinNetAdapters}
         DnsSet       = ${function:Set-WinDns}
+        NetAdaptersAll = ${function:Get-WinNetAdaptersAll}
+        DnsProbe     = ${function:Test-WinDnsServer}
         FeatRead     = ${function:Read-WinFeature}
         FeatSet      = ${function:Set-WinFeature}
         FpsBackend   = ${function:Get-WinFpsBackend}
@@ -701,6 +725,7 @@ function New-JuicerMemoryBackend {
         NvPredefined = @{}  # 'exe|id' -> value NVIDIA ships for that game
         Running  = New-Object System.Collections.ArrayList   # .exe names open now
         Incidents = New-Object System.Collections.ArrayList  # @{ Exe; Kind; Time; Module }
+        DnsDown  = New-Object System.Collections.ArrayList   # DNS servers that do not answer
         FpsExact = @{}    # exe -> fractional cap (RTSS)
         FpsEngines = $null  # engines the PC has; null = just FpsBackend
         Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
@@ -765,6 +790,8 @@ function New-JuicerMemoryBackend {
             $script:Mem.Appx[$Name] = @{ Installed = $true; Provisioned = $false }
         }
         NetAdapters = { , @($script:Mem.Adapters) }
+        NetAdaptersAll = { , @($script:Mem.Adapters) }
+        DnsProbe    = { param($Server) $script:Mem.DnsDown -notcontains $Server }
         # What Windows does: the static servers live in NameServer, empty when
         # they come from DHCP.
         DnsSet      = {

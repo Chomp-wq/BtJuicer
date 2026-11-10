@@ -72,6 +72,103 @@ Describe 'Debloat' {
     }
 }
 
+Describe 'Protección contra contenido adulto' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        $script:Clean = @('185.228.168.10', '185.228.169.11')
+    }
+
+    It 'se activa: DNS filtrado en cada adaptador, búsqueda segura y sin DNS propio en los navegadores' {
+        Test-JuicerShield | Should -BeFalse
+        $r = @(Enable-JuicerShield)
+        Test-JuicerShield | Should -BeTrue
+        $r.Count | Should -BeGreaterThan 10
+        foreach ($a in @(Get-JuicerShieldAdapters)) {
+            $d = Get-JuicerDnsServers $a.Guid
+            $d.V4 | Should -Be $Clean
+            $d.V6 | Should -Be @('2a0d:2a00:1::1', '2a0d:2a00:2::1')
+        }
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'DnsOverHttpsMode').Value | Should -Be 'off'
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceGoogleSafeSearch').Value | Should -Be 1
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceYouTubeRestrict').Value | Should -Be 1
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Edge' 'ForceBingSafeSearch').Value | Should -Be 2
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\BraveSoftware\Brave' 'DnsOverHttpsMode').Value | Should -Be 'off'
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Mozilla\Firefox\DNSOverHTTPS' 'Enabled').Value | Should -Be 0
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Mozilla\Firefox\DNSOverHTTPS' 'Locked').Value | Should -Be 1
+        $i = Get-JuicerShieldInfo
+        $i.Since | Should -Not -BeNullOrEmpty
+        $i.Provider | Should -Be 'CleanBrowsing'
+        # Again, nothing to do: the task every half hour costs nothing.
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+        @(Enable-JuicerShield) | Should -BeNullOrEmpty
+    }
+
+    It 'se repone sola si algo la cambia, y nada de Win Juicer la quita' {
+        [void](Enable-JuicerShield)
+        $eth = $M.Backend.State.Adapters[0].Guid
+        & (Get-JuicerBackend).DnsSet $eth @('8.8.8.8') @()
+        Remove-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceGoogleSafeSearch'
+        $fixed = @(Repair-JuicerShield)
+        $fixed | Should -Contain 'Chrome: búsqueda segura de Google'
+        @($fixed | Where-Object { $_ -like 'DNS filtrado*Ethernet' }).Count | Should -Be 1
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        # Win Juicer's own DNS chooser cannot change it, and undoing everything leaves it.
+        (Invoke-JuicerTweak (New-JuicerDnsTweak 'Google')).Outcome | Should -Be 'NoAplica'
+        [void](Undo-JuicerAll)
+        Test-JuicerShield | Should -BeTrue
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceGoogleSafeSearch').Value | Should -Be 1
+        # And no command turns it off.
+        @(Get-Command -Module WinJuicer | Where-Object { $_.Name -like '*JuicerShield*' -and $_.Verb -in 'Disable', 'Remove', 'Unregister', 'Clear', 'Reset', 'Stop' }) | Should -BeNullOrEmpty
+    }
+
+    It 'deshacer un DNS de antes no quita el filtrado' {
+        (Invoke-JuicerTweak (New-JuicerDnsTweak 'Google')).Outcome | Should -Be 'Aplicado'
+        [void](Enable-JuicerShield)
+        (Undo-JuicerTweak 'red.dns').Outcome | Should -Be 'Deshecho'
+        foreach ($a in @(Get-JuicerShieldAdapters)) { (Get-JuicerDnsServers $a.Guid).V4 | Should -Be $Clean }
+    }
+
+    It 'si CleanBrowsing no responde, Cloudflare para familias; nunca un DNS sin filtro' {
+        [void]$M.Backend.State.DnsDown.Add('185.228.168.10')
+        [void]$M.Backend.State.DnsDown.Add('185.228.169.11')
+        [void](Enable-JuicerShield)
+        $eth = $M.Backend.State.Adapters[0].Guid
+        (Get-JuicerDnsServers $eth).V4 | Should -Be @('1.1.1.3', '1.0.0.3')
+        (Get-JuicerShieldInfo).Provider | Should -Be 'Cloudflare'
+        # Back to CleanBrowsing when it answers again.
+        $M.Backend.State.DnsDown.Clear()
+        @(Repair-JuicerShield).Count | Should -BeGreaterThan 0
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        # With no answer from any (no network), it stays filtered as it is.
+        foreach ($ip in '185.228.168.10', '185.228.169.11', '1.1.1.3', '1.0.0.3') { [void]$M.Backend.State.DnsDown.Add($ip) }
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+    }
+
+    It 'un adaptador sin IPv6 recibe sólo los de IPv4, y no se vuelve a tocar' {
+        $M.Backend.State.Adapters[0].Ipv6 = $false
+        [void](Enable-JuicerShield)
+        $eth = $M.Backend.State.Adapters[0].Guid
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        (Get-JuicerDnsServers $eth).V6 | Should -BeNullOrEmpty
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+    }
+
+    It 'desde la línea de órdenes: activar, el estado y mantenerla; desactivarla no existe' {
+        @(Start-Juicer -ProteccionAdultos Estado 6>$null)[-1] | Should -Be 0
+        Test-JuicerShield | Should -BeFalse
+        @(Start-Juicer -ProteccionAdultos Activar -Si 6>$null)[-1] | Should -Be 0
+        Test-JuicerShield | Should -BeTrue
+        @(Start-Juicer -ProteccionAdultos Mantener 6>$null)[-1] | Should -Be 0
+        { Start-Juicer -ProteccionAdultos Desactivar } | Should -Throw
+        [void](Start-Juicer -Dns Google -Si 6>$null)
+        (Get-JuicerDnsServers $M.Backend.State.Adapters[0].Guid).V4 | Should -Be $Clean
+        @(Get-JuicerShieldExplanation).Count | Should -Be 3
+        (Get-JuicerShieldExplanation) -join ' ' | Should -BeLike '*para siempre*'
+    }
+}
+
 Describe 'DNS' {
     It 'los proveedores tienen direcciones válidas' {
         $p = Get-JuicerDnsProviders

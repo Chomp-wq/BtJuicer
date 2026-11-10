@@ -69,6 +69,9 @@ La ventana empieza **sencilla**, para que cualquiera pueda usarla: la pestaña
 
 Con eso, más **Equipo**, **Juegos** y **Deshacer**, no hace falta nada más.
 
+Debajo, **Protección contra contenido adulto**: opcional y para siempre (ver
+más abajo).
+
 **Modo avanzado**, la casilla de arriba a la derecha, es para quien sabe lo que
 toca: añade el resto de pestañas y abre **Ajustes**, donde eliges una a una las
 optimizaciones. Se recuerda para la próxima vez.
@@ -772,6 +775,42 @@ desde Microsoft Store** con winget. OneDrive también se puede desinstalar, salv
 que tus carpetas vivan dentro de él: entonces Win Juicer se niega y dice por
 qué.
 
+### Protección contra contenido adulto (opcional, y para siempre)
+
+En **Empezar**, o en la consola (opción 15, o `-ProteccionAdultos Activar`).
+Bloquea las webs para adultos **en todo el equipo**, en cualquier navegador,
+app o juego, y obliga a la búsqueda segura. Nada filtra dentro del PC, así que
+nada va más lento:
+
+- **DNS filtrado** en cada adaptador físico, conectado o no, IPv4 e IPv6: el
+  filtro de adultos de [CleanBrowsing](https://cleanbrowsing.org/filters/),
+  con millones de dominios en listas que ellos mantienen al día. No bloquea
+  Reddit, YouTube ni las VPN. Una consulta cuesta lo mismo que con cualquier
+  DNS público, y Windows guarda las respuestas. Si CleanBrowsing no responde,
+  Cloudflare para familias (1.1.1.3) hasta que vuelva: nunca un DNS sin
+  filtro, y nunca te quedas sin internet.
+- **Navegadores:** en Chrome, Edge y Brave, por política, sin su DNS cifrado
+  propio (preguntan al filtrado), con la búsqueda segura de Google y el modo
+  restringido de YouTube (moderado) obligatorios, y en Edge, la búsqueda
+  segura estricta de Bing. En Firefox, su DNS cifrado propio apagado y
+  bloqueado. Chrome y Edge dirán que los «administra tu organización»: son
+  estas reglas.
+- **Para siempre:** se activa tras dos confirmaciones (en la consola,
+  escribiendo ACTIVAR) y después Win Juicer no la desactiva: no hay botón ni
+  orden para quitarla, «Deshacer todo» no la toca y el DNS queda fijo.
+  Una tarea de Windows (como SYSTEM, desde la copia protegida de `Program
+  Files`) la repone sola al arrancar, al iniciar sesión, al conectar una red
+  y cada media hora, con la prioridad más baja; si nada ha cambiado, no hace
+  nada.
+- **Lo que no puede:** ver dentro de redes sociales o apps que sirven ese
+  contenido desde sus propios dominios, impedir una VPN o Tor, ni obligar a
+  la búsqueda segura en Firefox (las webs para adultos sí se bloquean). En
+  redes de empresa con DNS propio, o de hotel cuyo portal sólo responde a su
+  DNS, puede que no se pueda entrar. Y quien administra el equipo siempre
+  puede desmontarla a mano: ningún programa puede impedirlo, y Win Juicer no
+  se esconde ni lucha contra Windows para intentarlo. Lo que hace es no
+  ponerlo fácil.
+
 ### DNS
 
 Cloudflare (normal, contra malware, familiar), Google, Quad9, AdGuard (normal y
@@ -869,6 +908,10 @@ el equipo sin vuelta atrás.
 - Cada ajuste se aplica entero o no se aplica: si una parte falla, lo ya hecho
   se revierte en el momento.
 - Si Windows no conserva un cambio, se dice en lugar de darlo por bueno.
+- La única excepción, a propósito, es la **protección contra contenido
+  adulto**: no pasa por el diario, y ni «Deshacer» ni «Deshacer todo» la
+  quitan (ver arriba). Deshacer un DNS que pusiste antes de activarla deja el
+  filtrado como está.
 - Antes de aplicar intenta crear un **punto de restauración**, y dice si
   Windows lo creó o no (sólo permite uno cada 24 horas).
 
