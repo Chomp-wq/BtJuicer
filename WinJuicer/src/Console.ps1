@@ -1098,33 +1098,95 @@ function Show-JuicerMyths {
 
 function Write-JuicerShieldState {
     $i = Get-JuicerShieldInfo
-    if ($i.Active) {
-        $since = ''
-        try { $since = ' desde el ' + ([datetime]$i.Since).ToString('d') } catch { Write-Verbose "Fecha ilegible: $($i.Since)" }
-        Write-JuicerWrapped "Protección contra contenido adulto: ACTIVA$since, con $($i.ProviderTitle). No se puede desactivar." 2 'Green'
-    } else {
+    if (-not $i.Active) {
         Write-JuicerWrapped 'Protección contra contenido adulto: no activada.' 2 'Gray'
+        return
     }
+    $since = ''
+    try { $since = ' desde el ' + ([datetime]$i.Since).ToString('d') } catch { Write-Verbose "Fecha ilegible: $($i.Since)" }
+    Write-JuicerWrapped "Protección contra contenido adulto: ACTIVA$since, $($i.LevelTitle.ToLowerInvariant()), con $($i.ProviderTitle). No se puede desactivar." 2 'Green'
+    $blocked = @(Format-JuicerShieldBlocked $i.Blocked)
+    if ($blocked.Count -gt 0) { Write-JuicerWrapped ('Bloqueadas para siempre: ' + ($blocked -join ', ') + '.') 2 'Gray' }
+    if ($i.Firewall -eq 'Otro') { Write-JuicerWrapped 'El cortafuegos lo lleva otro programa: los bloqueos del de Windows no se aplican, el filtro sí.' 2 'Yellow' }
 }
 
-# -ProteccionAdultos: Activar (the user types ACTIVAR, or -Si), Mantener
-# (what its task runs) or Estado. There is no way to turn it off.
+# The list of blocked sites, said briefly: X, Reddit and Tumblr by name.
+function Format-JuicerShieldBlocked {
+    param($Blocked)
+    if (-not $Blocked) { return }
+    foreach ($p in @($Blocked.Presets)) { $script:ShieldPresets[$p].Title }
+    @($Blocked.Sites)
+}
+
+function Write-JuicerShieldFixed {
+    param($Fixed)
+    foreach ($x in @($Fixed)) { Write-Host "  [ok] $x" -ForegroundColor Green }
+}
+
+# -ProteccionAdultos: Activar (at -NivelProteccion Estricto, the default, or
+# Equilibrado; the user types ACTIVAR, or -Si), Subir (to estricta), Bloquear
+# (-BloquearWeb, for good), Mantener (what its task runs) or Estado. There is
+# no way to turn it off or lower it.
 function Invoke-JuicerShieldCli {
-    param([string]$What, [switch]$Yes)
+    param([string]$What, [switch]$Yes, [string]$Level = '', [string[]]$Sites = @())
     switch ($What) {
         'Mantener' { [void](Repair-JuicerShield); return 0 }
         'Estado' { Write-JuicerShieldState; return 0 }
         'Activar' {
-            if (Test-JuicerShield) { Write-JuicerShieldState; return 0 }
-            foreach ($l in (Get-JuicerShieldExplanation)) { Write-JuicerWrapped $l 2 'Gray'; Write-Host '' }
+            if (Test-JuicerShield) {
+                Write-JuicerShieldState
+                if ($Level -eq 'Estricto' -and (Get-JuicerShieldLevel) -lt 2) { Write-JuicerWrapped 'Para pasar a la estricta: -ProteccionAdultos Subir.' 2 'Gray' }
+                return 0
+            }
+            $n = 2
+            if ($Level -eq 'Equilibrado') { $n = 1 }
+            elseif (-not $Level -and -not $Yes) {
+                Write-JuicerWrapped 'Dos niveles. Estricta (la recomendada si es para dejar el porno): además de las webs para adultos cierra proxies, VPN y Reddit, quita las ventanas privadas y deja el DNS sólo al filtro. Equilibrada: las webs para adultos y los atajos más comunes; Reddit, las VPN y las ventanas privadas siguen. Se puede subir de equilibrada a estricta, nunca bajar.' 2 'Gray'
+                $c = Read-JuicerChoice 'E = estricta (recomendada), Q = equilibrada, Intro para no activarla'
+                if ($c -eq 'Q' -or $c -eq 'q') { $n = 1 } elseif ($c -ne 'E' -and $c -ne 'e') { Write-Host '  No se ha activado.'; return 0 }
+            }
+            Write-Host ''
+            foreach ($l in (Get-JuicerShieldExplanation $n)) { Write-JuicerWrapped $l 2 'Gray'; Write-Host '' }
             # Typed, not a key that slips.
             if (-not $Yes -and (Read-JuicerChoice 'Escribe ACTIVAR para activarla para siempre (Intro para no hacerlo)') -cne 'ACTIVAR') {
                 Write-Host '  No se ha activado.'
                 return 0
             }
-            foreach ($x in @(Enable-JuicerShield)) { Write-Host "  [ok] $x" -ForegroundColor Green }
+            Write-JuicerShieldFixed @(Enable-JuicerShield -Level $n)
             Write-JuicerShieldState
             Write-JuicerWrapped 'Los navegadores abiertos la aplican al cerrarlos y abrirlos de nuevo.' 2 'Gray'
+            return 0
+        }
+        'Subir' {
+            if (-not (Test-JuicerShield)) { Write-JuicerWrapped 'La protección no está activada: -ProteccionAdultos Activar.' 2 'Yellow'; return 1 }
+            if ((Get-JuicerShieldLevel) -ge 2) { Write-JuicerShieldState; return 0 }
+            foreach ($l in (Get-JuicerShieldExplanation 2)) { Write-JuicerWrapped $l 2 'Gray'; Write-Host '' }
+            if (-not $Yes -and (Read-JuicerChoice 'Escribe SUBIR para pasar a la estricta para siempre (Intro para no hacerlo)') -cne 'SUBIR') {
+                Write-Host '  Sigue en la equilibrada.'
+                return 0
+            }
+            Write-JuicerShieldFixed @(Enable-JuicerShield -Level 2)
+            Write-JuicerShieldState
+            return 0
+        }
+        'Bloquear' {
+            if (-not (Test-JuicerShield)) { Write-JuicerWrapped 'La protección no está activada: -ProteccionAdultos Activar.' 2 'Yellow'; return 1 }
+            $list = @($Sites | Where-Object { $_ })
+            if ($list.Count -eq 0) {
+                if ($Yes) { Write-JuicerWrapped 'Di qué webs con -BloquearWeb: X, Reddit, Tumblr o ejemplo.com, separadas por comas.' 2 'Yellow'; return 2 }
+                $list = @((Read-JuicerChoice 'Web que bloquear (ejemplo.com), o X, Reddit o Tumblr; Intro para volver') -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+                if ($list.Count -eq 0) { return 0 }
+            }
+            $bad = @($list | Where-Object { $s = $_; -not @($script:ShieldPresets.Keys | Where-Object { $_ -eq $s }) -and @(ConvertTo-JuicerBlockHosts $s).Count -eq 0 })
+            if ($bad.Count -gt 0) { Write-JuicerWrapped ('No parece una web: ' + ($bad -join ', ') + '. Escríbela como ejemplo.com.') 2 'Yellow'; return 2 }
+            Write-JuicerWrapped ('Se bloquearán para siempre en todo el equipo: ' + ($list -join ', ') + '. No se podrán desbloquear desde Win Juicer.') 2 'Gray'
+            if (-not $Yes -and (Read-JuicerChoice 'Escribe BLOQUEAR para hacerlo (Intro para no hacerlo)') -cne 'BLOQUEAR') {
+                Write-Host '  No se ha bloqueado nada.'
+                return 0
+            }
+            $added = @(Add-JuicerShieldBlock $list)
+            if ($added.Count -eq 0) { Write-Host '  Ya estaban bloqueadas.' } else { Write-Host "  [ok] Bloqueadas para siempre ($($added.Count) nombres)." -ForegroundColor Green }
+            Write-JuicerShieldState
             return 0
         }
     }
@@ -1132,9 +1194,28 @@ function Invoke-JuicerShieldCli {
 }
 
 function Show-JuicerShield {
-    Write-JuicerHeader 'Protección contra contenido adulto'
-    if (Test-JuicerShield) { Write-JuicerShieldState } else { [void](Invoke-JuicerShieldCli 'Activar') }
-    Wait-JuicerKey
+    while ($true) {
+        Write-JuicerHeader 'Protección contra contenido adulto'
+        if (-not (Test-JuicerShield)) {
+            [void](Invoke-JuicerShieldCli 'Activar')
+            Wait-JuicerKey
+            return
+        }
+        Write-JuicerShieldState
+        $up = (Get-JuicerShieldLevel) -lt 2
+        Write-Host ''
+        if ($up) { Write-Host '  [1] Pasar a la estricta (para siempre)' }
+        Write-Host '  [2] Bloquear una web para siempre: X, Reddit, Tumblr o la que digas'
+        Write-Host '  [0] Volver'
+        switch (Read-JuicerChoice) {
+            '1' { if ($up) { [void](Invoke-JuicerShieldCli 'Subir'); Wait-JuicerKey } }
+            '2' {
+                try { [void](Invoke-JuicerShieldCli 'Bloquear') } catch { Write-Host "  $_" -ForegroundColor Yellow }
+                Wait-JuicerKey
+            }
+            default { return }
+        }
+    }
 }
 
 function Show-JuicerMainMenu {
@@ -1156,7 +1237,7 @@ function Show-JuicerMainMenu {
             @('12', 'Lo que no hacemos', 'los «trucos» que circulan, y por qué no'),
             @('13', 'Antes y después', 'arranque, procesos y memoria: qué han cambiado los ajustes'),
             @('14', 'Ajuste fino', 'undervolt de CPU y overclock de GPU para tus componentes, y vigilarlos'),
-            @('15', 'Protección contra contenido adulto', 'opcional y para siempre: bloquea las webs para adultos'),
+            @('15', 'Protección contra contenido adulto', 'opcional y para siempre: bloquea el porno y sus atajos'),
             @('0', 'Salir', '')
         )
         if ($script:UpdateNotice) {
@@ -1267,7 +1348,9 @@ function Start-Juicer {
         [switch]$OptimizarJuegos,
         [switch]$Mantener,
         [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
-        [ValidateSet('', 'Activar', 'Mantener', 'Estado')][string]$ProteccionAdultos = '',
+        [ValidateSet('', 'Activar', 'Subir', 'Bloquear', 'Mantener', 'Estado')][string]$ProteccionAdultos = '',
+        [ValidateSet('', 'Equilibrado', 'Estricto')][string]$NivelProteccion = '',
+        [string[]]$BloquearWeb = @(),
         [int]$Fps,
         [string]$ModoMonitor,
         [switch]$Lista,
@@ -1294,6 +1377,8 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
+    $BloquearWeb = & $split $BloquearWeb
+    if ($BloquearWeb.Count -gt 0 -and -not $ProteccionAdultos) { $ProteccionAdultos = 'Bloquear' }
     $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
@@ -1340,7 +1425,7 @@ function Start-Juicer {
         }
         if ($LimitarFps.Count -eq 0 -and -not $CalibrarJuego -and -not $MotorPacer) { return 0 }
     }
-    if ($ProteccionAdultos) { return (Invoke-JuicerShieldCli $ProteccionAdultos -Yes:$Si) }
+    if ($ProteccionAdultos) { return (Invoke-JuicerShieldCli $ProteccionAdultos -Yes:$Si -Level $NivelProteccion -Sites $BloquearWeb) }
     if ($Mantener) {
         $r = @(Invoke-JuicerUpkeep)
         return $(if (@($r | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })

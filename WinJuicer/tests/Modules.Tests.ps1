@@ -75,63 +75,175 @@ Describe 'Debloat' {
 Describe 'Protección contra contenido adulto' {
     BeforeEach {
         $script:M = New-NetMachine
-        $script:Clean = @('185.228.168.10', '185.228.169.11')
+        $script:Strict = @('185.228.168.168', '185.228.169.168')
+        $script:Adult = @('185.228.168.10', '185.228.169.11')
+        $script:Chrome = 'HKLM\SOFTWARE\Policies\Google\Chrome'
     }
 
-    It 'se activa: DNS filtrado en cada adaptador, búsqueda segura y sin DNS propio en los navegadores' {
+    It 'se activa en la estricta: DNS filtrado en cada adaptador, cortafuegos, navegadores, hosts y la búsqueda de Windows' {
+        Write-JuicerReg 'HKU\S-1-5-21-1-2-3-1001\Software\Microsoft\Windows\CurrentVersion' 'ProgramFilesDir' 'String' 'x'
         Test-JuicerShield | Should -BeFalse
         $r = @(Enable-JuicerShield)
         Test-JuicerShield | Should -BeTrue
-        $r.Count | Should -BeGreaterThan 10
+        (Get-JuicerShieldInfo).Level | Should -Be 2
+        $r.Count | Should -BeGreaterThan 30
         foreach ($a in @(Get-JuicerShieldAdapters)) {
             $d = Get-JuicerDnsServers $a.Guid
-            $d.V4 | Should -Be $Clean
-            $d.V6 | Should -Be @('2a0d:2a00:1::1', '2a0d:2a00:2::1')
+            $d.V4 | Should -Be $Strict
+            $d.V6 | Should -Be @('2a0d:2a00:1::', '2a0d:2a00:2::')
         }
-        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'DnsOverHttpsMode').Value | Should -Be 'off'
-        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceGoogleSafeSearch').Value | Should -Be 1
-        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceYouTubeRestrict').Value | Should -Be 1
+        (Read-JuicerReg $Chrome 'DnsOverHttpsMode').Value | Should -Be 'off'
+        (Read-JuicerReg $Chrome 'ForceGoogleSafeSearch').Value | Should -Be 1
+        (Read-JuicerReg $Chrome 'ForceYouTubeRestrict').Value | Should -Be 2
+        (Read-JuicerReg $Chrome 'IncognitoModeAvailability').Value | Should -Be 1
+        (Read-JuicerReg $Chrome 'BrowserGuestModeEnabled').Value | Should -Be 0
+        (Read-JuicerReg $Chrome 'ProxyMode').Value | Should -Be 'direct'
         (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Edge' 'ForceBingSafeSearch').Value | Should -Be 2
-        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\BraveSoftware\Brave' 'DnsOverHttpsMode').Value | Should -Be 'off'
-        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Mozilla\Firefox\DNSOverHTTPS' 'Enabled').Value | Should -Be 0
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Edge' 'InPrivateModeAvailability').Value | Should -Be 1
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\BraveSoftware\Brave' 'TorDisabled').Value | Should -Be 1
         (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Mozilla\Firefox\DNSOverHTTPS' 'Locked').Value | Should -Be 1
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Mozilla\Firefox' 'DisablePrivateBrowsing').Value | Should -Be 1
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Mozilla\Firefox\Proxy' 'Mode').Value | Should -Be 'none'
+        (Read-JuicerReg 'HKU\S-1-5-21-1-2-3-1001\Software\Microsoft\Windows\CurrentVersion\SearchSettings' 'SafeSearchMode').Value | Should -Be 2
+        # Six firewall rules, as they should be.
+        $fw = $M.Backend.State.Firewall
+        $fw.Count | Should -Be 6
+        foreach ($rule in @(Get-JuicerShieldFwRules 2)) { Test-JuicerShieldFwRule $rule $fw[$rule.Name] | Should -BeTrue -Because $rule.Name }
+        # Opera's VPN, out through the hosts file.
+        $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 api\.sec-tunnel\.com\r?$'
+        $M.Backend.State.Hosts | Should -Match '(?m)^:: api\.sec-tunnel\.com\r?$'
         $i = Get-JuicerShieldInfo
         $i.Since | Should -Not -BeNullOrEmpty
-        $i.Provider | Should -Be 'CleanBrowsing'
-        # Again, nothing to do: the task every half hour costs nothing.
+        $i.Provider | Should -Be 'CleanBrowsingFamilia'
+        $i.Phone | Should -Be 'family-filter-dns.cleanbrowsing.org'
+        # Again, nothing to do: the task every 15 minutes costs nothing.
         @(Repair-JuicerShield) | Should -BeNullOrEmpty
         @(Enable-JuicerShield) | Should -BeNullOrEmpty
+    }
+
+    It 'en la estricta el DNS sólo puede ir al filtro; en la equilibrada, a todo menos a los públicos sin filtro' {
+        $inside = {
+            param($Rules, [string]$Ip)
+            $n = & (Get-Module WinJuicer) { param($x) ConvertTo-JuicerAddressSet @($x) } $Ip
+            $set = & (Get-Module WinJuicer) { param($x) ConvertTo-JuicerAddressSet $x } $Rules
+            @($set | Where-Object { $_.F -eq $n[0].F -and $_.S -le $n[0].S -and $_.E -ge $n[0].E }).Count -gt 0
+        }
+        $strict = (@(Get-JuicerShieldFwRules 2) | Where-Object { $_.Name -eq 'WinJuicer-Proteccion-DNS-UDP' }).Remote
+        foreach ($ip in '185.228.168.168', '185.228.169.168', '1.1.1.3', '1.0.0.3', '2a0d:2a00:1::', '2606:4700:4700::1113', '127.0.0.1', '::1') { & $inside $strict $ip | Should -BeFalse -Because "$ip es el filtro o este PC" }
+        foreach ($ip in '8.8.8.8', '1.1.1.1', '192.168.1.1', '10.0.0.53', '185.228.168.10', '2001:4860:4860::8888', 'fe80::1') { & $inside $strict $ip | Should -BeTrue -Because "$ip no es el filtro" }
+        $soft = (@(Get-JuicerShieldFwRules 1) | Where-Object { $_.Name -eq 'WinJuicer-Proteccion-DNS-TCP' }).Remote
+        foreach ($ip in '8.8.8.8', '1.1.1.1', '9.9.9.9', '45.90.28.7', '2606:4700:4700::1111') { & $inside $soft $ip | Should -BeTrue -Because "$ip es un DNS público sin filtro" }
+        foreach ($ip in '185.228.168.10', '1.1.1.3', '192.168.1.1', '10.0.0.53') { & $inside $soft $ip | Should -BeFalse -Because "$ip sigue funcionando en la equilibrada" }
+        # DNS over TLS and QUIC, closed everywhere; DNS over HTTPS, to the public ones only.
+        foreach ($l in 1, 2) {
+            $rules = @(Get-JuicerShieldFwRules $l)
+            $rules.Count | Should -Be 6
+            @($rules | Where-Object { $_.Port -eq '853' } | ForEach-Object { $_.Remote -join ',' }) | Should -Be @('Any', 'Any')
+            $doh = ($rules | Where-Object { $_.Name -eq 'WinJuicer-Proteccion-DoH-TCP' }).Remote
+            & $inside $doh '8.8.8.8' | Should -BeTrue
+            foreach ($ip in '185.228.168.168', '185.228.168.10', '1.1.1.3') { & $inside $doh $ip | Should -BeFalse }
+        }
+    }
+
+    It 'las direcciones se leen como las devuelve Windows: máscaras, rangos e IPv6' {
+        $m = Get-Module WinJuicer
+        $a = & $m { ConvertTo-JuicerAddressSet @('45.90.28.0/255.255.255.0', '10.0.0.1-10.0.0.9', '10.0.0.5', '2001:db8::/126') }
+        & $m { param($x) ConvertFrom-JuicerAddressSet $x } $a | Should -Be @('10.0.0.1-10.0.0.9', '45.90.28.0-45.90.28.255', '2001:db8::-2001:db8::3')
+        & $m { $null -eq (ConvertTo-JuicerAddressSet @('LocalSubnet')) } | Should -BeTrue
+        & $m { ConvertFrom-JuicerAddressSet (Get-JuicerAddressComplement (ConvertTo-JuicerAddressSet @('0.0.0.0', '127.0.0.0/8', '::', '::1'))) } |
+            Should -Be @('0.0.0.1-126.255.255.255', '128.0.0.0-255.255.255.255', '::2-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff')
+        & $m { ConvertFrom-JuicerIpNumber (ConvertTo-JuicerIpNumber ([Net.IPAddress]::Parse('2001:db8:0:0:1:0:0:1').GetAddressBytes())) 6 } | Should -Be '2001:db8::1:0:0:1'
     }
 
     It 'se repone sola si algo la cambia, y nada de Win Juicer la quita' {
         [void](Enable-JuicerShield)
         $eth = $M.Backend.State.Adapters[0].Guid
         & (Get-JuicerBackend).DnsSet $eth @('8.8.8.8') @()
-        Remove-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceGoogleSafeSearch'
+        Remove-JuicerReg $Chrome 'ForceGoogleSafeSearch'
+        Write-JuicerReg $Chrome 'IncognitoModeAvailability' 'DWord' 0
         $fixed = @(Repair-JuicerShield)
         $fixed | Should -Contain 'Chrome: búsqueda segura de Google'
+        $fixed | Should -Contain 'Chrome: sin ventanas privadas'
         @($fixed | Where-Object { $_ -like 'DNS filtrado*Ethernet' }).Count | Should -Be 1
-        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Strict
         # Win Juicer's own DNS chooser cannot change it, and undoing everything leaves it.
         (Invoke-JuicerTweak (New-JuicerDnsTweak 'Google')).Outcome | Should -Be 'NoAplica'
         [void](Undo-JuicerAll)
         Test-JuicerShield | Should -BeTrue
-        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
-        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'ForceGoogleSafeSearch').Value | Should -Be 1
-        # And no command turns it off.
-        @(Get-Command -Module WinJuicer | Where-Object { $_.Name -like '*JuicerShield*' -and $_.Verb -in 'Disable', 'Remove', 'Unregister', 'Clear', 'Reset', 'Stop' }) | Should -BeNullOrEmpty
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Strict
+        (Read-JuicerReg $Chrome 'ForceGoogleSafeSearch').Value | Should -Be 1
+        $M.Backend.State.Firewall.Count | Should -Be 6
+        # And no command turns it off, lowers it or unblocks a site.
+        @(Get-Command -Module WinJuicer | Where-Object { $_.Name -like '*JuicerShield*' -and $_.Verb -in 'Disable', 'Remove', 'Unregister', 'Clear', 'Reset', 'Stop', 'Set' }) | Should -BeNullOrEmpty
+    }
+
+    It 'el cortafuegos: una regla apagada, estrechada o borrada vuelve; si algo insiste, no hay pelea' {
+        [void](Enable-JuicerShield)
+        $fw = $M.Backend.State.Firewall
+        $fw['WinJuicer-Proteccion-DNS-UDP'].Enabled = $false
+        $fw['WinJuicer-Proteccion-DoT'].Program = 'C:\Juego\juego.exe'
+        $fw.Remove('WinJuicer-Proteccion-DoH-TCP')
+        [void]$M.Backend.State.FwOff.Add('Public')
+        $fixed = @(Repair-JuicerShield)
+        @($fixed | Where-Object { $_ -like 'Cortafuegos:*' }).Count | Should -Be 3
+        $fixed | Should -Contain 'Cortafuegos de Windows: encendido (lo necesitan sus bloqueos)'
+        $fw['WinJuicer-Proteccion-DNS-UDP'].Enabled | Should -BeTrue
+        $fw['WinJuicer-Proteccion-DoT'].Program | Should -Be 'Any'
+        @($M.Backend.State.FwOff).Count | Should -Be 0
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+        # Something keeps undoing the same rule: put back once, then it waits.
+        $fw['WinJuicer-Proteccion-DNS-UDP'].Enabled = $false
+        @(Repair-JuicerShield) | Should -Contain 'Cortafuegos: el DNS sólo va al filtro (UDP)'
+        $fw['WinJuicer-Proteccion-DNS-UDP'].Enabled = $false
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+        $fw['WinJuicer-Proteccion-DNS-UDP'].Enabled | Should -BeFalse
+        # A few minutes later, put back.
+        Write-JuicerReg 'HKLM\SOFTWARE\WinJuicer\Proteccion' 'CortafuegosEscrito' 'String' ((Get-Date).AddMinutes(-3).ToString('s') + '|2: WinJuicer-Proteccion-DNS-UDP')
+        @(Repair-JuicerShield) | Should -Contain 'Cortafuegos: el DNS sólo va al filtro (UDP)'
+        # Another program in charge of the firewall: Windows' stays off.
+        $M.Backend.State.FwThirdParty = $true
+        [void]$M.Backend.State.FwOff.Add('Domain')
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+        (Get-JuicerShieldInfo).Firewall | Should -Be 'Otro'
+    }
+
+    It 'sube de la equilibrada a la estricta, y nunca baja' {
+        [void](Enable-JuicerShield -Level 1)
+        $eth = $M.Backend.State.Adapters[0].Guid
+        (Get-JuicerShieldInfo).Level | Should -Be 1
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Adult
+        (Read-JuicerReg $Chrome 'ForceYouTubeRestrict').Value | Should -Be 1
+        Read-JuicerReg $Chrome 'IncognitoModeAvailability' | Should -BeNullOrEmpty
+        (Get-JuicerShieldInfo).Phone | Should -Be 'adult-filter-dns.cleanbrowsing.org'
+        @(Enable-JuicerShield -Level 1) | Should -BeNullOrEmpty
+        $up = @(Enable-JuicerShield -Level 2)
+        $up | Should -Contain 'Chrome: sin ventanas privadas'
+        $up | Should -Contain 'Cortafuegos: el DNS sólo va al filtro (UDP)'
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Strict
+        (Read-JuicerReg $Chrome 'ForceYouTubeRestrict').Value | Should -Be 2
+        @(Enable-JuicerShield -Level 1) | Should -BeNullOrEmpty
+        (Get-JuicerShieldInfo).Level | Should -Be 2
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Strict
+    }
+
+    It 'quien la activó antes de los niveles sigue en la equilibrada, y se completa sola' {
+        Write-JuicerReg 'HKLM\SOFTWARE\WinJuicer\Proteccion' 'Activada' 'DWord' 1
+        $fixed = @(Repair-JuicerShield)
+        (Get-JuicerShieldInfo).Level | Should -Be 1
+        (Get-JuicerDnsServers $M.Backend.State.Adapters[0].Guid).V4 | Should -Be $Adult
+        @($fixed | Where-Object { $_ -like 'Cortafuegos:*' }).Count | Should -Be 6
+        $fixed | Should -Contain 'Archivo hosts: la VPN de Opera y las webs que bloqueas'
     }
 
     It 'deshacer un DNS de antes no quita el filtrado' {
         (Invoke-JuicerTweak (New-JuicerDnsTweak 'Google')).Outcome | Should -Be 'Aplicado'
         [void](Enable-JuicerShield)
         (Undo-JuicerTweak 'red.dns').Outcome | Should -Be 'Deshecho'
-        foreach ($a in @(Get-JuicerShieldAdapters)) { (Get-JuicerDnsServers $a.Guid).V4 | Should -Be $Clean }
+        foreach ($a in @(Get-JuicerShieldAdapters)) { (Get-JuicerDnsServers $a.Guid).V4 | Should -Be $Strict }
     }
 
     It 'si CleanBrowsing no responde, Cloudflare para familias; nunca un DNS sin filtro' {
-        [void]$M.Backend.State.DnsDown.Add('185.228.168.10')
-        [void]$M.Backend.State.DnsDown.Add('185.228.169.11')
+        foreach ($ip in $Strict) { [void]$M.Backend.State.DnsDown.Add($ip) }
         [void](Enable-JuicerShield)
         $eth = $M.Backend.State.Adapters[0].Guid
         (Get-JuicerDnsServers $eth).V4 | Should -Be @('1.1.1.3', '1.0.0.3')
@@ -139,33 +251,98 @@ Describe 'Protección contra contenido adulto' {
         # Back to CleanBrowsing when it answers again.
         $M.Backend.State.DnsDown.Clear()
         @(Repair-JuicerShield).Count | Should -BeGreaterThan 0
-        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Strict
         # With no answer from any (no network), it stays filtered as it is.
-        foreach ($ip in '185.228.168.10', '185.228.169.11', '1.1.1.3', '1.0.0.3') { [void]$M.Backend.State.DnsDown.Add($ip) }
+        foreach ($ip in @($Strict) + @('1.1.1.3', '1.0.0.3')) { [void]$M.Backend.State.DnsDown.Add($ip) }
         @(Repair-JuicerShield) | Should -BeNullOrEmpty
-        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Strict
     }
 
     It 'un adaptador sin IPv6 recibe sólo los de IPv4, y no se vuelve a tocar' {
         $M.Backend.State.Adapters[0].Ipv6 = $false
         [void](Enable-JuicerShield)
         $eth = $M.Backend.State.Adapters[0].Guid
-        (Get-JuicerDnsServers $eth).V4 | Should -Be $Clean
+        (Get-JuicerDnsServers $eth).V4 | Should -Be $Strict
         (Get-JuicerDnsServers $eth).V6 | Should -BeNullOrEmpty
         @(Repair-JuicerShield) | Should -BeNullOrEmpty
     }
 
-    It 'desde la línea de órdenes: activar, el estado y mantenerla; desactivarla no existe' {
+    It 'el archivo hosts: lo de antes se queda; lo que se añade para saltársela, no' {
+        $M.Backend.State.Hosts += "93.184.216.34 antes.example`r`n192.168.1.10 nas.local`r`n"
+        [void](Enable-JuicerShield)
+        $h = $M.Backend.State.Hosts
+        $h | Should -Match '(?m)^93\.184\.216\.34 antes\.example\r?$'
+        $h | Should -Match '(?m)^192\.168\.1\.10 nas\.local\r?$'
+        $h | Should -Match 'Copyright \(c\) 1993-2009'
+        # Added later: a public address is switched off, a local one stays.
+        $M.Backend.State.Hosts += "104.18.0.1 www.webporno.example # para saltar el filtro`r`n10.0.0.5 intranet`r`n2606:4700::1 otra.example`r`n"
+        $fixed = @(Repair-JuicerShield)
+        @($fixed | Where-Object { $_ -like 'Archivo hosts: desactivada*' }).Count | Should -Be 2
+        $h = $M.Backend.State.Hosts
+        $h | Should -Match '(?m)^# Win Juicer \(proteccion\) la desactivo: 104\.18\.0\.1 www\.webporno\.example'
+        $h | Should -Match '(?m)^# Win Juicer \(proteccion\) la desactivo: 2606:4700::1 otra\.example'
+        $h | Should -Match '(?m)^10\.0\.0\.5 intranet\r?$'
+        # Taking the mark off brings it back to a comment; and the block, if deleted, comes back.
+        $M.Backend.State.Hosts = $h.Replace('# Win Juicer (proteccion) la desactivo: 104.18.0.1', '104.18.0.1') -replace '(?m)^(0\.0\.0\.0|::) api\.sec-tunnel\.com\r?\n', ''
+        $fixed = @(Repair-JuicerShield)
+        $fixed | Should -Contain 'Archivo hosts: la VPN de Opera y las webs que bloqueas'
+        $M.Backend.State.Hosts | Should -Be $h
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+    }
+
+    It 'bloquea webs para siempre: X, Reddit, Tumblr o la que se diga, y no se pueden quitar' {
+        { Add-JuicerShieldBlock 'ejemplo.com' } | Should -Throw '*no está activada*'
+        [void](Enable-JuicerShield)
+        $M.Backend.State.Hosts += "151.101.1.140 www.reddit.com`r`n"
+        $added = @(Add-JuicerShieldBlock @('Reddit', 'https://www.Ejemplo.com/ruta?x=1', 'bücher.de'))
+        $added | Should -Contain 'old.reddit.com'
+        $added | Should -Contain 'ejemplo.com'
+        $added | Should -Contain 'www.ejemplo.com'
+        $added | Should -Contain 'xn--bcher-kva.de'
+        $h = $M.Backend.State.Hosts
+        $h | Should -Match '(?m)^0\.0\.0\.0 old\.reddit\.com\r?$'
+        $h | Should -Match '(?m)^:: ejemplo\.com\r?$'
+        # A line that sent a blocked name somewhere public goes off too.
+        $h | Should -Match '(?m)^# Win Juicer \(proteccion\) la desactivo: 151\.101\.1\.140 www\.reddit\.com'
+        $s = Get-JuicerShieldBlockedSummary
+        $s.Presets | Should -Be @('Reddit')
+        $s.Sites | Should -Be @('ejemplo.com', 'xn--bcher-kva.de')
+        @(Add-JuicerShieldBlock 'ejemplo.com') | Should -BeNullOrEmpty
+        { Add-JuicerShieldBlock @('x.com', 'no es una web') } | Should -Throw '*no es una web*'
+        { Add-JuicerShieldBlock @('localhost') } | Should -Throw
+        { Add-JuicerShieldBlock @('8.8.8.8') } | Should -Throw
+        @(Get-JuicerShieldBlocked) | Should -Not -Contain 'x.com'
+        (Get-JuicerShieldInfo).Blocked.Presets | Should -Be @('Reddit')
+        # A list deleted by hand comes back from the hosts file? No: from the
+        # registry; and the hosts file follows the list.
+        $before = @(Get-JuicerShieldBlocked).Count
+        [void](Add-JuicerShieldBlock 'X')
+        @(Get-JuicerShieldBlocked).Count | Should -BeGreaterThan $before
+        @((Get-JuicerShieldInfo).Blocked.Presets) | Should -Be @('X', 'Reddit')
+    }
+
+    It 'desde la línea de órdenes: activar con nivel, subir, bloquear, el estado y mantenerla; desactivarla no existe' {
         @(Start-Juicer -ProteccionAdultos Estado 6>$null)[-1] | Should -Be 0
         Test-JuicerShield | Should -BeFalse
-        @(Start-Juicer -ProteccionAdultos Activar -Si 6>$null)[-1] | Should -Be 0
+        @(Start-Juicer -ProteccionAdultos Bloquear -BloquearWeb ejemplo.com -Si 6>$null)[-1] | Should -Be 1
+        @(Start-Juicer -ProteccionAdultos Activar -NivelProteccion Equilibrado -Si 6>$null)[-1] | Should -Be 0
         Test-JuicerShield | Should -BeTrue
+        (Get-JuicerShieldInfo).Level | Should -Be 1
+        @(Start-Juicer -ProteccionAdultos Subir -Si 6>$null)[-1] | Should -Be 0
+        (Get-JuicerShieldInfo).Level | Should -Be 2
+        @(Start-Juicer -BloquearWeb 'Tumblr,ejemplo.com' -Si 6>$null)[-1] | Should -Be 0
+        @(Get-JuicerShieldBlocked) | Should -Contain '64.media.tumblr.com'
+        @(Get-JuicerShieldBlocked) | Should -Contain 'www.ejemplo.com'
+        @(Start-Juicer -ProteccionAdultos Bloquear -BloquearWeb 'no es una web' -Si 6>$null)[-1] | Should -Be 2
         @(Start-Juicer -ProteccionAdultos Mantener 6>$null)[-1] | Should -Be 0
         { Start-Juicer -ProteccionAdultos Desactivar } | Should -Throw
+        { Start-Juicer -ProteccionAdultos Activar -NivelProteccion Ninguno } | Should -Throw
         [void](Start-Juicer -Dns Google -Si 6>$null)
-        (Get-JuicerDnsServers $M.Backend.State.Adapters[0].Guid).V4 | Should -Be $Clean
-        @(Get-JuicerShieldExplanation).Count | Should -Be 3
-        (Get-JuicerShieldExplanation) -join ' ' | Should -BeLike '*para siempre*'
+        (Get-JuicerDnsServers $M.Backend.State.Adapters[0].Guid).V4 | Should -Be $Strict
+        foreach ($l in 1, 2) {
+            @(Get-JuicerShieldExplanation $l).Count | Should -Be 4
+            (Get-JuicerShieldExplanation $l) -join ' ' | Should -BeLike '*para siempre*'
+        }
     }
 }
 

@@ -526,38 +526,89 @@ Import-Module '$psm' -Force
         $LASTEXITCODE | Should -Be 0
     }
 
-    # Last: it is for good, and the runner is thrown away after.
-    It 'activa la protección contra contenido adulto: políticas, su tarea y su copia, sin tocar el DNS del runner' {
+    # Before the protection: once its task exists, a firewall change starts
+    # it, and it would filter the runner's own DNS.
+    It 'el cortafuegos: escribe una regla como las de la protección (apagada), la lee igual y la quita' {
         $b = Get-JuicerBackend
-        $saved = @{ DnsSet = $b.DnsSet; All = $b.NetAdaptersAll }
-        $calls = New-Object System.Collections.ArrayList
+        $m = Get-Module WinJuicer
+        $remote = @(& $m { ConvertFrom-JuicerAddressSet (Get-JuicerAddressComplement (ConvertTo-JuicerAddressSet @('0.0.0.0', '127.0.0.0/8', '::', '::1', '185.228.168.168', '2a0d:2a00:1::'))) })
+        $rule = @{ Name = 'WinJuicer-Prueba-DNS'; Title = 'Win Juicer: prueba'; Description = 'Prueba de Win Juicer'; Protocol = 'UDP'; Port = '53'; Remote = $remote }
         try {
-            # The runner's real DNS stays as it is: a pretend adapter takes it.
+            & $b.FwSet $rule 'Win Juicer - Prueba' -Disabled
+            $r = @(& $b.FwRules @('WinJuicer-Prueba-DNS', 'WinJuicer-No-Existe'))
+            $r.Count | Should -Be 1
+            foreach ($x in $r[0].RemoteAddress) { Write-Host "    $x" }
+            $r[0].Enabled | Should -BeFalse
+            & $m { param($w, $h) Test-JuicerShieldFwRule $w $h } $rule $r[0] | Should -BeFalse
+            $on = $r[0].Clone()
+            $on.Enabled = $true
+            & $m { param($w, $h) Test-JuicerShieldFwRule $w $h } $rule $on | Should -BeTrue
+            # Written again over itself: still one rule.
+            & $b.FwSet $rule 'Win Juicer - Prueba' -Disabled
+            @(Get-NetFirewallRule -Name 'WinJuicer-Prueba-DNS' -ErrorAction SilentlyContinue).Count | Should -Be 1
+            $s = & $b.FwState
+            Write-Host "    Perfiles apagados: $(@($s.Off) -join ', '); otro cortafuegos: $($s.ThirdParty)"
+        } finally {
+            Remove-NetFirewallRule -Name 'WinJuicer-Prueba-DNS' -ErrorAction SilentlyContinue
+        }
+        @(Get-NetFirewallRule -Name 'WinJuicer-Prueba-DNS' -ErrorAction SilentlyContinue).Count | Should -Be 0
+    }
+
+    # Last: it is for good, and the runner is thrown away after. The runner's
+    # network stays as it is: its adapters and its firewall are pretend ones
+    # here, and the task is stopped at the end, before anything can start it.
+    It 'activa la protección contra contenido adulto: políticas, hosts, su tarea y su copia, sin tocar la red del runner' {
+        $b = Get-JuicerBackend
+        $saved = @{ DnsSet = $b.DnsSet; All = $b.NetAdaptersAll; FwSet = $b.FwSet; FwRules = $b.FwRules; FwOn = $b.FwOn }
+        $calls = New-Object System.Collections.ArrayList
+        $rules = @{}
+        $hosts = Join-Path $env:SystemRoot 'System32\drivers\etc\hosts'
+        $before = [IO.File]::ReadAllText($hosts)
+        try {
             $b.NetAdaptersAll = { , @(@{ Guid = '{0F0F0F0F-0000-0000-0000-000000000001}'; Name = 'Prueba'; Ipv6 = $true }) }
             $b.DnsSet = { param($i, $v4, $v6) [void]$calls.Add(@($i) + @($v4)) }.GetNewClosure()
+            $b.FwSet = { param($Rule, $Group) $rules[$Rule.Name] = @{ Name = $Rule.Name; Enabled = $true; Action = 'Block'; Direction = 'Outbound'; Profile = 'Any'; Protocol = $Rule.Protocol; RemotePort = @($Rule.Port); RemoteAddress = @($Rule.Remote) } }.GetNewClosure()
+            $b.FwRules = { param($Names) , @($Names | ForEach-Object { $rules[$_] } | Where-Object { $_ }) }.GetNewClosure()
+            $b.FwOn = { param($Profiles) [void]$calls.Add('perfiles') }.GetNewClosure()
             $r = @(Enable-JuicerShield)
             foreach ($x in $r) { Write-Host "    $x" }
             Test-JuicerShield | Should -BeTrue
-            $calls.Count | Should -Be 1
-            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Google\Chrome').ForceGoogleSafeSearch | Should -Be 1
-            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Google\Chrome').DnsOverHttpsMode | Should -Be 'off'
-            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge').ForceBingSafeSearch | Should -Be 2
+            (Get-JuicerShieldInfo).Level | Should -Be 2
+            @($calls | Where-Object { $_ -ne 'perfiles' }).Count | Should -Be 1
+            $rules.Count | Should -Be 6
+            $chrome = Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Google\Chrome'
+            $chrome.ForceGoogleSafeSearch | Should -Be 1
+            $chrome.DnsOverHttpsMode | Should -Be 'off'
+            $chrome.IncognitoModeAvailability | Should -Be 1
+            $chrome.ProxyMode | Should -Be 'direct'
+            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Microsoft\Edge').InPrivateModeAvailability | Should -Be 1
             (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox\DNSOverHTTPS').Locked | Should -Be 1
+            (Get-ItemProperty 'HKLM:\SOFTWARE\Policies\Mozilla\Firefox').DisablePrivateBrowsing | Should -Be 1
+            # The hosts file: what it had, and the protection's block; Windows reads it.
+            $now = [IO.File]::ReadAllText($hosts)
+            $now.StartsWith($before.TrimEnd()) | Should -BeTrue
+            $now | Should -Match '(?m)^0\.0\.0\.0 api\.sec-tunnel\.com\r?$'
+            @(Resolve-DnsName -Name 'api.sec-tunnel.com' -Type A -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq '0.0.0.0' }).Count | Should -BeGreaterThan 0
+            @(Add-JuicerShieldBlock 'ejemplo.com') | Should -Be @('ejemplo.com', 'www.ejemplo.com')
+            [IO.File]::ReadAllText($hosts) | Should -Match '(?m)^0\.0\.0\.0 www\.ejemplo\.com\r?$'
             $t = Get-ScheduledTask -TaskName 'Win Juicer - Protección contra contenido adulto' -ErrorAction Stop
             $t.Principal.UserId | Should -Be 'SYSTEM'
-            @($t.Triggers).Count | Should -BeGreaterOrEqual 3
+            @($t.Triggers).Count | Should -BeGreaterOrEqual 4
             $t.Actions[0].Arguments | Should -BeLike '*-ProteccionAdultos Mantener*'
-            # Policies and task in place: only the pretend adapter, which keeps nothing, is redone.
-            @(Repair-JuicerShield | Where-Object { $_ -notlike 'DNS filtrado*' }) | Should -BeNullOrEmpty
+            (Get-ItemProperty 'HKLM:\SOFTWARE\WinJuicer\Proteccion').Tarea | Should -Be 2
+            # All in place: only the pretend adapter, which keeps nothing, is redone.
+            @(Repair-JuicerShield | Where-Object { $_ -notlike 'DNS filtrado*' -and $_ -notlike 'Cortafuegos de Windows*' }) | Should -BeNullOrEmpty
             # The copy the task runs answers, from Windows PowerShell.
             $copy = Join-Path $env:ProgramFiles 'WinJuicer\WinJuicer.ps1'
             Test-Path -LiteralPath $copy | Should -BeTrue
             $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File $copy -ProteccionAdultos Estado 2>&1
             $LASTEXITCODE | Should -Be 0
             ($out -join ' ') | Should -BeLike '*ACTIVA*'
+            ($out -join ' ') | Should -BeLike '*ejemplo.com*'
         } finally {
-            $b.DnsSet = $saved.DnsSet
+            foreach ($k in 'DnsSet', 'FwSet', 'FwRules', 'FwOn') { $b[$k] = $saved[$k] }
             $b.NetAdaptersAll = $saved.All
+            Disable-ScheduledTask -TaskName 'Win Juicer - Protección contra contenido adulto' -ErrorAction SilentlyContinue | Out-Null
         }
     }
 }

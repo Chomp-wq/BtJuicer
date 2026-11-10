@@ -118,11 +118,23 @@
     Nombres de ajustes a devolver a su estado anterior.
 
 .PARAMETER ProteccionAdultos
-    Activar: bloquea las webs para adultos en todo el equipo (DNS filtrado de
-    CleanBrowsing) y obliga a la búsqueda segura en Chrome, Edge y Brave. Es
-    para siempre: una vez activada, Win Juicer no la desactiva, «Deshacer todo»
-    no la toca y una tarea la repone si algo la cambia. Pide escribir ACTIVAR
-    (o -Si). Estado: dice si está activa. Mantener: lo que ejecuta su tarea.
+    Activar: bloquea el contenido para adultos en todo el equipo y cierra los
+    atajos para saltárselo (DNS filtrado de CleanBrowsing, cortafuegos de
+    Windows, navegadores y archivo hosts). Es para siempre: una vez activada,
+    Win Juicer no la desactiva ni la baja de nivel, «Deshacer todo» no la toca
+    y una tarea la repone si algo la cambia. Pide escribir ACTIVAR (o -Si).
+    Subir: de equilibrada a estricta. Bloquear: las webs de -BloquearWeb, para
+    siempre. Estado: dice si está activa. Mantener: lo que ejecuta su tarea.
+
+.PARAMETER NivelProteccion
+    Con -ProteccionAdultos Activar. Estricto (por defecto, el recomendado si es
+    para dejar el porno): también proxies, VPN y Reddit, sin ventanas privadas
+    y el DNS sólo al filtro. Equilibrado: las webs para adultos y los atajos
+    más comunes.
+
+.PARAMETER BloquearWeb
+    Webs que bloquear para siempre con la protección activa, separadas por
+    comas: X, Reddit, Tumblr o cualquier dominio (ejemplo.com).
 
 .PARAMETER DeshacerTodo
     Deshace todos los cambios de Win Juicer.
@@ -159,6 +171,9 @@
 
 .EXAMPLE
     .\WinJuicer.ps1 -Aplicar juegos.ventana,ui.menu -Si
+
+.EXAMPLE
+    .\WinJuicer.ps1 -ProteccionAdultos Bloquear -BloquearWeb Reddit,ejemplo.com
 #>
 [CmdletBinding()]
 param(
@@ -182,7 +197,9 @@ param(
     [switch]$OptimizarJuegos,
     [switch]$Mantener,
     [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
-    [ValidateSet('Activar', 'Mantener', 'Estado')][string]$ProteccionAdultos,
+    [ValidateSet('Activar', 'Subir', 'Bloquear', 'Mantener', 'Estado')][string]$ProteccionAdultos,
+    [ValidateSet('Equilibrado', 'Estricto')][string]$NivelProteccion,
+    [string[]]$BloquearWeb = @(),
     [int]$Fps,
     [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
     [switch]$Lista,

@@ -127,7 +127,7 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             Set-JuicerGuiAdvanced $true
             $c.Tabs.SelectedItem = $c.TabHome
             # The content protection, as it looks once on (drawn only: the runner keeps its DNS).
-            Show-JuicerGuiShield @{ Active = $true; Since = (Get-Date).ToString('s'); Provider = 'CleanBrowsing'; ProviderTitle = 'CleanBrowsing, filtro de adultos' }
+            Show-JuicerGuiShield @{ Active = $true; Since = (Get-Date).ToString('s'); Level = 1; LevelTitle = 'Equilibrada'; Provider = 'CleanBrowsing'; ProviderTitle = 'CleanBrowsing, filtro de adultos'; Phone = 'adult-filter-dns.cleanbrowsing.org'; Firewall = ''; Blocked = @{ Presets = @('Reddit'); Sites = @('ejemplo.com'); Count = 27 } }
             & $shot '08-empezar-avanzado'
             $c.Tabs.SelectedItem = $c.TabAjustes
             Show-JuicerGuiTweakDetail 'ui.carpetas' -Focus
