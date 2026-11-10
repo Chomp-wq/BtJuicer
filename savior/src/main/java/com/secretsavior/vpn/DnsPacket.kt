@@ -96,6 +96,94 @@ object DnsPacket {
         return "$name/${u16(msg, pos)}/${u16(msg, pos + 2)}"
     }
 
+    /** "No existe": lo que esperan los dominios canario (ver [DnsFilter.isCanary]). */
+    fun nxdomain(query: ByteArray, q: Question): ByteArray {
+        val out = query.copyOf(q.end)
+        out[2] = 0x81.toByte()
+        out[3] = 0x83.toByte() // RA, RCODE 3
+        out[4] = 0; out[5] = 1
+        for (i in 6..11) out[i] = 0
+        return out
+    }
+
+    /** Una consulta nueva y mínima por [name]; el identificador lo pone quien la envía. */
+    fun query(name: String, type: Int): ByteArray {
+        val labels = name.trimEnd('.').split('.')
+        val out = ByteArray(12 + labels.sumOf { it.length + 1 } + 1 + 4)
+        out[2] = 0x01 // RD
+        out[5] = 1
+        var p = 12
+        for (l in labels) {
+            out[p++] = l.length.toByte()
+            for (ch in l) out[p++] = ch.code.toByte()
+        }
+        p++ // la raíz
+        out[p++] = (type shr 8).toByte(); out[p++] = type.toByte()
+        out[p++] = 0; out[p] = 1
+        return out
+    }
+
+    /**
+     * Contesta a [query] con las direcciones que trae [response], que es la respuesta a OTRO
+     * nombre (el de búsqueda segura). Sólo se copian los registros del tipo pedido (A o AAAA);
+     * los CNAME intermedios se dejan fuera. Devuelve null si [response] es un error o no se
+     * puede leer: el llamador contesta entonces con fallo, no con el buscador sin filtrar.
+     */
+    fun retarget(query: ByteArray, q: Question, response: ByteArray): ByteArray? {
+        val len = response.size
+        if (len < 12 || (response[3].toInt() and 0x0F) != 0) return null
+        val rdlen = if (q.type == TYPE_A) 4 else 16
+        var pos = 12
+        repeat(u16(response, 4)) {
+            pos = skipName(response, pos)
+            if (pos < 0 || pos + 4 > len) return null
+            pos += 4
+        }
+        val records = ArrayList<Int>() // posición del TTL de cada registro que vale
+        repeat(u16(response, 6)) {
+            pos = skipName(response, pos)
+            if (pos < 0 || pos + 10 > len) return null
+            val l = u16(response, pos + 8)
+            if (pos + 10 + l > len) return null
+            if (u16(response, pos) == q.type && u16(response, pos + 2) == 1 && l == rdlen) records += pos + 4
+            pos += 10 + l
+        }
+        val out = ByteArray(q.end + records.size * (12 + rdlen))
+        System.arraycopy(query, 0, out, 0, q.end)
+        out[2] = 0x81.toByte()
+        out[3] = 0x80.toByte()
+        out[4] = 0; out[5] = 1
+        out[6] = (records.size shr 8).toByte(); out[7] = records.size.toByte()
+        for (i in 8..11) out[i] = 0
+        var p = q.end
+        for (ttlAt in records) {
+            out[p++] = 0xC0.toByte(); out[p++] = 0x0C
+            out[p++] = 0; out[p++] = q.type.toByte()
+            out[p++] = 0; out[p++] = 1
+            System.arraycopy(response, ttlAt, out, p, 4) // TTL
+            p += 4
+            out[p++] = 0; out[p++] = rdlen.toByte()
+            System.arraycopy(response, ttlAt + 6, out, p, rdlen)
+            p += rdlen
+        }
+        return out
+    }
+
+    /** La posición siguiente a un nombre (con o sin compresión), o -1 si está mal formado. */
+    private fun skipName(msg: ByteArray, start: Int): Int {
+        var pos = start
+        while (true) {
+            if (pos < 0 || pos >= msg.size) return -1
+            val l = msg[pos].toInt() and 0xFF
+            when {
+                l == 0 -> return pos + 1
+                l and 0xC0 == 0xC0 -> return if (pos + 2 <= msg.size) pos + 2 else -1
+                l and 0xC0 != 0 -> return -1
+                else -> pos += 1 + l
+            }
+        }
+    }
+
     /** Es una respuesta (QR) y no una consulta que rebota. */
     fun isResponse(msg: ByteArray, len: Int = msg.size): Boolean = len >= 12 && (msg[2].toInt() and 0x80) != 0
 

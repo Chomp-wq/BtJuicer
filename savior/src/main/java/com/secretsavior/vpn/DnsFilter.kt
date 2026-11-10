@@ -31,6 +31,17 @@ object DnsFilter {
         "naughtyamerica.com", "realitykings.com", "mofos.com", "vporn.com", "4tube.com",
         "fapster.xxx", "sex.com", "efukt.com", "heavy-r.com", "exoclick.com", "juicyads.com",
         "trafficjunky.net", "ero-advertising.com", "adultfriendfinder.com", "literotica.com",
+        "youjizz.com", "missav.com", "missav.ws", "missav.ai", "jable.tv", "javhd.com",
+        "javlibrary.com", "supjav.com", "javmost.com", "iwara.tv", "luscious.net", "hitomi.la",
+        "8muses.com", "gelbooru.com", "danbooru.donmai.us", "sankakucomplex.com", "tsumino.com",
+        "imagefap.com", "manyvids.com", "clips4sale.com", "noodlemagazine.com", "xfantazy.com",
+        "tubegalore.com", "camwhores.tv", "jerkmate.com", "flirt4free.com", "imlive.com",
+        "streamate.com", "cams.com", "xcams.com", "simpcity.su", "coomer.su", "coomer.party",
+        "babepedia.com", "boobpedia.com", "eroprofile.com", "fuq.com", "xxxbunker.com",
+        "sexstories.com", "asstr.org", "f95zone.to", "aznude.com", "celebjihad.com",
+        "bellesa.co", "ashemaletube.com", "boyfriendtv.com", "justfor.fans", "scrolller.com",
+        "fanvue.com", "loyalfans.com", "poringa.net", "petardas.com", "muyzorras.com",
+        "cerdas.com", "mileroticos.com", "skokka.com",
     )
 
     /**
@@ -46,13 +57,14 @@ object DnsFilter {
     /** Palabras sueltas (separadas por . o -) que sólo aparecen en sitios para adultos. */
     private val blockedTokens = setOf(
         "sex", "sexo", "xxx", "porno", "nude", "nudes", "nsfw", "milf", "camgirls", "sexcams",
+        "erotic", "erotica", "erotico", "eroticos",
     )
 
     /** Fragmentos que, estén donde estén dentro del nombre, delatan el sitio. */
     private val blockedFragments = listOf(
         "porn", "hentai", "xvideo", "xnxx", "xhamster", "redtube", "brazzers", "bangbros",
         "chaturbate", "stripchat", "livejasmin", "onlyfans", "spankbang", "nudevista",
-        "camgirl", "sexcam", "sexchat", "sextube", "fuckbook",
+        "camgirl", "sexcam", "sexchat", "sextube", "fuckbook", "rule34", "jizz", "nsfw",
     )
 
     /** Recursos contra la adicción y similares que contienen esas palabras. */
@@ -71,7 +83,29 @@ object DnsFilter {
         "doh.dns.sb", "dns.adguard.com", "dns.adguard-dns.com", "doh.cleanbrowsing.org",
         "doh.mullvad.net", "dns.alidns.com", "doh.pub", "dns.twnic.tw", "doh.li",
         "dns.switch.ch", "doh.centraleu.pi-dns.com", "doh.libredns.gr",
+        // Los que ofrecen los propios navegadores en su lista de «DNS seguro», y otros públicos.
+        "adguard-dns.com", "dns.mullvad.net", "dns10.quad9.net", "doh.familyshield.opendns.com",
+        "dns.sb", "dns0.eu", "dns.controld.com", "freedns.controld.com", "doh.xfinity.com",
+        "public.dns.iij.jp", "odvr.nic.cz", "doh.quickline.ch", "dnsnl.alekberg.net",
+        "canadianshield.cira.ca", "doh.cox.net", "doh-01.spectrum.com", "doh-02.spectrum.com",
+        "dns.digitale-gesellschaft.ch", "doh.applied-privacy.net", "dns.njal.la", "doh.360.cn",
+        "ordns.he.net", "doh.tiar.app", "wikimedia-dns.org",
     )
+
+    /**
+     * Dominios canario: un navegador pregunta por ellos para saber si la red quiere que NO
+     * active por su cuenta el DNS cifrado. Firefox usa éste, y la señal es que "no exista":
+     * una dirección, aunque sea 0.0.0.0, le diría lo contrario.
+     */
+    private val canaries = hashSetOf("use-application-dns.net")
+
+    fun isCanary(rawName: String): Boolean = rawName.trim().trimEnd('.').lowercase() in canaries
+
+    /** Un recurso de ayuda de la lista blanca (o un subdominio suyo). */
+    fun isAllowlisted(rawName: String): Boolean {
+        val name = rawName.trim().trimEnd('.').lowercase()
+        return name.isNotEmpty() && matches(name, allowed)
+    }
 
     fun isBlocked(rawName: String): Boolean {
         val name = rawName.trim().trimEnd('.').lowercase()

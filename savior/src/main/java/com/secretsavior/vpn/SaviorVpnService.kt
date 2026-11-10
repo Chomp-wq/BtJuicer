@@ -10,6 +10,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.ParcelFileDescriptor
+import android.system.OsConstants
 import android.util.Log
 import com.secretsavior.MainActivity
 import com.secretsavior.data.Store
@@ -87,6 +88,12 @@ class SaviorVpnService : VpnService() {
             .addAddress(subnet.address, 24)
             .addDnsServer(subnet.dns)
             .addRoute(subnet.network, 24)
+            // Imprescindible. Este túnel sólo declara IPv4, y Android, ante una VPN sin nada de
+            // una familia, da por hecho que no la soporta y BLOQUEA todo el tráfico de esa
+            // familia: sin esta línea ninguna app del teléfono puede usar IPv6. En redes móviles
+            // sólo IPv6 eso manda todo por la traducción a IPv4 (464XLAT), más lenta.
+            .allowFamily(OsConstants.AF_INET)
+            .allowFamily(OsConstants.AF_INET6)
             .setConfigureIntent(
                 PendingIntent.getActivity(
                     this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
@@ -221,9 +228,18 @@ class SaviorVpnService : VpnService() {
      */
     private fun answer(header: ByteArray, ihl: Int, query: ByteArray, out: FileOutputStream) {
         val q = DnsPacket.parseQuestion(query)
+        if (q != null && DnsFilter.isCanary(q.name)) {
+            write(out, IpPacket.udpReply(header, ihl, DnsPacket.nxdomain(query, q)))
+            return
+        }
         if (q != null && DnsFilter.isBlocked(q.name)) {
             if (q.type == DnsPacket.TYPE_A) Store.countBlock(this)
             write(out, IpPacket.udpReply(header, ihl, DnsPacket.blocked(query, q)))
+            return
+        }
+        val safe = q?.let { SafeSearch.target(it.name) }
+        if (q != null && safe != null) {
+            answerSafeSearch(header, ihl, query, q, safe, out)
             return
         }
         val fwd = forwarder
@@ -235,6 +251,29 @@ class SaviorVpnService : VpnService() {
         fwd.query(query) { response ->
             val reply = response ?: q?.let { DnsPacket.servfail(query, it) }
             if (reply != null) write(out, IpPacket.udpReply(header, ihl, reply))
+        }
+    }
+
+    /**
+     * Un buscador: se resuelve su nombre de búsqueda segura y se contesta con esas direcciones.
+     * Los demás tipos de registro (HTTPS/SVCB, que podrían señalar a otros servidores) se
+     * contestan vacíos. Si el nombre seguro no resuelve, falla: nunca el buscador sin filtrar.
+     */
+    private fun answerSafeSearch(
+        header: ByteArray, ihl: Int, query: ByteArray, q: DnsPacket.Question, safe: String, out: FileOutputStream,
+    ) {
+        if (q.type != DnsPacket.TYPE_A && q.type != DnsPacket.TYPE_AAAA) {
+            write(out, IpPacket.udpReply(header, ihl, DnsPacket.blocked(query, q))) // sin registros
+            return
+        }
+        val fwd = forwarder
+        if (fwd == null) {
+            write(out, IpPacket.udpReply(header, ihl, DnsPacket.servfail(query, q)))
+            return
+        }
+        fwd.query(DnsPacket.query(safe, q.type)) { response ->
+            val reply = response?.let { DnsPacket.retarget(query, q, it) } ?: DnsPacket.servfail(query, q)
+            write(out, IpPacket.udpReply(header, ihl, reply))
         }
     }
 
@@ -256,6 +295,7 @@ class SaviorVpnService : VpnService() {
     override fun onDestroy() {
         destroyed = true
         running = false
+        Store.flushNow(this)
         if (current === this) current = null
         reader?.interrupt()
         forwarder?.close()

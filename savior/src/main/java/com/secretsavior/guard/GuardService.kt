@@ -9,7 +9,6 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 import com.secretsavior.data.Store
-import com.secretsavior.vpn.DnsFilter
 
 /**
  * El guardián. Hace tres cosas, todas locales:
@@ -244,7 +243,7 @@ class GuardService : AccessibilityService() {
         if (seen.ours) {
             // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
             // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
-            if (Store.inGrace(this) && !seen.dangerous) return
+            if (Store.inGrace() && !seen.dangerous) return
             block(countIt = false)
             return
         }
@@ -342,20 +341,11 @@ class GuardService : AccessibilityService() {
 
     private fun guardBrowser(pkg: String, root: AccessibilityNodeInfo) {
         val text = urlBarText(pkg, root) ?: return
-        if (looksBlocked(text)) block(countIt = true)
+        if (ContentRules.urlLooksBlocked(text)) block(countIt = true)
     }
 
     /** El filtro corre y nadie lo esquiva con DNS privado estricto. */
     private fun isProtected(): Boolean = Status.isVpnRunning() && !Status.isPrivateDnsStrict(this)
-
-    private fun looksBlocked(raw: String): Boolean {
-        val t = raw.trim()
-        if (t.isEmpty()) return false
-        if (ContentRules.isExplicit(t, inBrowser = true)) return true
-        if (' ' in t) return false
-        val host = t.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore(':')
-        return DnsFilter.isBlocked(host)
-    }
 
     /**
      * La barra de direcciones se pide por su id: una sola consulta que resuelve la propia

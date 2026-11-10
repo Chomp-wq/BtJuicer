@@ -1,5 +1,6 @@
 package com.secretsavior.guard
 
+import com.secretsavior.vpn.DnsFilter
 import java.text.Normalizer
 
 /**
@@ -26,6 +27,25 @@ object ContentRules {
             "(video|videos|fotos|imagenes)\\s+(de\\s+)?(sexo|xxx|porno)|" +
             "nudes?|desnud[ao]s?|naked\\s+(girls?|women|pics?)|tetas|follando|sex\\s*cams?)\\b",
     )
+
+    /**
+     * ¿Hay que cerrar el navegador por lo que muestra su barra de direcciones? Un sitio de
+     * ayuda de la lista blanca no se cierra aunque su dirección lleve la palabra: los
+     * artículos para dejarlo la llevan casi siempre en el título.
+     */
+    fun urlLooksBlocked(raw: String): Boolean {
+        val t = raw.trim()
+        if (t.isEmpty()) return false
+        val host = if (t.any { it.isWhitespace() }) null else hostOf(t)
+        if (host != null && DnsFilter.isAllowlisted(host)) return false
+        if (isExplicit(t, inBrowser = true)) return true
+        return host != null && DnsFilter.isBlocked(host)
+    }
+
+    /** El servidor de una dirección: sin esquema, usuario, puerto, ruta ni consulta. */
+    fun hostOf(url: String): String =
+        url.substringAfter("://").substringBefore('/').substringBefore('?').substringBefore('#')
+            .substringAfterLast('@').substringBefore(':').lowercase()
 
     private val MARKS = Regex("\\p{Mn}+")
 

@@ -62,6 +62,9 @@ object Store {
         if (now - lastFlush >= FLUSH_MS) flush(c, now)
     }
 
+    /** Guarda ya lo contado; si no, lo de los últimos segundos se pierde al morir el proceso. */
+    fun flushNow(c: Context) = flush(c, SystemClock.elapsedRealtime())
+
     @Synchronized
     private fun flush(c: Context, now: Long) {
         lastFlush = now
@@ -94,11 +97,18 @@ object Store {
      * autoinicio, que nombran a la app. Sólo se abre desde dentro de la app y nunca
      * deja pasar las que ofrecen desinstalar, parar u ocultar (ver GuardService).
      */
-    fun openGrace(c: Context) {
-        prefs(c).edit().putLong("grace_until", System.currentTimeMillis() + GRACE_MS).apply()
+    fun openGrace() {
+        graceUntil = SystemClock.elapsedRealtime() + GRACE_MS
     }
 
-    fun inGrace(c: Context): Boolean = System.currentTimeMillis() < prefs(c).getLong("grace_until", 0L)
+    /**
+     * En memoria y con el reloj de arranque, no con la hora del sistema: guardada con la
+     * hora, bastaba atrasar el reloj del teléfono para dejar la ventana abierta para siempre.
+     */
+    fun inGrace(): Boolean = SystemClock.elapsedRealtime() < graceUntil
+
+    @Volatile
+    private var graceUntil = 0L
 
     /** Se ha visto el autoinicio de la app encendido: desde entonces no se deja apagar. */
     fun autostartSeen(c: Context): Boolean = prefs(c).getBoolean("autostart_seen", false)

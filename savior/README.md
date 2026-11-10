@@ -82,6 +82,30 @@ Lo que no depende de la app: la primera visita a cada dominio espera la respuest
 CleanBrowsing, que según dónde estés puede estar más lejos que el DNS de tu
 operador. Android guarda las respuestas en caché, así que sólo se nota la primera vez.
 
+## Mejoras de la 2.3
+
+- **La VPN bloqueaba todo el IPv6 del teléfono.** El túnel sólo declara IPv4, y Android, ante
+  una VPN sin dirección, ruta ni DNS de una familia, da por hecho que no la soporta y bloquea
+  ese tráfico para todas las apps (`VpnService.Builder.allowFamily`). Ahora se permiten las dos
+  familias y el IPv6 sale por la red de siempre. En redes móviles sólo IPv6 esto obligaba a
+  todo a pasar por la traducción a IPv4 (464XLAT).
+- **Búsqueda segura forzada en el propio filtro**, sin depender del resolutor: Google (todos
+  sus dominios de país), Bing, DuckDuckGo y Yandex se resuelven por su nombre de búsqueda
+  segura (`forcesafesearch.google.com`, `strict.bing.com`, `safe.duckduckgo.com`,
+  `familysearch.yandex.ru`). Los buscadores sirven las miniaturas desde sus propios servidores,
+  así que sin esto se ve contenido para adultos sin tocar un dominio bloqueado. Si el nombre
+  seguro no resuelve, el buscador falla; nunca se sirve sin filtrar. YouTube queda fuera: su
+  modo restringido esconde mucho contenido corriente.
+- **Firefox no activa DNS cifrado por su cuenta:** su dominio canario
+  (`use-application-dns.net`) se contesta «no existe», que es la señal que espera.
+- **Más proveedores de DNS cifrado bloqueados** (los de las listas de «DNS seguro» de los
+  navegadores) y unos 60 sitios más en la lista local.
+- **Los sitios de ayuda no se cierran por su título.** Un artículo de un sitio de la lista
+  blanca (p. ej. `fightthenewdrug.org/how-porn-…`) ya no hace saltar al guardián.
+- **La ventana de gracia ya no depende de la hora del teléfono** (atrasando el reloj se quedaba
+  abierta), el contador de bloqueos no pierde lo último al cerrarse el proceso y el filtro
+  vuelve también tras el «arranque rápido» de algunos fabricantes.
+
 ## Seguridad de la red: lo que se revisó y se corrigió
 
 Una VPN que se equivoca afecta a todo el teléfono, no sólo a la app. Fallos reales que se
