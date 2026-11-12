@@ -57,6 +57,7 @@ function New-FakeMachine {
     $backend = New-JuicerMemoryBackend -Run $run
     $fake.State = $backend.State
     Use-JuicerBackend $backend
+    Set-JuicerSystem $null
     Write-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'CurrentBuildNumber' 'String' '26100'
     Write-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\Power' 'HibernateEnabled' 'DWord' 0
     @{ Backend = $backend; Fake = $fake }

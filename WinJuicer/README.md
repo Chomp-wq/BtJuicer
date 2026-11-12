@@ -26,23 +26,56 @@ registro de Windows. Están aquí:
 - **Un portátil jugando con batería**, o sin la gráfica dedicada.
 - **Resizable BAR apagado** en la BIOS.
 
-Por eso lo primero que hace Win Juicer es un **diagnóstico** que no cambia nada
-y que busca exactamente eso, y te dice por orden qué merece la pena arreglar.
+Por eso Win Juicer **empieza siempre analizando el equipo**, y no ofrece nada
+hasta haberlo hecho.
+
+## Primero, el análisis
+
+Al abrirse, antes de enseñar ningún menú, recorre el equipo entero sin cambiar
+nada:
+
+| Qué mira | Para qué |
+|---|---|
+| **Procesador**: modelo, núcleos P y E, cachés L3 por CCD, 3D V-Cache, generación | Un Ryzen X3D de dos CCD necesita el plan Equilibrado; un Intel híbrido gana con la limitación de energía apagada; uno sin MBEC/GMET paga mucho más por la integridad de memoria |
+| **Memoria**: módulos, ranuras, canales, velocidad frente a la estándar, paginación, compresión | Canal simple, dos módulos en el mismo canal, XMP/EXPO apagado, paginación en disco duro |
+| **Gráficas y pantallas**: integrada o dedicada, VRAM, driver y su edad, HAGS, Resizable BAR, frecuencia actual y máxima de cada pantalla | HAGS sólo si la GPU la admite (imprescindible para DLSS FG), monitor a 60 Hz que da 144, portátil con dos gráficas |
+| **Discos**: tipo (NVMe, SATA, disco duro), salud, espacio, dónde están Windows y cada biblioteca de juegos | Disco duro, SSD lleno, juegos en el disco lento, exclusiones de Defender donde más se notan |
+| **Equipo y energía**: portátil o sobremesa, batería y su desgaste, Modern Standby, hibernación, plan activo | Plan propio en sobremesa, «Modo de energía» en Modern Standby, aviso si juegas con batería |
+| **Seguridad**: VBS, HVCI, directivas, Defender u otro antivirus, BitLocker | Si la integridad de memoria ya está apagada, ni se ofrece |
+| **Programas**: lanzadores, grabadores (OBS, NVIDIA App…), Discord, juegos TCP (WoW, FFXIV…), Outlook, WSL, Docker, Hyper-V, apps de la Tienda que avisan, anti-trampas, otros sistemas en el arranque | No toca el hipervisor si usas WSL o Docker, ni el indexado si tienes Outlook, ni el inicio rápido con arranque dual; Nagle sólo si tienes juegos TCP |
+| **Tu configuración**: grabación en segundo plano, aceleración del ratón, Teclas especiales, Sensor de almacenamiento, programas de inicio, red (Wi-Fi o cable y a qué velocidad) | Respeta lo que usas; propone quitar del inicio sólo lo que se abre en segundos cuando lo necesitas |
+
+Con eso hace dos cosas:
+
+- **Lo que tienes que hacer tú**, por orden de importancia: lo que ningún
+  programa puede cambiar (BIOS, cables, RAM, discos).
+- **Un plan a medida**: cada ajuste del catálogo queda como *recomendado*,
+  *opcional*, *desaconsejado en este equipo* o *no aplica*, siempre con el
+  porqué de **tu** máquina («Tu Ryzen 9 7950X3D tiene dos CCD y…», «Tienes WSL y
+  Docker Desktop, que dejaría de funcionar»). Si algo que se aplicó antes ya no
+  te conviene, el plan propone deshacerlo. Lo que debilita la seguridad nunca
+  se recomienda solo: como mucho es opcional, y lo decides tú.
+
+El informe queda en `%ProgramData%\WinJuicer\informe.txt`, y todos los datos
+en `equipo.json` junto a él.
 
 ## Cómo se usa
 
 Descarga la carpeta `WinJuicer` y haz doble clic en **`WinJuicer.cmd`**. Pide
-permisos de administrador y abre el menú:
+permisos de administrador, analiza el equipo, te enseña la ficha y lo que ha
+encontrado, y abre el menú:
 
 ```
-  1  Diagnóstico          qué frena a este equipo (no cambia nada)
-  2  Perfiles             Seguro · Rendimiento · Extremo
-  3  Ajustes uno a uno    estado, ganancia y coste de cada uno
-  4  Programas de inicio  lo que arranca solo con Windows
-  5  Juegos               GPU, prioridad y exclusiones de Defender
-  6  Mantenimiento        limpieza, TRIM y reparación de Windows
-  7  Deshacer             todo, o cambio a cambio
-  8  Lo que no hacemos    los «trucos» que circulan, y por qué no
+  1  Análisis del equipo      qué tiene y qué lo frena (no cambia nada)
+  2  Plan a medida            lo que conviene a este equipo, y por qué
+  3  Ajustes uno a uno        estado y consejo para este equipo
+  4  Perfiles fijos           Seguro · Rendimiento · Extremo, adaptados
+  5  Programas de inicio      lo que arranca solo con Windows
+  6  Juegos                   GPU, prioridad y exclusiones de Defender
+  7  Mantenimiento            limpieza, TRIM y reparación de Windows
+  8  Deshacer                 todo, o cambio a cambio
+  9  Lo que no hacemos        los «trucos» que circulan, y por qué no
+  R  Volver a analizar        tras cambiar hardware, BIOS o programas
 ```
 
 No instala nada, no se queda residente y no se conecta a internet. Funciona con
@@ -51,11 +84,13 @@ Windows PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 ### Desde la línea de órdenes
 
 ```powershell
-.\WinJuicer.ps1 -Diagnostico
+.\WinJuicer.ps1 -Analizar                               # análisis, hallazgos y plan; no cambia nada
+.\WinJuicer.ps1 -AplicarPlan -Simular                   # qué haría el plan a medida
+.\WinJuicer.ps1 -AplicarPlan -ConInicio                 # aplicarlo, y quitar del inicio lo sugerido
+.\WinJuicer.ps1 -AplicarPlan -Incluir ui.menu,red.nagle # con opcionales añadidos
 .\WinJuicer.ps1 -Lista                                  # todos los ajustes y su estado
-.\WinJuicer.ps1 -Perfil Rendimiento -Simular            # qué cambiaría, sin cambiar nada
-.\WinJuicer.ps1 -Perfil Rendimiento
-.\WinJuicer.ps1 -Aplicar juegos.ventana,ui.menu -Si     # sin preguntar
+.\WinJuicer.ps1 -Perfil Rendimiento                     # perfil fijo, sin lo desaconsejado aquí
+.\WinJuicer.ps1 -Aplicar juegos.ventana,ui.menu -Si     # ajustes concretos, sin preguntar
 .\WinJuicer.ps1 -Deshacer ui.menu
 .\WinJuicer.ps1 -DeshacerTodo
 ```
@@ -66,7 +101,8 @@ sin preguntas, sólo con `-AceptoRiesgos`. Código de salida: 0 si todo fue bien
 
 ## Los tres perfiles
 
-Cada nivel incluye los anteriores.
+Para quien prefiera no ir ajuste a ajuste. Cada nivel incluye los anteriores, y
+se aplica **sin lo que el análisis desaconseja en tu equipo**.
 
 | Perfil | Qué cuesta |
 |---|---|
@@ -230,9 +266,10 @@ WinJuicer/
   WinJuicer.psm1          el módulo, que reúne src/
   src/Backend.ps1         único punto que toca registro, servicios y programas del sistema
   src/Engine.ps1          estado, aplicar, verificar, deshacer y el diario
-  src/Catalog.ps1         los ajustes, con su texto, y los mitos
-  src/Native.ps1          SystemParametersInfo, modos de pantalla, Modern Standby
-  src/Audit.ps1           el diagnóstico
+  src/Catalog.ps1         los ajustes, con su texto, su consejo según el equipo, y los mitos
+  src/Native.ps1          SystemParametersInfo, pantallas, núcleos P/E y CCD, Modern Standby
+  src/Inventory.ps1       el análisis del equipo, y los clasificadores de hardware y software
+  src/Advisor.ps1         hallazgos, veredicto de cada ajuste y el plan a medida
   src/Startup.ps1         programas de inicio
   src/Games.ps1           bibliotecas de juegos y ajustes por ejecutable
   src/Maintenance.ps1     limpieza y mantenimiento
@@ -245,6 +282,13 @@ memoria. Así el motor y **cada uno de los ajustes del catálogo** se prueban si
 Windows: se aplican sobre una máquina simulada —con los destrozos típicos de
 otros optimizadores ya hechos— y se comprueba que deshacer la deja idéntica,
 byte a byte.
+
+El análisis y el asesor están separados por la misma razón: recoger datos sí
+habla con Windows, pero decidir qué conviene sólo lee el perfil del equipo. Las
+pruebas montan equipos inventados —un sobremesa con Ryzen 9 7950X3D, un portátil
+con Modern Standby, batería y dos gráficas, un equipo con disco duro y Outlook,
+uno con WSL y Docker, uno con arranque dual…— y comprueban el consejo que recibe
+cada uno.
 
 ## Estado
 

@@ -71,6 +71,16 @@ function New-JuicerDefenderTweak {
         What = 'Microsoft Defender deja de analizar los archivos de esta carpeta cuando un programa los abre.'
         Gain = 'Cargas y compilación de shaders más rápidas, sobre todo en juegos con miles de archivos pequeños.'
         Cost = 'Un archivo malicioso dentro de esa carpeta no se detectaría al abrirse. Las tiendas verifican lo que descargan; los mods y lo que copies a mano, no.'
+        Advice = {
+            param($s, $t)
+            if (@($s.Security.OtherAv).Count -gt 0 -or $s.Security.DefenderActive -eq $false) { return New-JuicerAdvice 'NoAplica' 'Microsoft Defender no es tu antivirus activo.' }
+            $p = $t.Actions[0].Path
+            $lib = @($s.Games.Libraries | Where-Object { $_.Path -eq $p }) | Select-Object -First 1
+            if (-not $lib) { return $null }
+            $slow = $lib.Media -eq 'HDD' -or $lib.Bus -eq 'SATA'
+            $where = if ($lib.Media) { " ($($lib.Media), $($lib.Bus))" } else { '' }
+            New-JuicerAdvice 'Opcional' "Tu biblioteca de $($lib.Launcher) está en $p$where; Defender analiza cada archivo que el juego abre al cargar$(if ($slow) { ', y en un disco lento eso se nota todavía más' })." $(if ($slow) { 'Alto' } else { 'Medio' })
+        }
         Actions = @(@{ Type = 'DefenderExclusion'; Path = $Path })
     }
 }

@@ -88,11 +88,37 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         $after | Should -Be $before
     }
 
-    It 'el diagnóstico completo no falla en ninguna parte' {
-        $f = @(Get-JuicerAudit)
+    It 'el análisis completo recorre todo sin errores y da un plan' {
+        $s = Get-JuicerSystemProfile
+        foreach ($r in (Get-JuicerSystemSummary $s)) { Write-Host ('    {0,-11}{1}' -f $r[0], $r[1]) }
+        foreach ($e in @($s.Errors)) { Write-Host "    ERROR $e" }
+        $s.Errors | Should -BeNullOrEmpty
+        $s.Os.Build | Should -BeGreaterThan 0
+        $s.Cpu.Name | Should -Not -BeNullOrEmpty
+        $s.Memory.TotalBytes | Should -BeGreaterThan 0
+        @($s.Storage.Volumes).Count | Should -BeGreaterThan 0
+        $s.Power.Plan | Should -Match '^[0-9a-f-]{36}$'
+        @($s.Software.Programs).Count | Should -BeGreaterThan 0
+        $f = @(Get-JuicerFindings $s)
         foreach ($x in $f) { Write-Host ('    {0,-6} {1,-11} {2}' -f $x.Severity, $x.Area, $x.Title) }
-        $f.Count | Should -BeGreaterThan 3
-        @($f | Where-Object { $_.Area -eq 'Diagnóstico' }) | Should -BeNullOrEmpty
+        $p = Get-JuicerPlan $s
+        foreach ($k in 'Recommended', 'Optional', 'NotRecommended', 'NotApplicable', 'Done', 'Revert') {
+            Write-Host ('    {0,-15} {1}' -f $k, (($p[$k] | ForEach-Object { $_.Tweak.Id }) -join ', '))
+        }
+        @($p.Recommended).Count + @($p.Done).Count | Should -BeGreaterThan 5
+        Test-Path -LiteralPath (Save-JuicerReport $s) | Should -BeTrue
+    }
+
+    It 'aplicar el plan a medida y deshacerlo deja Windows como estaba' {
+        Set-JuicerSystem (Get-JuicerSystemProfile)
+        $before = Get-RealSnapshot
+        $plan = Get-JuicerPlan (Get-JuicerSystem)
+        $r = @(Invoke-JuicerPlan $plan -NoRestorePoint)
+        foreach ($x in $r) { Write-Host ('    {0,-22} {1,-12} {2}' -f $x.Id, $x.Outcome, $x.Message) }
+        [void](Undo-JuicerAll)
+        (Read-JuicerJournal).Count | Should -Be 0
+        Get-RealSnapshot | Should -Be $before
+        Set-JuicerSystem $null
     }
 
     It 'lee programas de inicio, bibliotecas y pantallas' {
@@ -121,6 +147,10 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         $script = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.ps1'
         $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
         & $ps -NoProfile -ExecutionPolicy Bypass -File $script -Lista | Out-Host
+        $LASTEXITCODE | Should -Be 0
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $script -Analizar | Out-Host
+        $LASTEXITCODE | Should -Be 0
+        & $ps -NoProfile -ExecutionPolicy Bypass -File $script -AplicarPlan -Simular -Si | Out-Host
         $LASTEXITCODE | Should -Be 0
         & $ps -NoProfile -ExecutionPolicy Bypass -File $script -Perfil Extremo -Simular -Si | Out-Host
         $LASTEXITCODE | Should -Be 0

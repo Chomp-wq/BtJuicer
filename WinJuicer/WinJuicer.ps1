@@ -3,12 +3,24 @@
     Win Juicer: exprime Windows 11 para juegos y cargas rápidas, sin humo y con vuelta atrás.
 
 .DESCRIPTION
-    Sin parámetros abre el menú. Cada cambio queda en un diario
+    Sin parámetros analiza el equipo (hardware, Windows, programas y
+    configuración) y abre el menú con un plan a medida. Cada cambio queda en un diario
     (%ProgramData%\WinJuicer\diario.json) con el estado anterior, de modo que
     cualquier ajuste se puede deshacer, uno a uno o todos a la vez.
 
-.PARAMETER Diagnostico
-    Revisa el equipo y dice qué lo frena. No cambia nada.
+.PARAMETER Analizar
+    Analiza el equipo, dice qué lo frena y muestra el plan a medida. No cambia
+    nada. Deja el informe en %ProgramData%\WinJuicer\informe.txt.
+
+.PARAMETER AplicarPlan
+    Aplica el plan a medida: lo recomendado para este equipo, y deshace lo que
+    se aplicó antes y ya no le conviene.
+
+.PARAMETER Incluir
+    Con -AplicarPlan, ajustes opcionales que añadir (nombres cortos).
+
+.PARAMETER ConInicio
+    Con -AplicarPlan, quita también del inicio los programas sugeridos.
 
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
@@ -38,7 +50,10 @@
     No intenta crear un punto de restauración antes de aplicar.
 
 .EXAMPLE
-    .\WinJuicer.ps1 -Diagnostico
+    .\WinJuicer.ps1 -Analizar
+
+.EXAMPLE
+    .\WinJuicer.ps1 -AplicarPlan -Simular
 
 .EXAMPLE
     .\WinJuicer.ps1 -Perfil Rendimiento -Simular
@@ -48,8 +63,11 @@
 #>
 [CmdletBinding()]
 param(
-    [switch]$Diagnostico,
+    [Alias('Diagnostico')][switch]$Analizar,
     [switch]$Lista,
+    [switch]$AplicarPlan,
+    [string[]]$Incluir = @(),
+    [switch]$ConInicio,
     [ValidateSet('Seguro', 'Rendimiento', 'Extremo')][string]$Perfil,
     [string[]]$Aplicar = @(),
     [string[]]$Deshacer = @(),

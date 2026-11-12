@@ -32,14 +32,20 @@ function Test-JuicerPlanExists {
     $r.Output -match [regex]::Escape($Guid)
 }
 
+# On a desktop the plan starts from Ultimate Performance. On a laptop it starts
+# from Balanced and only the plugged-in side is pushed, so on battery it still
+# saves like Balanced.
 function New-JuicerPlan {
-    $r = Invoke-JuicerNative 'powercfg.exe' @('/duplicatescheme', $script:UltimatePlan, $script:JuicerPlan)
-    if ($r.Code -ne 0) {
-        $r = Invoke-JuicerNative 'powercfg.exe' @('/duplicatescheme', $script:HighPerfPlan, $script:JuicerPlan)
+    $laptop = Test-JuicerIsLaptop
+    $bases = if ($laptop) { @($script:BalancedPlan) } else { @($script:UltimatePlan, $script:HighPerfPlan) }
+    $r = $null
+    foreach ($b in $bases) {
+        $r = Invoke-JuicerNative 'powercfg.exe' @('/duplicatescheme', $b, $script:JuicerPlan)
+        if ($r.Code -eq 0) { break }
     }
     if ($r.Code -ne 0) { throw "powercfg no pudo crear el plan: $($r.Output)" }
-    [void](Invoke-JuicerNative 'powercfg.exe' @('/changename', $script:JuicerPlan, 'Win Juicer',
-            'Máximo rendimiento: procesador sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco.'))
+    $about = if ($laptop) { 'Máximo rendimiento con el cargador conectado; con batería, como Equilibrado.' } else { 'Máximo rendimiento: procesador sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco.' }
+    [void](Invoke-JuicerNative 'powercfg.exe' @('/changename', $script:JuicerPlan, 'Win Juicer', $about))
     # Ultimate already has most of these; setting them makes it true whatever
     # it was duplicated from. Only the AC side: on battery the base plan rules.
     $settings = @(
@@ -161,6 +167,10 @@ function New-JuicerCatalog {
         What = 'Vuelve a poner en automático el servicio que precarga en memoria las aplicaciones que usas a menudo, si alguien lo desactivó.'
         Gain = 'Las apps y juegos que más usas abren antes. Desactivarlo es un consejo de la época de los discos duros que hoy sólo hace el equipo más lento.'
         Cost = 'Ninguno: la memoria que usa se libera al instante en cuanto otro programa la pide.'
+        Advice = {
+            param($s)
+            if ($s.Storage.SystemDrive.Media -eq 'HDD') { New-JuicerAdvice 'Recomendado' 'Con Windows en disco duro, SysMain es lo que más acelera abrir programas: los sirve desde la RAM en lugar de esperar al disco.' 'Alto' }
+        }
         Actions = @(
             @{ Type = 'Service'; Name = 'SysMain'; Start = 'Automatic'; Ok = { param($c) $c.Start -in 'Automatic', 'AutomaticDelayed' } }
         )
@@ -184,6 +194,11 @@ function New-JuicerCatalog {
         What = 'Comprueba que Windows avisa al SSD de los bloques que ya no se usan.'
         Gain = 'Sin TRIM, un SSD se vuelve más lento al escribir a medida que se llena.'
         Cost = 'Ninguno.'
+        Advice = {
+            param($s)
+            $vols = @($s.Storage.Volumes)
+            if ($vols.Count -gt 0 -and @($vols | Where-Object { $_.Media -eq 'SSD' }).Count -eq 0) { New-JuicerAdvice 'Opcional' 'No hay ningún SSD en este equipo: TRIM no cambia nada en discos duros.' 'Bajo' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = $fs; Name = 'DisableDeleteNotification'; Value = 0; Ok = { param($c) Test-JuicerRegAbsentOr $c 0 } }
         )
@@ -248,6 +263,23 @@ function New-JuicerCatalog {
         )
     }
     @{
+        Id = 'reparar.compresion'; Category = 'Reparación'; Level = 1; Impact = 'Medio'; Reboot = 'Reinicio'
+        Title = 'Reactivar la compresión de memoria'
+        What = 'Vuelve a activar la compresión de memoria de Windows si alguien la apagó.'
+        Gain = 'Cuando la RAM se llena, Windows comprime páginas en lugar de escribirlas a disco, que es muchísimo más lento. Apagarla sólo hace que pagine antes.'
+        Cost = 'Algo de CPU al comprimir, sólo cuando la memoria escasea.'
+        Skip = { if ([string](Get-JuicerRegValue 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion' 'InstallationType' '') -eq 'Server') { 'En Windows Server viene apagada a propósito.' } }
+        Actions = @(
+            @{
+                Type = 'Custom'; Key = 'mmagent'; Label = 'Compresión de memoria: activada'
+                Test = { [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression }
+                Capture = { @{ Enabled = [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression } }
+                Apply = { Enable-MMAgent -MemoryCompression -ErrorAction Stop }
+                Restore = { param($s) if (-not $s.Enabled) { Disable-MMAgent -MemoryCompression -ErrorAction Stop } }
+            }
+        )
+    }
+    @{
         Id = 'reparar.update'; Category = 'Reparación'; Level = 1; Impact = 'Bajo'; Reboot = 'No'
         Title = 'Reactivar Windows Update'
         What = 'Pone el servicio de Windows Update en manual si estaba deshabilitado; Windows lo arranca cuando lo necesita.'
@@ -263,10 +295,21 @@ function New-JuicerCatalog {
     @{
         Id = 'energia.plan'; Category = 'Energía'; Level = 2; Impact = 'Medio'; Reboot = 'No'
         Title = 'Plan de energía «Win Juicer»'
-        What = 'Crea un plan basado en «Máximo rendimiento» de Windows, con el procesador al 100 % como mínimo, sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco, y lo activa.'
+        What = 'Crea y activa un plan propio con el procesador al 100 % como mínimo, sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco. En sobremesa parte de «Máximo rendimiento»; en portátil, de «Equilibrado», para que con batería siga ahorrando.'
         Gain = 'Elimina las micropausas de despertar núcleos y enlaces dormidos: mejora sobre todo los mínimos de FPS (el 1 % más lento) y la latencia. En FPS medios, poco.'
         Cost = 'Más consumo y temperatura en reposo. En un portátil con batería, bastante menos autonomía.'
-        Skip = { if (Test-JuicerModernStandby) { 'Este equipo usa Modern Standby y Windows sólo admite ahí el plan Equilibrado; usa «Modo de energía» en su lugar.' } }
+        Advice = {
+            param($s)
+            $cpu = $s.Cpu.Name
+            if ($s.Cpu.DualCcdX3D) { return New-JuicerAdvice 'NoRecomendado' "Tu $cpu tiene dos CCD y sólo uno lleva la caché 3D. El driver de AMD aparca el otro mientras juegas, y eso necesita el plan Equilibrado: este plan, que no aparca núcleos, se lo impediría." }
+            if ($s.Device.ModernStandby) { return New-JuicerAdvice 'NoAplica' 'Con Modern Standby Windows sólo admite el plan Equilibrado; aquí sirve «Modo de energía».' }
+            if ($s.Device.Laptop) { return New-JuicerAdvice 'Opcional' 'En un portátil el plan da todo con el cargador conectado y se comporta como Equilibrado con batería. A cambio, más temperatura y ruido mientras está enchufado.' }
+            if ($cpu) { New-JuicerAdvice 'Recomendado' "En un sobremesa no hay batería que cuidar: tu $cpu deja de dormir núcleos entre fotograma y fotograma, y los mínimos de FPS lo agradecen." }
+        }
+        Skip = {
+            if (Test-JuicerModernStandby) { return 'Este equipo usa Modern Standby y Windows sólo admite ahí el plan Equilibrado; usa «Modo de energía» en su lugar.' }
+            if (Test-JuicerDualCcdX3D) { 'En los Ryzen X3D de dos CCD rinde más el plan Equilibrado, que es el que usa el driver de AMD.' }
+        }
         Actions = @(
             @{
                 Type = 'Custom'; Key = 'plan'; Label = 'Plan de energía activo: Win Juicer'
@@ -289,11 +332,46 @@ function New-JuicerCatalog {
         )
     }
     @{
+        Id = 'energia.equilibrado'; Category = 'Energía'; Level = 1; Impact = 'Alto'; Reboot = 'No'
+        Title = 'Plan Equilibrado para Ryzen X3D de dos CCD'
+        What = 'Activa el plan Equilibrado de Windows: es el único con el que el driver de AMD puede aparcar el CCD sin caché 3D mientras juegas.'
+        Gain = 'Los juegos se quedan en el CCD con 3D V-Cache, que es la razón de ser de ese procesador. Con Alto o Máximo rendimiento se reparten entre los dos y pierden la ventaja de la caché.'
+        Cost = 'Ninguno: el aparcamiento sólo ocurre mientras juegas; el resto del tiempo trabajan los dos CCD.'
+        Skip = { if (-not (Test-JuicerDualCcdX3D)) { 'Sólo para Ryzen X3D de dos CCD (7900X3D, 7950X3D, 9900X3D, 9950X3D).' } }
+        Advice = {
+            param($s)
+            if ($s.Cpu.DualCcdX3D) { return New-JuicerAdvice 'Recomendado' "Tu $($s.Cpu.Name) sólo puede aparcar el CCD sin caché 3D con el plan Equilibrado." }
+            New-JuicerAdvice 'NoAplica' 'Sólo para Ryzen X3D de dos CCD.'
+        }
+        Actions = @(
+            @{
+                Type = 'Custom'; Key = 'plan'; Label = 'Plan de energía activo: Equilibrado'
+                Test = { (Get-JuicerActivePlan) -eq $script:BalancedPlan }
+                Capture = { @{ Previous = (Get-JuicerActivePlan) } }
+                Apply = {
+                    $r = Invoke-JuicerNative 'powercfg.exe' @('/setactive', $script:BalancedPlan)
+                    if ($r.Code -ne 0) { throw "powercfg no pudo activar el plan Equilibrado: $($r.Output)" }
+                }
+                Restore = {
+                    param($s)
+                    $r = Invoke-JuicerNative 'powercfg.exe' @('/setactive', $s.Previous)
+                    if ($r.Code -ne 0) { throw "powercfg no pudo volver al plan anterior: $($r.Output)" }
+                }
+            }
+        )
+    }
+    @{
         Id = 'energia.modo'; Category = 'Energía'; Level = 2; Impact = 'Medio'; Reboot = 'No'
         Title = 'Modo de energía: mejor rendimiento'
         What = 'Pone «Modo de energía» de Configuración en «Mejor rendimiento» para la alimentación actual. Aplícalo con el cargador conectado.'
         Gain = 'En equipos con Modern Standby es el único control de rendimiento que Windows respeta: sube los límites de potencia y la frecuencia del procesador.'
         Cost = 'Más consumo y más ruido de ventiladores.'
+        Advice = {
+            param($s)
+            if ($s.Device.Count -and -not $s.Device.ModernStandby) { return New-JuicerAdvice 'NoAplica' 'Sólo hace falta con Modern Standby; en este equipo lo cubre el plan de energía.' }
+            if ($s.Device.OnBattery) { return New-JuicerAdvice 'Opcional' 'Estás con batería, y el ajuste vale para la alimentación actual: aplícalo con el cargador conectado.' }
+            if ($s.Device.ModernStandby) { New-JuicerAdvice 'Recomendado' 'En tu portátil es el único control de rendimiento que Windows respeta: sube los límites de potencia del procesador con el cargador conectado.' }
+        }
         Skip = { if (-not (Test-JuicerModernStandby)) { 'Sólo hace falta en equipos con Modern Standby; aquí lo cubre el plan de energía.' } }
         Actions = @(
             @{
@@ -311,6 +389,14 @@ function New-JuicerCatalog {
         What = 'Impide que Windows mande a núcleos de eficiencia y frecuencias bajas los programas que no tienen el foco.'
         Gain = 'Se nota si juegas con algo a la vista que no tiene el foco (OBS, Discord, un segundo monitor), sobre todo con procesadores Intel de núcleos P y E.'
         Cost = 'Más consumo; en portátil, menos batería.'
+        Advice = {
+            param($s)
+            $side = @($s.Software.Capture) + @($s.Software.Chat)
+            if ($s.Device.Laptop) { return New-JuicerAdvice 'Opcional' 'En un portátil cuesta batería; tiene sentido si juegas enchufado y con cosas abiertas al lado.' }
+            if ($s.Cpu.Hybrid) { return New-JuicerAdvice 'Recomendado' "Tu $($s.Cpu.Name) tiene $($s.Cpu.PCores) núcleos P y $($s.Cpu.ECores) E: sin esto, lo que no tiene el foco (Discord, OBS, el navegador del otro monitor) acaba en los E a frecuencia baja." 'Medio' }
+            if ($side.Count -gt 0) { return New-JuicerAdvice 'Recomendado' "Usas $(Join-JuicerNames $side) mientras juegas: así Windows no los frena por no tener el foco." }
+            if ($s.Cpu.Name) { New-JuicerAdvice 'Opcional' 'Sin núcleos de eficiencia ni programas pesados al lado del juego, la diferencia es pequeña.' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\Power\PowerThrottling'; Name = 'PowerThrottlingOff'; Value = 1 }
         )
@@ -321,6 +407,12 @@ function New-JuicerCatalog {
         What = 'Activa el inicio rápido de Windows y, si la hibernación estaba apagada, crea el archivo reducido que necesita.'
         Gain = 'Al encender después de «Apagar», el núcleo se restaura desde disco en lugar de arrancar de cero: suele ahorrar varios segundos.'
         Cost = 'Con arranque dual, Linux verá la partición de Windows como en uso. «Reiniciar» no lo usa nunca, que es lo que conviene tras instalar drivers.'
+        Advice = {
+            param($s)
+            $other = @($s.Software.OtherSystems)
+            if ($other.Count -gt 0) { return New-JuicerAdvice 'NoRecomendado' "Tienes arranque dual con $(Join-JuicerNames $other): con inicio rápido Windows deja sus discos «en uso», y escribir en ellos desde Linux puede corromperlos." }
+            if ($s.Device.HibernateSupported -eq $false) { New-JuicerAdvice 'NoAplica' 'El firmware de este equipo no admite hibernación, y el inicio rápido la necesita.' }
+        }
         Actions = @(
             @{
                 Type = 'Custom'; Key = 'hibernate'; Label = 'Hibernación activada (archivo reducido si estaba apagada)'
@@ -360,6 +452,10 @@ function New-JuicerCatalog {
         What = 'Comprueba que el modo juego de Windows está activado.'
         Gain = 'Windows prioriza el juego en primer plano y no instala drivers ni muestra avisos de reinicio mientras juegas.'
         Cost = 'Ninguno.'
+        Advice = {
+            param($s)
+            if ($s.Cpu.DualCcdX3D) { New-JuicerAdvice 'Recomendado' "Imprescindible en tu $($s.Cpu.Name): el driver de AMD usa el modo juego para saber cuándo llevar el juego al CCD con caché 3D." 'Alto' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\GameBar'; Name = 'AutoGameModeEnabled'; Value = 1 }
             @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\GameBar'; Name = 'AllowAutoGameMode'; Value = 1 }
@@ -371,6 +467,19 @@ function New-JuicerCatalog {
         What = 'Deja que la propia tarjeta gráfica gestione su cola de trabajo en lugar del procesador.'
         Gain = 'Algo menos de carga en la CPU y de latencia. Es obligatoria para la generación de fotogramas de DLSS. Si tu GPU no la admite, Windows la ignora.'
         Cost = 'En algún juego concreto ha causado tirones; si te pasa, deshazla.'
+        Advice = {
+            param($s)
+            $gpus = @($s.Graphics.Gpus | Where-Object { $_.Kind -eq 'Dedicada' })
+            if ($gpus.Count -eq 0) { $gpus = @($s.Graphics.Gpus) }
+            if ($gpus.Count -eq 0) { return $null }
+            $fg = @($gpus | Where-Object { $_.FrameGen })
+            if ($fg.Count -gt 0) { return New-JuicerAdvice 'Recomendado' "Tu $($fg[0].Name) la necesita para la generación de fotogramas de DLSS." 'Medio' }
+            $yes = @($gpus | Where-Object { $_.HagsSupported -eq $true })
+            if ($yes.Count -gt 0) { return New-JuicerAdvice 'Recomendado' "Tu $($yes[0].Name) la admite: algo menos de carga en el procesador y de latencia." }
+            $no = @($gpus | Where-Object { $_.HagsSupported -eq $false })
+            if ($no.Count -eq $gpus.Count) { return New-JuicerAdvice 'NoAplica' "Tu $($no[0].Name) no la admite; Windows ignoraría el ajuste." }
+            New-JuicerAdvice 'Opcional' "No sé si tu $($gpus[0].Name) la admite; si no, Windows simplemente la ignora."
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'; Name = 'HwSchMode'; Value = 2 }
         )
@@ -392,6 +501,13 @@ function New-JuicerCatalog {
         What = 'Apaga la captura de Game Bar y la grabación continua de «lo que acaba de pasar».'
         Gain = 'La grabación en segundo plano codifica vídeo todo el tiempo que juegas: cuesta FPS aunque nunca guardes un clip.'
         Cost = 'Ya no podrás grabar ni capturar con Win+Alt+G o Win+Alt+R. Las capturas de NVIDIA, AMD u OBS no se ven afectadas.'
+        Advice = {
+            param($s)
+            $rec = @($s.Software.Capture)
+            if ($s.Settings.BackgroundRecording) { return New-JuicerAdvice 'Recomendado' 'Tienes activada la grabación en segundo plano: Windows está codificando vídeo todo el tiempo que juegas.' 'Medio' }
+            if ($rec.Count -gt 0) { return New-JuicerAdvice 'Recomendado' "Ya grabas con $(Join-JuicerNames $rec): la captura de Game Bar sobra." 'Bajo' }
+            if ($s.Settings.Count) { New-JuicerAdvice 'Opcional' 'La grabación continua ya está apagada; esto sólo quita la captura con Win+Alt+G, que es la única que tienes.' 'Bajo' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\System\GameConfigStore'; Name = 'GameDVR_Enabled'; Value = 0 }
             @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR'; Name = 'AppCaptureEnabled'; Value = 0 }
@@ -404,6 +520,10 @@ function New-JuicerCatalog {
         What = 'Apaga «Mejorar la precisión del puntero».'
         Gain = 'El cursor recorre siempre lo mismo para el mismo gesto de la mano: puntería consistente. Muchos juegos leen el ratón en crudo y ya lo ignoran, pero no todos, ni sus menús.'
         Cost = 'En el escritorio puede que quieras subir un poco la velocidad del puntero.'
+        Advice = {
+            param($s)
+            if ($s.Settings.MouseAcceleration) { New-JuicerAdvice 'Opcional' 'Tienes la aceleración activada. Si juegas a shooters, quitarla hace que el mismo gesto mueva siempre lo mismo.' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Control Panel\Mouse'; Name = 'MouseSpeed'; Kind = 'String'; Value = '0' }
             @{ Type = 'Registry'; Path = 'HKCU\Control Panel\Mouse'; Name = 'MouseThreshold1'; Kind = 'String'; Value = '0' }
@@ -416,6 +536,10 @@ function New-JuicerCatalog {
         What = 'Desactiva los atajos que abren Teclas especiales (Mayús cinco veces), Teclas filtro y Teclas de alternancia.'
         Gain = 'Se acabó que el juego se minimice porque pulsaste Mayús cinco veces seguidas.'
         Cost = 'Las funciones de accesibilidad siguen en Configuración; sólo desaparece el atajo de teclado.'
+        Advice = {
+            param($s)
+            if ($s.Settings.StickyKeysOn) { New-JuicerAdvice 'NoRecomendado' 'Tienes las Teclas especiales activadas: si las usas, el atajo es tu forma rápida de encenderlas y apagarlas.' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Control Panel\Accessibility\StickyKeys'; Name = 'Flags'; Kind = 'String'; Value = '506' }
             @{ Type = 'Registry'; Path = 'HKCU\Control Panel\Accessibility\Keyboard Response'; Name = 'Flags'; Kind = 'String'; Value = '122' }
@@ -455,6 +579,12 @@ function New-JuicerCatalog {
         What = 'Desactiva los efectos de transparencia en la barra de tareas, el menú Inicio y las ventanas.'
         Gain = 'Algo menos de trabajo para la GPU en el escritorio; se nota en gráficas integradas.'
         Cost = 'Estética.'
+        Advice = {
+            param($s)
+            $ded = @($s.Graphics.Gpus | Where-Object { $_.Kind -eq 'Dedicada' })
+            $int = @($s.Graphics.Gpus | Where-Object { $_.Kind -eq 'Integrada' })
+            if ($int.Count -gt 0 -and $ded.Count -eq 0) { New-JuicerAdvice 'Recomendado' "Tu $($int[0].Name) comparte memoria y potencia con el procesador: el desenfoque de la transparencia se paga en cada redibujado del escritorio." }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize'; Name = 'EnableTransparency'; Value = 0 }
         )
@@ -485,6 +615,12 @@ function New-JuicerCatalog {
         What = 'Desactiva el panel de Widgets (noticias, tiempo) mediante directiva.'
         Gain = 'El panel mantiene un navegador incrustado en memoria: suele liberar entre 100 y 300 MB de RAM y algo de red.'
         Cost = 'Desaparece el panel. Configuración puede decir «Algunas opciones las administra tu organización»: es esta directiva, nada más.'
+        Advice = {
+            param($s)
+            $gb = [double]$s.Memory.TotalBytes / 1GB
+            if ($gb -gt 0 -and $gb -lt 15) { return New-JuicerAdvice 'Recomendado' ('Con {0:N0} GB de RAM, los 100–300 MB que ocupa el panel se notan.' -f $gb) 'Medio' }
+            if ($gb -ge 31) { New-JuicerAdvice 'Opcional' ('Con {0:N0} GB de RAM, lo que ocupa el panel apenas se nota.' -f $gb) }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'; Name = 'AllowNewsAndInterests'; Value = 0 }
         )
@@ -518,6 +654,10 @@ function New-JuicerCatalog {
         What = 'Deshabilita «Experiencias del usuario y telemetría asociadas» (DiagTrack).'
         Gain = 'Evita la recogida y el envío periódico de datos de diagnóstico. Poca ganancia, pero sin efectos secundarios en un equipo doméstico.'
         Cost = 'El programa Windows Insider lo necesita.'
+        Advice = {
+            param($s)
+            if ($s.Os.Insider) { New-JuicerAdvice 'NoRecomendado' 'Estás en el programa Windows Insider, que necesita este servicio para seguir recibiendo compilaciones.' }
+        }
         Actions = @(
             @{ Type = 'Service'; Name = 'DiagTrack'; Start = 'Disabled' }
         )
@@ -528,6 +668,12 @@ function New-JuicerCatalog {
         What = 'Impide que las apps de Microsoft Store sigan ejecutándose cuando las cierras.'
         Gain = 'Menos procesos y menos memoria ocupada sin que lo sepas.'
         Cost = 'Las apps de la Tienda que avisan con la ventana cerrada (Enlace Móvil, WhatsApp, Correo) no notificarán hasta que las abras. Los programas normales no se ven afectados.'
+        Advice = {
+            param($s)
+            $bg = @($s.Software.Background)
+            if ($bg.Count -gt 0) { return New-JuicerAdvice 'NoRecomendado' "Usas $(Join-JuicerNames $bg): dejarían de avisarte con la ventana cerrada." }
+            if ($s.Memory.TotalBytes -gt 0 -and $s.Memory.TotalBytes -lt 15GB) { New-JuicerAdvice 'Recomendado' 'Con poca RAM, cada app de la Tienda que sigue viva al cerrarla resta memoria a los juegos.' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Windows\CurrentVersion\BackgroundAccessApplications'; Name = 'GlobalUserDisabled'; Value = 1 }
             @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Search'; Name = 'BackgroundAppGlobalToggle'; Value = 0 }
@@ -550,6 +696,12 @@ function New-JuicerCatalog {
         What = 'Deshabilita Windows Search, el servicio que indexa archivos, correo y aplicaciones.'
         Gain = 'Sin indexador no hay lecturas de disco en segundo plano. Sólo se nota con disco duro mecánico: con SSD el indexador ya se frena solo mientras usas el equipo.'
         Cost = 'Buscar archivos desde el Explorador o Inicio se vuelve lento, y la búsqueda de Outlook deja de funcionar.'
+        Advice = {
+            param($s)
+            if ($s.Software.Outlook) { return New-JuicerAdvice 'NoRecomendado' 'Tienes Outlook: su búsqueda depende de este índice y dejaría de funcionar.' }
+            if ($s.Storage.SystemDrive.Media -eq 'HDD') { return New-JuicerAdvice 'Opcional' 'Con Windows en disco duro, el indexador compite por el disco con todo lo demás. Pierdes la búsqueda rápida de archivos.' 'Medio' }
+            if ($s.Storage.SystemDrive) { New-JuicerAdvice 'Opcional' 'Con SSD el indexador apenas se nota y ya se frena solo mientras usas el equipo: sólo perderías la búsqueda rápida.' }
+        }
         Actions = @(
             @{ Type = 'Service'; Name = 'WSearch'; Start = 'Disabled' }
         )
@@ -573,6 +725,10 @@ function New-JuicerCatalog {
         What = 'NTFS deja de escribir en disco cada vez que se lee un archivo.'
         Gain = 'Menos escrituras al cargar juegos con muchos archivos.'
         Cost = 'El Sensor de almacenamiento usa esa fecha para borrar descargas que no abres desde hace tiempo y dejará de acertar.'
+        Advice = {
+            param($s)
+            if ($s.Settings.StorageSenseCleansDownloads) { New-JuicerAdvice 'NoRecomendado' 'El Sensor de almacenamiento está borrando descargas que no abres, y necesita esta fecha para saber cuáles son.' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = $fs; Name = 'NtfsDisableLastAccessUpdate'; Value = 0x80000001L }
         )
@@ -586,6 +742,12 @@ function New-JuicerCatalog {
         What = 'En cada adaptador de red con dirección IP, envía al momento los paquetes TCP pequeños en lugar de agruparlos, y confirma cada uno sin esperar.'
         Gain = 'Menos latencia en juegos que usan TCP, sobre todo MMO como World of Warcraft o Final Fantasy XIV. La mayoría de shooters usa UDP y no notará nada.'
         Cost = 'Unos pocos paquetes más por segundo en la red.'
+        Advice = {
+            param($s)
+            $tcp = @($s.Software.TcpGames)
+            if ($tcp.Count -gt 0) { return New-JuicerAdvice 'Recomendado' "Tienes $(Join-JuicerNames $tcp), que habla con su servidor por TCP: sin Nagle, cada acción sale al momento." 'Medio' }
+            if ($s.Software.Count) { New-JuicerAdvice 'Opcional' 'No encontré juegos que usen TCP (sobre todo MMO); en los demás no cambia nada.' }
+        }
         Actions = {
             foreach ($p in (Get-JuicerNetworkInterfaceKeys)) {
                 @{ Type = 'Registry'; Path = $p; Name = 'TcpAckFrequency'; Value = 1 }
@@ -602,6 +764,15 @@ function New-JuicerCatalog {
         What = 'Apaga la integridad de memoria de «Aislamiento del núcleo», que verifica cada driver dentro de una máquina virtual protegida.'
         Gain = 'Microsoft reconoce que cuesta rendimiento en juegos y propone desactivarla a quien priorice jugar. En pruebas publicadas, de casi nada a más de un 10 % según juego y procesador.'
         Cost = 'Un driver malicioso o vulnerable lo tiene más fácil para hacerse con el núcleo de Windows. Si algún juego o anti-trampas deja de abrir, deshazlo.'
+        Advice = {
+            param($s)
+            if ($s.Security.Hvci -eq $false) { return New-JuicerAdvice 'NoAplica' 'La integridad de memoria ya está desactivada en este equipo.' }
+            if ($s.Security.HvciPolicy) { return New-JuicerAdvice 'NoAplica' 'La impone una directiva de grupo.' }
+            $ac = if (@($s.Software.AntiCheat).Count -gt 0) { " Tienes $(Join-JuicerNames $s.Software.AntiCheat): si algún juego deja de abrir, deshazlo." } else { '' }
+            if ($s.Cpu.Mbec -eq $false) { return New-JuicerAdvice 'Opcional' "Tu $($s.Cpu.Name) no tiene la ayuda por hardware (MBEC o GMET) en la que se apoya esta protección, así que Windows la emula y cuesta bastante más que en un procesador moderno.$ac" 'Alto' }
+            if ($s.Cpu.Mbec -eq $true) { return New-JuicerAdvice 'Opcional' "Tu $($s.Cpu.Name) tiene la ayuda por hardware que abarata esta protección: aquí el coste es moderado.$ac" 'Medio' }
+            if ($ac) { New-JuicerAdvice 'Opcional' ('El coste depende del juego y del procesador.' + $ac) }
+        }
         Skip = {
             $p = Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\DeviceGuard' 'HypervisorEnforcedCodeIntegrity'
             if ($p -and $p.Value -ne 0) { 'La impone una directiva de grupo; Win Juicer no toca directivas de empresa.' }
@@ -619,6 +790,18 @@ function New-JuicerCatalog {
         What = 'Impide que el hipervisor se cargue al arrancar; sin él no funciona nada basado en virtualización (VBS).'
         Gain = 'Quita la capa de virtualización que se interpone entre Windows y el hardware: elimina el coste de VBS entero, incluido lo que apagar la integridad de memoria no quita.'
         Cost = 'Dejan de funcionar WSL 2, Hyper-V, Windows Sandbox, Docker Desktop y Credential Guard. Si BitLocker está activo, se suspende durante un reinicio para que no pida la clave de recuperación.'
+        Advice = {
+            param($s)
+            $needs = @()
+            if ($s.Software.Wsl) { $needs += 'WSL' }
+            if ($s.Software.HyperV) { $needs += 'Hyper-V' }
+            if ($s.Software.Sandbox) { $needs += 'Windows Sandbox' }
+            if ($s.Software.Wsa) { $needs += 'el Subsistema de Android' }
+            $needs += @($s.Software.Vm | Where-Object { $_ -eq 'Docker Desktop' })
+            if ($needs.Count -gt 0) { return New-JuicerAdvice 'NoRecomendado' "Tienes $(Join-JuicerNames $needs), que dejaría de funcionar." }
+            if ($s.Security.Vbs -eq $false -and $s.Device.HypervisorPresent -eq $false) { return New-JuicerAdvice 'NoAplica' 'El hipervisor no se carga en este equipo.' }
+            if (@($s.Software.AntiCheat).Count -gt 0) { New-JuicerAdvice 'Opcional' "Quita el coste de VBS entero. Tienes $(Join-JuicerNames $s.Software.AntiCheat): si algún juego deja de abrir, deshazlo." }
+        }
         Actions = @(
             @{
                 Type = 'Custom'; Key = 'hypervisorlaunchtype'; Label = 'Arranque: hypervisorlaunchtype off'

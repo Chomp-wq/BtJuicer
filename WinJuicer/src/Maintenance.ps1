@@ -109,7 +109,7 @@ function Invoke-JuicerDriveOptimize {
     $results = @()
     $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter -and $_.FileSystem -in 'NTFS', 'ReFS' })
     foreach ($v in $volumes) {
-        $media = Get-JuicerDriveMedia "$($v.DriveLetter):"
+        $media = if ($script:System -and $script:System.Storage) { Find-JuicerVolume $script:System.Storage.Volumes "$($v.DriveLetter):" } else { $null }
         try {
             Optimize-Volume -DriveLetter $v.DriveLetter -ErrorAction Stop
             $results += @{ Drive = "$($v.DriveLetter):"; Media = $(if ($media) { $media.Media } else { '' }); Ok = $true; Message = '' }

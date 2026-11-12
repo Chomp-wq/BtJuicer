@@ -109,11 +109,50 @@ namespace WinJuicer {
         [DllImport("powrprof.dll")]
         static extern byte GetPwrCapabilities(byte[] caps);
 
-        // SYSTEM_POWER_CAPABILITIES.AoAc, at byte 20 of the structure.
-        public static bool IsModernStandby() {
+        // The raw SYSTEM_POWER_CAPABILITIES: SystemS4 is byte 6, AoAc byte 20.
+        public static byte[] GetPowerCapabilities() {
             var caps = new byte[256];
-            if (GetPwrCapabilities(caps) == 0) return false;
-            return caps[20] != 0;
+            if (GetPwrCapabilities(caps) == 0) throw new Win32Exception();
+            return caps;
+        }
+
+        public static bool IsModernStandby() {
+            return GetPowerCapabilities()[20] != 0;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetSystemCpuSetInformation(IntPtr info, uint length, out uint returned, IntPtr process, uint flags);
+
+        // One entry per logical processor: { group, core, last-level cache, efficiency class }.
+        // Hybrid Intel parts report two efficiency classes; AMD parts with two CCDs
+        // report two last-level caches.
+        public static int[][] GetCpuSets() {
+            uint length;
+            GetSystemCpuSetInformation(IntPtr.Zero, 0, out length, IntPtr.Zero, 0);
+            if (length == 0) throw new Win32Exception();
+            IntPtr buffer = Marshal.AllocHGlobal((int)length);
+            try {
+                if (!GetSystemCpuSetInformation(buffer, length, out length, IntPtr.Zero, 0)) throw new Win32Exception();
+                var list = new List<int[]>();
+                int offset = 0;
+                while (offset < length) {
+                    int size = Marshal.ReadInt32(buffer, offset);
+                    int type = Marshal.ReadInt32(buffer, offset + 4);
+                    if (type == 0) {
+                        list.Add(new int[] {
+                            Marshal.ReadInt16(buffer, offset + 12),
+                            Marshal.ReadByte(buffer, offset + 15),
+                            Marshal.ReadByte(buffer, offset + 16),
+                            Marshal.ReadByte(buffer, offset + 18)
+                        });
+                    }
+                    if (size <= 0) break;
+                    offset += size;
+                }
+                return list.ToArray();
+            } finally {
+                Marshal.FreeHGlobal(buffer);
+            }
         }
 
         // The "Power mode" slider. Not in the SDK headers, but exported by
@@ -161,4 +200,19 @@ function Get-JuicerDisplays {
     if (-not (Test-JuicerWindows)) { return @() }
     Initialize-JuicerNative
     @([WinJuicer.Native]::GetDisplays())
+}
+
+function Get-JuicerPowerCapabilities {
+    if (-not (Test-JuicerWindows)) { return $null }
+    Initialize-JuicerNative
+    $c = [WinJuicer.Native]::GetPowerCapabilities()
+    @{ Hibernate = ($c[6] -ne 0); ModernStandby = ($c[20] -ne 0) }
+}
+
+function Get-JuicerCpuSets {
+    if (-not (Test-JuicerWindows)) { return @() }
+    Initialize-JuicerNative
+    foreach ($e in [WinJuicer.Native]::GetCpuSets()) {
+        @{ Group = $e[0]; Core = $e[1]; Cache = $e[2]; Efficiency = $e[3] }
+    }
 }
