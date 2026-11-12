@@ -81,6 +81,7 @@ function Get-MachineSnapshot {
     foreach ($n in ($s.Spi.Keys | Sort-Object)) { [void]$lines.Add(('P {0}|{1}' -f $n, $s.Spi[$n])) }
     foreach ($n in ($s.Defender | Sort-Object)) { [void]$lines.Add("D $n") }
     foreach ($n in ($s.Tasks.Keys | Sort-Object)) { [void]$lines.Add(('T {0}|{1}' -f $n, $s.Tasks[$n].Enabled)) }
+    [void]$lines.Add("M compression=$($s.MemCompression)")
     $f = $Machine.Fake
     [void]$lines.Add("F active=$($f.Active) plans=$((@($f.Plans) | Sort-Object) -join ',') hib=$($f.Hibernate)/$($f.HibernateType)")
     foreach ($k in ($f.Bcd.Keys | Sort-Object)) { [void]$lines.Add("B $k=$($f.Bcd[$k])") }

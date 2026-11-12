@@ -106,7 +106,8 @@ function Get-JuicerMemoryTraits {
     $t = @{ TotalBytes = 0; ModuleCount = 0; Speed = 0; Type = 0; TypeName = 'RAM'; Channels = @(); SingleChannel = $false; SameChannel = $false; XmpLikelyOff = $false }
     if (-not $Modules -or @($Modules).Count -eq 0) { return $t }
     $t.ModuleCount = @($Modules).Count
-    $t.TotalBytes = [int64](($Modules | Measure-Object -Property Capacity -Sum).Sum)
+    # (Measure-Object -Property cannot read hashtables in Windows PowerShell 5.1.)
+    foreach ($m in $Modules) { $t.TotalBytes += [int64]$m.Capacity }
     $speeds = @($Modules | ForEach-Object { if ($_.ConfiguredClockSpeed) { $_.ConfiguredClockSpeed } else { $_.Speed } } | Where-Object { $_ -gt 0 })
     if ($speeds.Count -gt 0) { $t.Speed = [int](($speeds | Measure-Object -Minimum).Minimum) }
     $t.Type = [int](@($Modules)[0].SMBIOSMemoryType)
@@ -148,7 +149,7 @@ function Get-JuicerOtherSystems {
             if ($d -match '(?i)ubuntu|fedora|debian|linux|grub|arch|manjaro|mint|opensuse|suse|pop!?_?os|elementary|zorin|kali|systemd|nixos|gentoo|endeavour|cachyos|bazzite|steamos') { $d }
         }
     }
-    @($names | Select-Object -Unique)
+    @($names | Where-Object { $_ } | Select-Object -Unique)
 }
 
 $script:SoftwareRules = @{
@@ -174,7 +175,7 @@ function Find-JuicerNamed {
     $found = foreach ($label in $Rules.Keys) {
         foreach ($n in $Names) { if ($n -match $Rules[$label]) { $label; break } }
     }
-    @($found | Select-Object -Unique)
+    @($found | Where-Object { $_ } | Select-Object -Unique)
 }
 
 function Get-JuicerSoftwareTraits {
@@ -201,7 +202,7 @@ function Get-JuicerSoftwareTraits {
     $t.Wsa = @($Packages | Where-Object { $_ -like 'MicrosoftCorporationII.WindowsSubsystemForAndroid_*' }).Count -gt 0
     if ($t.XboxApp) { $t.Launchers = @($t.Launchers) + 'Xbox' }
     foreach ($svc in $script:AntiCheatServices.Keys) { if ($Services -contains $svc) { $t.AntiCheat += $script:AntiCheatServices[$svc] } }
-    $t.AntiCheat = @($t.AntiCheat | Select-Object -Unique)
+    $t.AntiCheat = @($t.AntiCheat | Where-Object { $_ } | Select-Object -Unique)
     # AMD's 3D V-Cache Performance Optimizer ships with the chipset driver.
     $t.VCacheDriver = @($Services | Where-Object { $_ -match '(?i)3d ?v-?cache' }).Count -gt 0
     $t
@@ -339,8 +340,8 @@ function Get-JuicerInvCpu {
         $p = @(Get-CimInstance Win32_Processor -ErrorAction SilentlyContinue)
         if ($p.Count -gt 0) {
             if (-not $name) { $name = [string]$p[0].Name }
-            $cores = [int](($p | Measure-Object -Property NumberOfCores -Sum).Sum)
-            $threads = [int](($p | Measure-Object -Property NumberOfLogicalProcessors -Sum).Sum)
+            $cores = 0; $threads = 0
+            foreach ($x in $p) { $cores += [int]$x.NumberOfCores; $threads += [int]$x.NumberOfLogicalProcessors }
             $clock = [int]$p[0].MaxClockSpeed
             $virt = [bool]$p[0].VirtualizationFirmwareEnabled
         }
@@ -371,7 +372,7 @@ function Get-JuicerInvMemory {
         $cs = Get-CimInstance Win32_ComputerSystem -ErrorAction SilentlyContinue
         if ($cs) { $m.PageFileAuto = [bool]$cs.AutomaticManagedPagefile }
         $m.PageFiles = @(Get-CimInstance Win32_PageFileUsage -ErrorAction SilentlyContinue | ForEach-Object { @{ Path = [string]$_.Name; SizeMB = [int]$_.AllocatedBaseSize } })
-        try { $m.Compression = [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression } catch { Write-Verbose "Sin MMAgent: $_" }
+        try { $m.Compression = [bool](& (Get-JuicerBackend).MemCompressionGet) } catch { Write-Verbose "Sin MMAgent: $_" }
     }
     $m
 }
@@ -501,7 +502,7 @@ function Get-JuicerInvSecurity {
     }
     try {
         $s.OtherAv = @(Get-CimInstance -Namespace root/SecurityCenter2 -ClassName AntiVirusProduct -ErrorAction Stop |
-                ForEach-Object { [string]$_.displayName } | Where-Object { $_ -notmatch 'Windows Defender|Microsoft Defender' } | Select-Object -Unique)
+                ForEach-Object { [string]$_.displayName } | Where-Object { $_ -and $_ -notmatch 'Windows Defender|Microsoft Defender' } | Select-Object -Unique)
     } catch {
         Write-Verbose "Sin Centro de seguridad: $_"
     }

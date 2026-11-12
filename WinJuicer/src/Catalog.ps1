@@ -272,10 +272,10 @@ function New-JuicerCatalog {
         Actions = @(
             @{
                 Type = 'Custom'; Key = 'mmagent'; Label = 'Compresión de memoria: activada'
-                Test = { [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression }
-                Capture = { @{ Enabled = [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression } }
-                Apply = { Enable-MMAgent -MemoryCompression -ErrorAction Stop }
-                Restore = { param($s) if (-not $s.Enabled) { Disable-MMAgent -MemoryCompression -ErrorAction Stop } }
+                Test = { [bool](& (Get-JuicerBackend).MemCompressionGet) }
+                Capture = { @{ Enabled = [bool](& (Get-JuicerBackend).MemCompressionGet) } }
+                Apply = { & (Get-JuicerBackend).MemCompressionSet $true }
+                Restore = { param($s) if (-not $s.Enabled) { & (Get-JuicerBackend).MemCompressionSet $false } }
             }
         )
     }

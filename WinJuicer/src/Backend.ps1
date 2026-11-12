@@ -294,6 +294,11 @@ function New-JuicerWindowsBackend {
         DefRemove    = { param([string]$Path) Remove-MpPreference -ExclusionPath $Path -ErrorAction Stop }
         TaskRead     = ${function:Read-WinTask}
         TaskWrite    = ${function:Set-WinTask}
+        MemCompressionGet = { [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression }
+        MemCompressionSet = {
+            param([bool]$Enabled)
+            if ($Enabled) { Enable-MMAgent -MemoryCompression -ErrorAction Stop } else { Disable-MMAgent -MemoryCompression -ErrorAction Stop }
+        }
     }
 }
 
@@ -315,6 +320,7 @@ function New-JuicerMemoryBackend {
         Spi      = @{}   # action -> bool
         Defender = New-Object System.Collections.ArrayList
         Tasks    = @{}   # 'path|name' -> @{ Enabled }
+        MemCompression = $true
         Calls    = New-Object System.Collections.ArrayList
         Run      = $Run
     }
@@ -361,6 +367,8 @@ function New-JuicerMemoryBackend {
             @{ Enabled = $t.Enabled }
         }
         TaskWrite   = { param($Path, $Name, $Enabled) $script:Mem.Tasks["$Path|$Name"].Enabled = [bool]$Enabled }
+        MemCompressionGet = { [bool]$script:Mem.MemCompression }
+        MemCompressionSet = { param($Enabled) $script:Mem.MemCompression = [bool]$Enabled }
     }
 }
 

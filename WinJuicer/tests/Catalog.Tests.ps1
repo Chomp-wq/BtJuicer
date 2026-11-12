@@ -36,6 +36,7 @@ BeforeAll {
         $m.Backend.State.Services['WSearch'] = @{ Start = 'AutomaticDelayed'; Running = $true }
         $m.Backend.State.Spi[[uint32]0x1042] = $true
         $m.Fake.Bcd['useplatformclock'] = 'Yes'
+        $m.Backend.State.MemCompression = $false
         $m
     }
 }

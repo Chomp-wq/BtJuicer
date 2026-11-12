@@ -122,6 +122,12 @@ Describe 'Clasificar el hardware' {
         (Get-JuicerSoftwareTraits -Games @('FINAL FANTASY XIV Online')).TcpGames | Should -Be @('Final Fantasy XIV')
     }
 
+    It 'sin nada que encontrar, las listas quedan vacías y no con un nulo dentro' {
+        $t = Get-JuicerSoftwareTraits -Programs @('Notepad++') -Packages @() -Services @()
+        foreach ($k in 'Launchers', 'Capture', 'Chat', 'TcpGames', 'Vm', 'AntiCheat') { @($t[$k]).Count | Should -Be 0 -Because $k }
+        @(Get-JuicerOtherSystems '').Count | Should -Be 0
+    }
+
     It 'encuentra otros sistemas en el arranque UEFI' {
         $fw = "Firmware Boot Manager`nidentifier {fwbootmgr}`n`nFirmware Application (101fffff)`ndescription             Windows Boot Manager`n`ndescription             ubuntu`n`ndescription             UEFI: Samsung SSD"
         Get-JuicerOtherSystems $fw | Should -Be @('ubuntu')
