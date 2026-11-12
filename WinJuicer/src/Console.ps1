@@ -1118,6 +1118,24 @@ function Format-JuicerShieldBlocked {
     @($Blocked.Sites)
 }
 
+# The check, line by line: what works, what does not and why, and a last word.
+function Write-JuicerShieldCheck {
+    Write-Host ''
+    Write-Host '  Comprobando que la protección funciona…' -ForegroundColor DarkGray
+    $checks = @(Get-JuicerShieldCheck)
+    foreach ($c in $checks) {
+        $mark = if ($c.Ok -eq $true) { @('[ok]', 'Green') } elseif ($c.Ok -eq $false) { @('[!!]', 'Red') } else { @('[??]', 'Yellow') }
+        Write-Host "  $($mark[0]) " -ForegroundColor $mark[1] -NoNewline
+        Write-Host $c.Title
+        if ($c.Detail) { Write-JuicerWrapped $c.Detail 7 'Gray' }
+    }
+    $bad = @($checks | Where-Object { $_.Ok -eq $false })
+    Write-Host ''
+    if ($bad.Count -eq 0) { Write-JuicerWrapped 'Funciona. Si aun así una web carga, ciérrala, cierra el navegador del todo y vuelve a abrirlo.' 2 'Green' }
+    else { Write-JuicerWrapped 'Corrige lo marcado con [!!] y vuelve a comprobarlo.' 2 'Yellow' }
+    $bad.Count
+}
+
 function Write-JuicerShieldFixed {
     param($Fixed)
     foreach ($x in @($Fixed)) { Write-Host "  [ok] $x" -ForegroundColor Green }
@@ -1132,6 +1150,11 @@ function Invoke-JuicerShieldCli {
     switch ($What) {
         'Mantener' { [void](Repair-JuicerShield); return 0 }
         'Estado' { Write-JuicerShieldState; return 0 }
+        'Comprobar' {
+            if (-not (Test-JuicerShield)) { Write-JuicerWrapped 'La protección no está activada: -ProteccionAdultos Activar.' 2 'Yellow'; return 1 }
+            if ((Write-JuicerShieldCheck) -gt 0) { return 1 }
+            return 0
+        }
         'Activar' {
             if (Test-JuicerShield) {
                 Write-JuicerShieldState
@@ -1154,7 +1177,8 @@ function Invoke-JuicerShieldCli {
             }
             Write-JuicerShieldFixed @(Enable-JuicerShield -Level $n)
             Write-JuicerShieldState
-            Write-JuicerWrapped 'Los navegadores abiertos la aplican al cerrarlos y abrirlos de nuevo.' 2 'Gray'
+            Write-JuicerWrapped 'Cierra del todo los navegadores abiertos (Brave, Chrome y Edge siguen en segundo plano al cerrar la ventana: icono junto al reloj, «Salir»), o reinicia el PC.' 2 'Yellow'
+            [void](Write-JuicerShieldCheck)
             return 0
         }
         'Subir' {
@@ -1206,6 +1230,7 @@ function Show-JuicerShield {
         Write-Host ''
         if ($up) { Write-Host '  [1] Pasar a la estricta (para siempre)' }
         Write-Host '  [2] Bloquear una web para siempre: X, Reddit, Tumblr o la que digas'
+        Write-Host '  [3] Comprobar que funciona en este PC'
         Write-Host '  [0] Volver'
         switch (Read-JuicerChoice) {
             '1' { if ($up) { [void](Invoke-JuicerShieldCli 'Subir'); Wait-JuicerKey } }
@@ -1213,6 +1238,7 @@ function Show-JuicerShield {
                 try { [void](Invoke-JuicerShieldCli 'Bloquear') } catch { Write-Host "  $_" -ForegroundColor Yellow }
                 Wait-JuicerKey
             }
+            '3' { [void](Write-JuicerShieldCheck); Wait-JuicerKey }
             default { return }
         }
     }
@@ -1348,7 +1374,7 @@ function Start-Juicer {
         [switch]$OptimizarJuegos,
         [switch]$Mantener,
         [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
-        [ValidateSet('', 'Activar', 'Subir', 'Bloquear', 'Mantener', 'Estado')][string]$ProteccionAdultos = '',
+        [ValidateSet('', 'Activar', 'Subir', 'Bloquear', 'Mantener', 'Estado', 'Comprobar')][string]$ProteccionAdultos = '',
         [ValidateSet('', 'Equilibrado', 'Estricto')][string]$NivelProteccion = '',
         [string[]]$BloquearWeb = @(),
         [int]$Fps,

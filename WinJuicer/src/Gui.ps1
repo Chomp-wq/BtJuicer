@@ -459,6 +459,7 @@ $script:GuiXaml = @'
                     <Button x:Name="BtnShieldX" Content="Bloquear X (Twitter)…" Margin="0,3,6,3"/>
                     <Button x:Name="BtnShieldReddit" Content="Bloquear Reddit…" Margin="0,3,6,3"/>
                     <Button x:Name="BtnShieldTumblr" Content="Bloquear Tumblr…" Margin="0,3,6,3"/>
+                    <Button x:Name="BtnShieldCheck" Content="Comprobar que funciona" Margin="0,3,6,3"/>
                   </WrapPanel>
                   <DockPanel Margin="0,2,0,0" MaxWidth="560" HorizontalAlignment="Left">
                     <TextBlock DockPanel.Dock="Left" Text="Otra web:" VerticalAlignment="Center" Margin="0,0,8,0"/>
@@ -1110,6 +1111,8 @@ $script:GuiWork = @{
         }
         @{ Fixed = $r; Added = $added; Info = (Get-JuicerShieldInfo) }
     }
+    # Whether the protection really filters here: reads only.
+    ShieldCheck = { @{ Checks = @(Get-JuicerShieldCheck) } }
     # What waited for a game to close, now that it has.
     PacerPending = {
         $r = @(Invoke-JuicerPacerPending)
@@ -1607,9 +1610,24 @@ function Complete-JuicerGuiShieldTask {
     if ($fw.Count -ge 3) { $lines += "✓ Cortafuegos: $($fw.Count) reglas (el DNS no puede salir del filtro, ni cifrado)" }
     if ($browser.Count -gt 3) { $lines += "✓ Navegadores: $($browser.Count) reglas en Chrome, Edge, Brave y Firefox (búsqueda segura, YouTube restringido, sin DNS cifrado propio$(if ([int]$R.Info.Level -ge 2) { ', sin ventanas privadas ni proxy' }))" }
     elseif ($browser.Count -gt 0) { $lines += @($browser | ForEach-Object { "✓ $_" }) }
-    $text = if ($lines.Count -gt 0) { "${Done}:`n`n" + ($lines -join "`n") + "`n`nLos navegadores abiertos la aplican al cerrarlos y abrirlos de nuevo." } else { $Done + '.' }
+    $text = if ($lines.Count -gt 0) { "${Done}:`n`n" + ($lines -join "`n") + "`n`nCierra del todo los navegadores abiertos (Brave, Chrome y Edge siguen en segundo plano al cerrar la ventana: icono junto al reloj, «Salir»), o reinicia el PC. Después pulsa «Comprobar que funciona»." } else { $Done + '.' }
     Show-JuicerGuiMessage $text | Out-Null
     Set-JuicerGuiStatus "$Done."
+}
+
+# The check, as a message: each point with ✓, ✗ or ?, and why.
+function Invoke-JuicerGuiShieldCheck {
+    Start-JuicerGuiTask 'Comprobando que la protección funciona…' 'ShieldCheck' @{} {
+        param($r)
+        $lines = foreach ($x in @($r.Checks)) {
+            $m = if ($x.Ok -eq $true) { '✓' } elseif ($x.Ok -eq $false) { '✗' } else { '?' }
+            "$m $($x.Title)$(if ($x.Detail) { "`n    $($x.Detail)" })"
+        }
+        $bad = @($r.Checks | Where-Object { $_.Ok -eq $false }).Count
+        $end = if ($bad -eq 0) { 'Funciona. Si aun así una web carga, cierra el navegador del todo y vuelve a abrirlo.' } else { 'Corrige lo marcado con ✗ y vuelve a comprobarlo.' }
+        Show-JuicerGuiMessage ((@($lines) -join "`n`n") + "`n`n" + $end) $(if ($bad -gt 0) { 'Warning' } else { 'Information' }) | Out-Null
+        Set-JuicerGuiStatus $(if ($bad -eq 0) { 'La protección funciona.' } else { "La protección tiene $bad problema(s)." })
+    }
 }
 
 # Two questions, the second a warning: there is no way back from Win Juicer.
@@ -2694,6 +2712,7 @@ function Register-JuicerGuiHandlers {
         BtnShieldReddit       = { Invoke-JuicerGuiShieldBlock 'Reddit' }
         BtnShieldTumblr       = { Invoke-JuicerGuiShieldBlock 'Tumblr' }
         BtnShieldBlock        = { Invoke-JuicerGuiShieldBlock $script:Gui.C.ShieldWeb.Text }
+        BtnShieldCheck        = { Invoke-JuicerGuiShieldCheck }
         BtnHomeGames          = { Close-JuicerGuiGame; $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabJuegos }
         BtnHomeAudit          = { $script:Gui.C.Tabs.SelectedItem = $script:Gui.C.TabEquipo }
         BtnHomeUndo           = { & $script:Gui.Handlers['BtnUndoAll'] }

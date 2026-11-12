@@ -396,6 +396,59 @@ function Set-WinDns {
     Clear-DnsClientCache -ErrorAction SilentlyContinue
 }
 
+# --- Checking that the content protection works ----------------------------
+
+# The adapter the traffic actually leaves by (the default route with the
+# lowest metric), whether it is a physical one, and the DNS servers Windows
+# uses on it, from DHCP or set by hand.
+function Get-WinDnsRoute {
+    $r = @(Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue) + @(Get-NetRoute -DestinationPrefix '::/0' -ErrorAction SilentlyContinue) |
+        Where-Object { $_ } | Sort-Object RouteMetric | Select-Object -First 1
+    if (-not $r) { return $null }
+    $idx = [int]$r.ifIndex
+    $a = Get-NetAdapter -InterfaceIndex $idx -ErrorAction SilentlyContinue
+    $physical = @(Get-NetAdapter -Physical -ErrorAction SilentlyContinue | Where-Object { [int]$_.ifIndex -eq $idx }).Count -gt 0
+    $servers = @(Get-DnsClientServerAddress -InterfaceIndex $idx -ErrorAction SilentlyContinue | ForEach-Object { $_.ServerAddresses } | Where-Object { $_ })
+    @{
+        Name = $(if ($a) { [string]$a.Name } else { [string]$r.InterfaceAlias }); Description = $(if ($a) { [string]$a.InterfaceDescription } else { '' })
+        Virtual = -not $physical; Servers = $servers
+    }
+}
+
+# The A records a name resolves to, through Windows (as a browser would) or
+# straight from one server. @{ Ips; Error }.
+function Resolve-WinName {
+    param([string]$Name, [string]$Server = '')
+    $p = @{ Name = $Name; Type = 'A'; DnsOnly = $true; QuickTimeout = $true; ErrorAction = 'Stop' }
+    if ($Server) { $p.Server = $Server }
+    try {
+        @{ Ips = @(Resolve-DnsName @p | Where-Object { $_.Type -eq 'A' } | ForEach-Object { [string]$_.IPAddress }); Error = '' }
+    } catch {
+        @{ Ips = @(); Error = "$($_.Exception.Message)" }
+    }
+}
+
+# The browsers running now, each with when its oldest process started: one
+# opened before the protection still has the old DNS answers and rules.
+function Get-WinBrowserProcesses {
+    $out = @()
+    foreach ($g in @(Get-Process -Name brave, chrome, msedge, firefox -ErrorAction SilentlyContinue | Group-Object ProcessName)) {
+        $starts = @($g.Group | ForEach-Object { try { $_.StartTime } catch { $null } } | Where-Object { $_ } | Sort-Object)
+        $out += @{ Name = [string]$g.Name; Started = $(if ($starts.Count -gt 0) { $starts[0] } else { $null }) }
+    }
+    , $out
+}
+
+# Chromium-based browsers reread their policies when told group policy
+# changed; written straight to the registry, they would wait hours.
+function Invoke-WinPolicyRefresh {
+    if (-not ('WinJuicer.Gp' -as [type])) {
+        Add-Type -Namespace WinJuicer -Name Gp -MemberDefinition '[DllImport("userenv.dll", SetLastError = true)] public static extern bool RefreshPolicyEx(bool isMachine, uint options);'
+    }
+    [void][WinJuicer.Gp]::RefreshPolicyEx($true, 1)
+    [void][WinJuicer.Gp]::RefreshPolicyEx($false, 1)
+}
+
 # --- Firewall and hosts file, for the content protection ---------------------
 
 # The rules with these names as Windows applies them (the active store: a rule
@@ -763,6 +816,11 @@ function New-JuicerWindowsBackend {
         FwOn         = { param([string[]]$Profiles) Set-NetFirewallProfile -Name $Profiles -Enabled True -ErrorAction Stop }
         HostsRead    = ${function:Read-WinHosts}
         HostsWrite   = ${function:Write-WinHosts}
+        DnsRoute     = ${function:Get-WinDnsRoute}
+        ResolveName  = ${function:Resolve-WinName}
+        Browsers     = ${function:Get-WinBrowserProcesses}
+        PolicyRefresh = ${function:Invoke-WinPolicyRefresh}
+        DnsFlush     = { Clear-DnsClientCache -ErrorAction SilentlyContinue }
         FeatRead     = ${function:Read-WinFeature}
         FeatSet      = ${function:Set-WinFeature}
         FpsBackend   = ${function:Get-WinFpsBackend}
@@ -808,6 +866,9 @@ function New-JuicerMemoryBackend {
         DnsDown  = New-Object System.Collections.ArrayList   # DNS servers that do not answer
         Firewall = @{}    # rule name -> the rule, as FwRules gives it
         FwOff    = New-Object System.Collections.ArrayList   # firewall profiles turned off
+        Route    = $null                                     # @{ Name; Description; Virtual; Servers }: where traffic leaves
+        Resolve  = @{}                                       # 'name|server' ('' for Windows) -> IPs
+        Browsers = New-Object System.Collections.ArrayList   # @{ Name; Started }
         FwThirdParty = $false   # another program is the firewall
         Hosts    = ((@('# Copyright (c) 1993-2009 Microsoft Corp.', '#', '# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.', '#', "#`t127.0.0.1       localhost", "#`t::1             localhost") -join "`r`n") + "`r`n")
         FpsExact = @{}    # exe -> fractional cap (RTSS)
@@ -889,6 +950,15 @@ function New-JuicerMemoryBackend {
         FwOn        = { param($Profiles) foreach ($p in @($Profiles)) { $script:Mem.FwOff.Remove($p) } }
         HostsRead   = { $script:Mem.Hosts }
         HostsWrite  = { param($Text) $script:Mem.Hosts = $Text }
+        DnsRoute    = { $script:Mem.Route }
+        ResolveName = {
+            param($Name, $Server)
+            $k = "$Name|$Server"
+            if ($script:Mem.Resolve.ContainsKey($k)) { @{ Ips = @($script:Mem.Resolve[$k]); Error = '' } } else { @{ Ips = @(); Error = 'sin respuesta' } }
+        }
+        Browsers    = { , @($script:Mem.Browsers) }
+        PolicyRefresh = { [void]$script:Mem.Calls.Add('RefreshPolicyEx') }
+        DnsFlush    = { [void]$script:Mem.Calls.Add('Clear-DnsClientCache') }
         # What Windows does: the static servers live in NameServer, empty when
         # they come from DHCP.
         DnsSet      = {

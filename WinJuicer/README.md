@@ -173,6 +173,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -ProteccionAdultos Subir                 # de equilibrada a estricta, para siempre
 .\WinJuicer.ps1 -BloquearWeb Reddit,ejemplo.com          # con la protección activa: bloqueadas para siempre
 .\WinJuicer.ps1 -ProteccionAdultos Estado
+.\WinJuicer.ps1 -ProteccionAdultos Comprobar            # ¿filtra de verdad en este PC? Y si no, por qué
 .\WinJuicer.ps1 -Instalar Valve.Steam,Discord.Discord
 .\WinJuicer.ps1 -Exportar C:\mi-config.json             # lo que Win Juicer cambió aquí
 .\WinJuicer.ps1 -Importar C:\mi-config.json -Simular    # en otro PC: qué haría
@@ -795,7 +796,8 @@ Dos niveles; se puede subir de equilibrada a estricta, nunca bajar:
 | El DNS puede ir a | cualquiera menos los públicos sin filtro (Google, Cloudflare, Quad9, OpenDNS, AdGuard, NextDNS…) | sólo al filtro |
 | YouTube | modo restringido moderado | estricto |
 | Ventanas privadas y de invitado | siguen | no hay (Chrome, Edge, Brave y Firefox) |
-| Proxy en el navegador, Tor y VPN de Brave | siguen | no |
+| Proxy en el navegador y VPN de Brave | siguen | no |
+| Ventanas de Tor de Brave | no | no |
 
 En los dos:
 
@@ -814,7 +816,13 @@ En los dos:
 - **Navegadores**, por política: sin su DNS cifrado propio (preguntan al
   filtrado), con la búsqueda segura de Google y el modo restringido de
   YouTube, y en Edge la búsqueda segura estricta de Bing; en Firefox, su DNS
-  cifrado apagado y bloqueado. La búsqueda de Windows, en búsqueda segura
+  cifrado apagado y bloqueado. Chrome, Edge y Brave se cierran del todo al
+  cerrarlos, en vez de seguir en segundo plano con las respuestas de DNS de
+  antes. **Brave** busca en Google con búsqueda segura en vez de en Brave
+  Search, que queda bloqueado: no hay forma de imponer su búsqueda segura, y
+  sirve las imágenes de los resultados desde sus propios servidores, donde un
+  filtro DNS no las ve. Sus ventanas de Tor, que se saltan cualquier filtro,
+  tampoco están. La búsqueda de Windows, en búsqueda segura
   estricta. Chrome y Edge dirán que los «administra tu organización»: son
   estas reglas.
 - **Archivo hosts:** un bloque propio deja sin conexión la VPN que trae Opera,
@@ -836,6 +844,12 @@ En los dos:
   la siguiente revisión. Con «mantener juegos» activado, su tarea también la
   revisa al iniciar sesión, y vuelve a crear la de la protección si alguien
   la borró.
+- **Comprobar que funciona:** un botón (y `-ProteccionAdultos Comprobar`) que
+  lo prueba de verdad: mira por qué adaptador sale tu conexión y si usa el
+  DNS filtrado, pide a Windows una web para adultos para ver si la bloquea, y
+  avisa de los navegadores abiertos desde antes de activarla. Si algo falla,
+  dice qué y cómo arreglarlo; lo más habitual es una VPN que se lleva el
+  tráfico o un navegador que seguía abierto en segundo plano.
 - **En el móvil**, la misma idea: en Android, Ajustes, Red, DNS privado:
   `family-filter-dns.cleanbrowsing.org` (o `adult-filter-dns.cleanbrowsing.org`
   para la equilibrada).
