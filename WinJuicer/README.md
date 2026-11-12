@@ -293,23 +293,22 @@ cada uno.
 ## Estado
 
 Escrito y probado en Linux con PowerShell 7 y Pester: el motor, el diario, el
-catálogo entero en ida y vuelta, el gestor de inicio, los ajustes por juego y
-las partes del diagnóstico que no dependen del hardware. El análisis estático
-comprueba que el código es válido en Windows PowerShell 5.1.
+catálogo entero en ida y vuelta, el gestor de inicio, los ajustes por juego, los
+clasificadores de hardware y software, y el consejo que recibe cada uno de una
+docena de equipos inventados. El análisis estático comprueba que el código es
+válido en Windows PowerShell 5.1.
 
 En GitHub Actions corre además sobre Windows Server 2025 (compilación 26100, la
 misma base que Windows 11 24H2), en 5.1 y en 7, contra el registro, los
-servicios, powercfg y bcdedit de verdad: aplica los tres niveles completos en la
-máquina del runner, lo deshace todo y comprueba que no queda rastro. Ahí se
-aplican de verdad 22 de los 34 ajustes; otros diez ya estaban como deben, uno no
-aplica (el modo de energía, que es para Modern Standby) y otro falla a propósito
-de la máquina, como se explica abajo.
+servicios, powercfg y bcdedit de verdad: hace el análisis completo de la máquina
+del runner sin un solo error, aplica su plan a medida y los tres niveles
+completos, lo deshace todo y comprueba que no queda rastro.
 
 Lo que una máquina virtual no tiene no se ha podido probar en ningún sitio: una
 pantalla y una gráfica reales, batería y Modern Standby, BitLocker, y la
 hibernación (la VM no la admite, así que de «Inicio rápido» sólo se ha probado
 que, al fallar, deja todo como estaba). Es lo primero que conviene mirar en un PC
-de verdad, empezando por el diagnóstico, que no cambia nada.
+de verdad, empezando por el análisis, que no cambia nada.
 
 ## Pruebas
 
