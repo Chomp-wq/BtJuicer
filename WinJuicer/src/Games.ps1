@@ -71,16 +71,6 @@ function New-JuicerDefenderTweak {
         What = 'Microsoft Defender deja de analizar los archivos de esta carpeta cuando un programa los abre.'
         Gain = 'Cargas y compilación de shaders más rápidas, sobre todo en juegos con miles de archivos pequeños.'
         Cost = 'Un archivo malicioso dentro de esa carpeta no se detectaría al abrirse. Las tiendas verifican lo que descargan; los mods y lo que copies a mano, no.'
-        Advice = {
-            param($s, $t)
-            if (@($s.Security.OtherAv).Count -gt 0 -or $s.Security.DefenderActive -eq $false) { return New-JuicerAdvice 'NoAplica' 'Microsoft Defender no es tu antivirus activo.' }
-            $p = $t.Actions[0].Path
-            $lib = @($s.Games.Libraries | Where-Object { $_.Path -eq $p }) | Select-Object -First 1
-            if (-not $lib) { return $null }
-            $slow = $lib.Media -eq 'HDD' -or $lib.Bus -eq 'SATA'
-            $where = if ($lib.Media) { " ($($lib.Media), $($lib.Bus))" } else { '' }
-            New-JuicerAdvice 'Opcional' "Tu biblioteca de $($lib.Launcher) está en $p$where; Defender analiza cada archivo que el juego abre al cargar$(if ($slow) { ', y en un disco lento eso se nota todavía más' })." $(if ($slow) { 'Alto' } else { 'Medio' })
-        }
         Actions = @(@{ Type = 'DefenderExclusion'; Path = $Path })
     }
 }
@@ -102,16 +92,20 @@ function New-JuicerGpuTweak {
     }
 }
 
+# «Above normal», not «high»: a game that spins on a core at high priority
+# starves what it needs itself (its own workers, the audio, the input, the
+# desktop compositor) and the whole PC can freeze. Above normal still puts
+# it ahead of everything running in the background.
 function New-JuicerPriorityTweak {
     param([Parameter(Mandatory)][string]$Exe)
     $name = Split-JuicerFileName $Exe
     @{
         Id = 'juego:prioridad:' + $name.ToLowerInvariant(); Category = 'Juegos'; Level = 2; Impact = 'Bajo'; Reboot = 'No'
-        Title = "Prioridad alta: $name"
-        What = "Windows arranca $name siempre con prioridad de CPU alta (no tiempo real)."
+        Title = "Prioridad por encima de lo normal: $name"
+        What = "Windows arranca $name siempre con prioridad de CPU por encima de lo normal: por delante de lo que corre en segundo plano."
         Gain = 'Ayuda cuando otros programas compiten por la CPU mientras juegas. Si el juego ya está limitado por la GPU, no cambia nada.'
-        Cost = "Afecta a cualquier programa que se llame $name. Algunos anti-trampas fijan su propia prioridad y lo ignoran."
-        Actions = @(@{ Type = 'Registry'; Path = "$script:IfeoKey\$name\PerfOptions"; Name = 'CpuPriorityClass'; Value = 3 })
+        Cost = "Afecta a cualquier programa que se llame $name. No es «alta» a propósito: con prioridad alta, un juego que ocupa un núcleo entero deja sin turno al sonido, al ratón y a sus propios hilos, y el equipo se puede congelar. Algunos anti-trampas fijan su propia prioridad y lo ignoran."
+        Actions = @(@{ Type = 'Registry'; Path = "$script:IfeoKey\$name\PerfOptions"; Name = 'CpuPriorityClass'; Value = 6 })
     }
 }
 

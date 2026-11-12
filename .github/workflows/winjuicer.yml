@@ -30,7 +30,7 @@ jobs:
           if (-not (Get-Module -ListAvailable PSScriptAnalyzer)) {
             Install-Module PSScriptAnalyzer -Force -Scope CurrentUser
           }
-          $r = 'src', 'WinJuicer.ps1', 'WinJuicer.psm1' | ForEach-Object {
+          $r = 'src', 'build', 'WinJuicer.ps1', 'WinJuicer.psm1' | ForEach-Object {
             Invoke-ScriptAnalyzer -Path (Join-Path WinJuicer $_) -Recurse -Settings WinJuicer/PSScriptAnalyzerSettings.psd1
           }
           $r | Format-Table -AutoSize RuleName, ScriptName, Line, Message | Out-String -Width 250
@@ -57,3 +57,64 @@ jobs:
         if: matrix.powershell == '7'
         shell: pwsh
         run: ./WinJuicer/tests/Invoke-Tests.ps1
+
+  # Capturas de cada pestaña de la ventana, dibujada con el hardware real del
+  # runner, para revisar cómo se ve sin tener Windows a mano. No bloquea nada.
+  capturas:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dibujar la ventana
+        shell: powershell
+        run: ./WinJuicer/tests/Save-Screenshots.ps1 -Out capturas
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: capturas
+          path: capturas
+          retention-days: 7
+
+      # También en el registro del trabajo, en base64, por si el artefacto no
+      # se puede descargar desde donde se revisan.
+      - name: Capturas en el registro
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem capturas -Filter *.png | Sort-Object Name | ForEach-Object {
+            "=== CAPTURA $($_.Name) ==="
+            $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($_.FullName))
+            for ($i = 0; $i -lt $b64.Length; $i += 4000) { $b64.Substring($i, [Math]::Min(4000, $b64.Length - $i)) }
+            '=== FIN ==='
+          }
+
+  # Lo que descarga «irm …/winjuicer.ps1 | iex»: sólo desde main y con todo lo
+  # anterior en verde. Tiene su propia release para no mezclarse con el APK.
+  publicar:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [analisis, pruebas]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Construir
+        shell: pwsh
+        run: ./WinJuicer/build/Build-Release.ps1 -Out dist -Version $env:GITHUB_SHA.Substring(0, 7)
+
+      - name: Publicar release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -e
+          TAG=winjuicer
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            gh release create "$TAG" --target "$GITHUB_SHA" --prerelease \
+              --title "Win Juicer — última versión" \
+              --notes "Para abrirlo en una línea, en PowerShell: irm https://github.com/${GITHUB_REPOSITORY}/releases/download/winjuicer/winjuicer.ps1 | iex"
+          fi
+          # El zip primero: el arrancador nuevo sólo aparece cuando su zip ya está.
+          gh release upload "$TAG" dist/WinJuicer.zip --clobber
+          gh release upload "$TAG" dist/winjuicer.ps1 --clobber

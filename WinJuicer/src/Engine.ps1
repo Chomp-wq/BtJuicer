@@ -24,11 +24,16 @@ function Get-JuicerHome {
 
 function Get-JuicerJournalPath { Join-Path (Get-JuicerHome) 'diario.json' }
 
+# One previous file is kept: past a megabyte the log becomes registro.1.log.
 function Write-JuicerLog {
     param([string]$Message)
     try {
+        $path = Join-Path (Get-JuicerHome) 'registro.log'
+        if ((Test-Path -LiteralPath $path) -and (Get-Item -LiteralPath $path).Length -gt 1MB) {
+            Move-Item -LiteralPath $path -Destination (Join-Path (Get-JuicerHome) 'registro.1.log') -Force
+        }
         $line = '{0:yyyy-MM-dd HH:mm:ss}  {1}{2}' -f (Get-Date), $Message, [Environment]::NewLine
-        [IO.File]::AppendAllText((Join-Path (Get-JuicerHome) 'registro.log'), $line, (New-Object Text.UTF8Encoding $false))
+        [IO.File]::AppendAllText($path, $line, (New-Object Text.UTF8Encoding $false))
     } catch {
         Write-Verbose "No se pudo escribir el registro: $_"
     }
@@ -232,6 +237,27 @@ function ConvertTo-JuicerExclusionPath {
     $Path.Trim().TrimEnd('\').ToLowerInvariant()
 }
 
+# Static DNS servers of an interface, as Windows keeps them: a comma (older
+# builds: space) separated list in NameServer, empty when they come from DHCP.
+function Get-JuicerDnsServers {
+    param([Parameter(Mandatory)][string]$Interface)
+    $out = @{}
+    foreach ($family in @(@('V4', 'Tcpip'), @('V6', 'Tcpip6'))) {
+        $v = Read-JuicerReg "HKLM\SYSTEM\CurrentControlSet\Services\$($family[1])\Parameters\Interfaces\$Interface" 'NameServer'
+        $out[$family[0]] = [string[]]@((Get-JuicerRegString $v) -split '[,\s]+' | Where-Object { $_ })
+    }
+    $out
+}
+
+function Test-JuicerListEqual {
+    param($A, $B)
+    $x = @($A | Where-Object { $_ })
+    $y = @($B | Where-Object { $_ })
+    if ($x.Count -ne $y.Count) { return $false }
+    for ($i = 0; $i -lt $x.Count; $i++) { if ([string]$x[$i] -ne [string]$y[$i]) { return $false } }
+    $true
+}
+
 function Get-JuicerActionId {
     param([Parameter(Mandatory)]$Action, [string]$TweakId)
     switch ($Action.Type) {
@@ -241,6 +267,11 @@ function Get-JuicerActionId {
         'Spi' { return ('Spi|{0}' -f [uint32]$Action.Set) }
         'Task' { return ('Task|{0}|{1}' -f $Action.Path, $Action.Name).ToLowerInvariant() }
         'DefenderExclusion' { return 'Def|' + (ConvertTo-JuicerExclusionPath $Action.Path) }
+        'Appx' { return ('Appx|{0}' -f $Action.Name).ToLowerInvariant() }
+        'Dns' { return ('Dns|{0}' -f $Action.Interface).ToLowerInvariant() }
+        'Feature' { return ('Feat|{0}' -f $Action.Name).ToLowerInvariant() }
+        'FpsLimit' { return ('Fps|{0}' -f $Action.Exe).ToLowerInvariant() }
+        'NvSetting' { return ('Nv|{0}|{1:X8}' -f $Action.Exe, [uint32]$Action.Id).ToLowerInvariant() }
         'Custom' { return ('Custom|{0}|{1}' -f $TweakId, $Action.Key) }
     }
     throw "Tipo de acción desconocido: $($Action.Type)"
@@ -272,6 +303,19 @@ function Format-JuicerAction {
         'Spi' { return 'SystemParametersInfo 0x{0:X}: {1}' -f [uint32]$Action.Set, $Action.Value }
         'Task' { return 'Tarea programada {0}{1}: {2}' -f $Action.Path, $Action.Name, $(if ($Action.Enabled) { 'habilitada' } else { 'deshabilitada' }) }
         'DefenderExclusion' { return "Exclusión de Microsoft Defender: $($Action.Path)" }
+        'Appx' { return "Quitar la app $($Action.Name)" }
+        'Dns' {
+            $all = @(@($Action.V4) + @($Action.V6) | Where-Object { $_ })
+            $what = if ($all.Count -eq 0) { 'automático (DHCP)' } else { $all -join ', ' }
+            return "DNS de $($Action.Adapter): $what"
+        }
+        'Feature' { return 'Característica de Windows {0}: {1}' -f $Action.Name, $(if ($Action.Enabled) { 'activada' } else { 'desactivada' }) }
+        'FpsLimit' {
+            $by = @{ nvidia = 'driver de NVIDIA'; rtss = 'RivaTuner' }[[string](& (Get-JuicerBackend).FpsBackend)]
+            $fps = if ($Action.Exact -gt 0 -and $by -eq 'RivaTuner') { $Action.Exact } else { $Action.Fps }
+            return 'Frame pacer de {0}: {1} FPS ({2:N3} ms por fotograma){3}' -f $Action.Exe, $fps, (1000 / [Math]::Max(1, $fps)), $(if ($by) { ", $by" } else { '' })
+        }
+        'NvSetting' { return '{0}, perfil de NVIDIA de {1}' -f $Action.Label, $Action.Exe }
     }
     "$($Action.Type) $($Action.Key)"
 }
@@ -306,6 +350,28 @@ function Test-JuicerAction {
             $want = ConvertTo-JuicerExclusionPath $Action.Path
             foreach ($p in (& $b.DefList)) { if ((ConvertTo-JuicerExclusionPath $p) -eq $want) { return $true } }
             return $false
+        }
+        'Appx' { return ($null -eq (& $b.AppxRead $Action.Name)) }
+        'Dns' {
+            $cur = Get-JuicerDnsServers $Action.Interface
+            return ((Test-JuicerListEqual $cur.V4 $Action.V4) -and (Test-JuicerListEqual $cur.V6 $Action.V6))
+        }
+        'Feature' {
+            $f = & $b.FeatRead $Action.Name
+            if ($null -eq $f) { return $true }
+            return ([bool]$f.Enabled -eq [bool]$Action.Enabled)
+        }
+        'FpsLimit' {
+            $f = & $b.FpsRead $Action.Exe
+            if ($null -eq $f) { return $true }
+            if ($f.Backend -eq 'rtss' -and $Action.Exact -gt 0) { return ([Math]::Abs([double]$f.Exact - [double]$Action.Exact) -lt 0.005) }
+            return ([int]$f.Fps -eq [int]$Action.Fps)
+        }
+        'NvSetting' {
+            # Without an NVIDIA driver there is nothing to set: done.
+            $f = & $b.NvRead $Action.Exe $Action.Id
+            if ($null -eq $f) { return $true }
+            return ($null -ne $f.Value -and [uint32]$f.Value -eq [uint32]$Action.Value)
         }
         'Custom' { return [bool](& $Action.Test) }
     }
@@ -347,6 +413,30 @@ function Save-JuicerActionState {
             $c.Path = $Action.Path
             $c.Existed = Test-JuicerAction $Action
         }
+        'Appx' {
+            $a = & $b.AppxRead $Action.Name
+            $c.Name = $Action.Name; $c.StoreId = [string]$Action.StoreId; $c.Exists = ($null -ne $a)
+            if ($a) { $c.Installed = [bool]$a.Installed; $c.Provisioned = [bool]$a.Provisioned }
+        }
+        'Dns' {
+            $cur = Get-JuicerDnsServers $Action.Interface
+            $c.Interface = $Action.Interface; $c.Adapter = $Action.Adapter
+            $c.V4 = $cur.V4; $c.V6 = $cur.V6
+        }
+        'Feature' {
+            $f = & $b.FeatRead $Action.Name
+            $c.Name = $Action.Name; $c.Exists = ($null -ne $f)
+            if ($f) { $c.Enabled = [bool]$f.Enabled }
+        }
+        'FpsLimit' {
+            $f = & $b.FpsRead $Action.Exe
+            if ($null -eq $f) { throw 'No hay con qué aplicar el frame pacer en este equipo.' }
+            $c.Exe = $Action.Exe; $c.Backend = $f.Backend; $c.Old = $f.Fps; $c.OldExact = [double]$f.Exact; $c.Existed = [bool]$f.Existed
+        }
+        'NvSetting' {
+            $f = & $b.NvRead $Action.Exe $Action.Id
+            $c.Exe = $Action.Exe; $c.SettingId = [uint32]$Action.Id; $c.Old = $(if ($f) { $f.Value } else { $null })
+        }
         'Custom' {
             $c.TweakId = $TweakId; $c.CustomKey = $Action.Key
             $c.State = & $Action.Capture
@@ -355,9 +445,32 @@ function Save-JuicerActionState {
     $c
 }
 
+# Whether a program with this .exe name is open now (false when the backend
+# cannot tell).
+function Test-JuicerGameRunning {
+    param([string]$Exe)
+    $b = Get-JuicerBackend
+    if (-not $Exe -or -not $b.ProcRunning) { return $false }
+    try { [bool](& $b.ProcRunning $Exe) } catch { Write-JuicerLog "No se pudo ver si $Exe está abierto: $_"; $false }
+}
+
+# The last line of defence: a game's frame pacer or driver profile is never
+# written while that game runs. The driver hands a running game the new
+# values at once, and changing its sync or its frame queue under it can
+# freeze it or crash it. The frame pacer waits for the game to close (see
+# Add-JuicerPacerPending); anything else that gets here stops with a reason.
+function Assert-JuicerGameClosed {
+    param($Action)
+    if ($Action.Type -notin 'FpsLimit', 'NvSetting') { return }
+    if (Test-JuicerGameRunning $Action.Exe) {
+        throw "$($Action.Exe) está abierto: Win Juicer no toca el perfil de un juego en marcha, porque podría congelarlo. Ciérralo y vuelve a intentarlo."
+    }
+}
+
 function Invoke-JuicerAction {
     param([Parameter(Mandatory)]$Action, [Parameter(Mandatory)]$Capture)
     $b = Get-JuicerBackend
+    Assert-JuicerGameClosed $Action
     switch ($Action.Type) {
         'Registry' {
             if ($Action.Delete) { Remove-JuicerReg $Action.Path $Action.Name; return }
@@ -380,6 +493,15 @@ function Invoke-JuicerAction {
         'Spi' { & $b.SpiSet $Action.Set ([bool]$Action.Value) }
         'Task' { if ($Capture.Exists) { & $b.TaskWrite $Action.Path $Action.Name ([bool]$Action.Enabled) } }
         'DefenderExclusion' { & $b.DefAdd $Action.Path }
+        'Appx' { if ($Capture.Exists) { & $b.AppxRemove $Action.Name } }
+        'Dns' {
+            # With the content protection on, the DNS is its: nothing else changes it.
+            if (Test-JuicerShield) { throw 'La protección contra contenido adulto fija el DNS de este equipo: no se puede cambiar.' }
+            & $b.DnsSet $Action.Interface ([string[]]@($Action.V4)) ([string[]]@($Action.V6))
+        }
+        'Feature' { if ($Capture.Exists) { & $b.FeatSet $Action.Name ([bool]$Action.Enabled) } }
+        'FpsLimit' { & $b.FpsWrite $Action.Exe $Action.Fps $Capture.Backend -Exact ([double]$Action.Exact) }
+        'NvSetting' { & $b.NvWrite $Action.Exe $Action.Id $Action.Value }
         'Custom' { & $Action.Apply $Capture.State }
     }
 }
@@ -388,6 +510,7 @@ function Restore-JuicerActionState {
     param([Parameter(Mandatory)]$Capture)
     $b = Get-JuicerBackend
     $c = $Capture
+    Assert-JuicerGameClosed $c
     switch ($c.Type) {
         'Registry' {
             if ($null -eq $c.Old) { Remove-JuicerReg $c.Path $c.Name } else { Write-JuicerReg $c.Path $c.Name $c.Old.Kind $c.Old.Value }
@@ -417,6 +540,21 @@ function Restore-JuicerActionState {
         'Spi' { & $b.SpiSet $c.Set ([bool]$c.Old) }
         'Task' { if ($c.Exists) { & $b.TaskWrite $c.Path $c.Name ([bool]$c.Enabled) } }
         'DefenderExclusion' { if (-not $c.Existed) { & $b.DefRemove $c.Path } }
+        'Appx' { if ($c.Exists -and $null -eq (& $b.AppxRead $c.Name)) { & $b.AppxAdd $c.Name $c.StoreId } }
+        'Dns' {
+            # Undoing an old DNS change does not undo the content protection's.
+            if (Test-JuicerShield) { Write-JuicerLog "DNS de $($c.Adapter) sin tocar: lo fija la protección contra contenido adulto"; return }
+            & $b.DnsSet $c.Interface ([string[]]@($c.V4 | Where-Object { $_ })) ([string[]]@($c.V6 | Where-Object { $_ }))
+        }
+        'Feature' {
+            if (-not $c.Exists) { return }
+            $f = & $b.FeatRead $c.Name
+            if ($f -and [bool]$f.Enabled -ne [bool]$c.Enabled) { & $b.FeatSet $c.Name ([bool]$c.Enabled) }
+        }
+        'FpsLimit' {
+            if ($c.Existed) { & $b.FpsWrite $c.Exe $c.Old $c.Backend -Exact ([double]$c.OldExact) } else { & $b.FpsWrite $c.Exe $null $c.Backend -Remove }
+        }
+        'NvSetting' { & $b.NvWrite $c.Exe $c.SettingId $c.Old }
         'Custom' {
             $tweak = Find-JuicerTweak $c.TweakId
             $action = $null
@@ -485,6 +623,13 @@ function Invoke-JuicerTweak {
     $result = New-JuicerResult $Tweak 'Aplicado'
     $result.Changes = @($pending | ForEach-Object { Format-JuicerAction $_ })
     if ($Simulate) { $result.Outcome = 'Simulado'; return $result }
+    # Checked before anything is written, so that nothing half-applied needs undoing.
+    $open = @($pending | Where-Object { $_.Type -in 'FpsLimit', 'NvSetting' } | ForEach-Object { [string]$_.Exe } | Select-Object -Unique | Where-Object { Test-JuicerGameRunning $_ })
+    if ($open.Count -gt 0) {
+        return (New-JuicerResult $Tweak 'Error' "$($open -join ', ') está abierto: Win Juicer no toca el perfil de un juego en marcha, porque podría congelarlo. Ciérralo y vuelve a intentarlo.")
+    }
+    # The «before» of Antes y después, the first time anything changes.
+    if ((Get-JuicerBackend).Name -eq 'Windows') { Save-JuicerBaseline }
 
     try {
         $captures = @(foreach ($a in $pending) { Save-JuicerActionState $a $Tweak.Id })
@@ -502,6 +647,10 @@ function Invoke-JuicerTweak {
             AppliedAt = (Get-Date).ToString('s'); Actions = (New-Object System.Collections.ArrayList)
         }
         [void]$journal.Add($entry)
+    } else {
+        # One id can take different values (the DNS provider): the title says
+        # the latest, the captures keep the original.
+        $entry.Title = $Tweak.Title
     }
     $added = @()
     foreach ($c in $captures) {
@@ -567,11 +716,90 @@ function Undo-JuicerTweak {
     New-JuicerResult $info 'Deshecho'
 }
 
+# One setting of a tweak back to how it was, and out of its journal entry
+# (the entry goes when it was the last). False when there was none.
+function Undo-JuicerCapture {
+    param([Parameter(Mandatory)][string]$TweakId, [Parameter(Mandatory)][string]$CaptureId)
+    $journal = Read-JuicerJournal
+    $entry = Get-JuicerJournalEntry $journal $TweakId
+    if ($null -eq $entry) { return $false }
+    $c = @($entry.Actions | Where-Object { $_.Id -eq $CaptureId }) | Select-Object -First 1
+    if ($null -eq $c) { return $false }
+    Restore-JuicerActionState $c
+    $keep = New-Object System.Collections.ArrayList
+    foreach ($a in $entry.Actions) { if ($a.Id -ne $CaptureId) { [void]$keep.Add($a) } }
+    $entry.Actions = $keep
+    if ($keep.Count -eq 0) { $journal.Remove($entry) }
+    Save-JuicerJournal $journal
+    Write-JuicerLog "Devuelto $CaptureId de $TweakId"
+    $true
+}
+
+# When a tweak's recipe changes (a setting no longer part of it), what Win
+# Juicer set for the old recipe goes back to how it was, and out of the
+# journal: re-applying alone would leave it in place. Returns what was
+# restored.
+function Remove-JuicerStaleCaptures {
+    param([Parameter(Mandatory)][hashtable]$Tweak)
+    $journal = Read-JuicerJournal
+    $entry = Get-JuicerJournalEntry $journal $Tweak.Id
+    if ($null -eq $entry) { return @() }
+    $want = @(foreach ($a in (Resolve-JuicerActions $Tweak)) { Get-JuicerActionId $a $Tweak.Id })
+    $keep = New-Object System.Collections.ArrayList
+    $gone = @()
+    foreach ($c in @($entry.Actions)) {
+        if ($want -contains $c.Id) { [void]$keep.Add($c); continue }
+        try {
+            Restore-JuicerActionState $c
+            $gone += $c.Id
+        } catch {
+            Write-JuicerLog "No se pudo devolver $($c.Id) de $($Tweak.Id): $_"
+            [void]$keep.Add($c)
+        }
+    }
+    if ($gone.Count -eq 0) { return @() }
+    $entry.Actions = $keep
+    if ($keep.Count -eq 0) { $journal.Remove($entry) }
+    Save-JuicerJournal $journal
+    Write-JuicerLog "Devuelto de $($Tweak.Id), que ya no lo usa: $($gone -join ', ')"
+    $gone
+}
+
 function Undo-JuicerAll {
     $journal = Read-JuicerJournal
     $ids = @($journal | ForEach-Object { $_.Id })
     [array]::Reverse($ids)
     foreach ($id in $ids) { Undo-JuicerTweak $id }
+}
+
+# --- Toggles -----------------------------------------------------------------
+#
+# Preferences (dark theme, file extensions…) go both ways, and the way back
+# is not always «as it was»: someone who already had dark mode and wants it
+# off needs the opposite values written. Each toggle carries those in Off; the
+# inverse tweak is «<id>!» and journals like any other.
+
+function Get-JuicerInverseTweak {
+    param([Parameter(Mandatory)][hashtable]$Tweak)
+    if (-not $Tweak.Off) { throw "$($Tweak.Id) no se puede invertir." }
+    @{
+        Id = "$($Tweak.Id)!"; Title = "$($Tweak.Title): no"; Category = $Tweak.Category; Level = 0
+        Impact = $Tweak.Impact; Reboot = $Tweak.Reboot; What = $Tweak.What; Gain = $Tweak.Gain; Cost = $Tweak.Cost
+        Actions = $Tweak.Off
+    }
+}
+
+# Like a startup entry: turning a toggle back undoes Win Juicer's own change
+# first, so the journal only ever holds what differs from the original.
+function Set-JuicerToggle {
+    param([Parameter(Mandatory)][hashtable]$Tweak, [Parameter(Mandatory)][bool]$On)
+    $target = if ($On) { $Tweak } else { Get-JuicerInverseTweak $Tweak }
+    $opposite = if ($On) { "$($Tweak.Id)!" } else { $Tweak.Id }
+    $results = @()
+    if (Get-JuicerJournalEntry (Read-JuicerJournal) $opposite) { $results += Undo-JuicerTweak $opposite }
+    $r = Invoke-JuicerTweak $target
+    if ($r.Outcome -ne 'YaEstaba' -or $results.Count -eq 0) { $results += $r }
+    $results
 }
 
 # --- Machine-level helpers -------------------------------------------------

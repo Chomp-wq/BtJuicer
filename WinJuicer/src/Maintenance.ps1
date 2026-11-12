@@ -109,7 +109,7 @@ function Invoke-JuicerDriveOptimize {
     $results = @()
     $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter -and $_.FileSystem -in 'NTFS', 'ReFS' })
     foreach ($v in $volumes) {
-        $media = if ($script:System -and $script:System.Storage) { Find-JuicerVolume $script:System.Storage.Volumes "$($v.DriveLetter):" } else { $null }
+        $media = Get-JuicerDriveMedia "$($v.DriveLetter):"
         try {
             Optimize-Volume -DriveLetter $v.DriveLetter -ErrorAction Stop
             $results += @{ Drive = "$($v.DriveLetter):"; Media = $(if ($media) { $media.Media } else { '' }); Ok = $true; Message = '' }
@@ -120,14 +120,16 @@ function Invoke-JuicerDriveOptimize {
     $results
 }
 
+# DISM and SFC print their own progress: straight to the screen, so it is not
+# swallowed as the function's output.
 function Invoke-JuicerComponentCleanup {
-    & dism.exe /Online /Cleanup-Image /StartComponentCleanup
-    $LASTEXITCODE
+    & dism.exe /Online /Cleanup-Image /StartComponentCleanup | Out-Host
+    @{ Dism = $LASTEXITCODE }
 }
 
 function Invoke-JuicerSystemRepair {
-    & dism.exe /Online /Cleanup-Image /RestoreHealth
+    & dism.exe /Online /Cleanup-Image /RestoreHealth | Out-Host
     $dism = $LASTEXITCODE
-    & sfc.exe /scannow
+    & sfc.exe /scannow | Out-Host
     @{ Dism = $dism; Sfc = $LASTEXITCODE }
 }

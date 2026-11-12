@@ -9,6 +9,13 @@ orden y sin adornos; ninguno se aplica sin que lo veas; y **todo se puede
 deshacer**, uno a uno o de golpe, porque antes de tocar nada guarda cómo
 estaba.
 
+La ventana se inspira en la [WinUtil de Chris Titus](https://github.com/ChrisTitusTech/winutil):
+pestañas, casillas, botones de «selección recomendada», interruptores de
+preferencias, plan de máximo rendimiento, DNS, debloat e instalación con
+winget. La diferencia está en lo que hay detrás: **lo recomendado lo decide el
+hardware de tu equipo**, no un perfil genérico de «sobremesa» o «portátil», y
+cada cambio va a un diario que lo puede deshacer.
+
 ---
 
 ## Lo primero: lo que ningún programa puede arreglar
@@ -20,94 +27,265 @@ registro de Windows. Están aquí:
   DDR5-6000 a 4800. Se activa en la BIOS.
 - **Un solo módulo de RAM, o dos en el mismo canal.** La mitad de ancho de banda.
 - **Un monitor de 144 Hz funcionando a 60.** Pasa muchísimo, y se arregla en
-  Configuración en diez segundos.
+  Configuración en diez segundos. O por debajo de su resolución nativa.
+- **El monitor enchufado a la placa base** en vez de a la tarjeta gráfica.
 - **Windows o la biblioteca de juegos en un disco duro mecánico.** Ningún ajuste
   compensa eso.
 - **Un portátil jugando con batería**, o sin la gráfica dedicada.
 - **Resizable BAR apagado** en la BIOS.
+- **Una BIOS con un fallo conocido**, o un overclock que ya está dando errores.
 
-Por eso Win Juicer **empieza siempre analizando el equipo**, y no ofrece nada
-hasta haberlo hecho.
-
-## Primero, el análisis
-
-Al abrirse, antes de enseñar ningún menú, recorre el equipo entero sin cambiar
-nada:
-
-| Qué mira | Para qué |
-|---|---|
-| **Procesador**: modelo, núcleos P y E, cachés L3 por CCD, 3D V-Cache, generación | Un Ryzen X3D de dos CCD necesita el plan Equilibrado; un Intel híbrido gana con la limitación de energía apagada; uno sin MBEC/GMET paga mucho más por la integridad de memoria |
-| **Memoria**: módulos, ranuras, canales, velocidad frente a la estándar, paginación, compresión | Canal simple, dos módulos en el mismo canal, XMP/EXPO apagado, paginación en disco duro |
-| **Gráficas y pantallas**: integrada o dedicada, VRAM, driver y su edad, HAGS, Resizable BAR, frecuencia actual y máxima de cada pantalla | HAGS sólo si la GPU la admite (imprescindible para DLSS FG), monitor a 60 Hz que da 144, portátil con dos gráficas |
-| **Discos**: tipo (NVMe, SATA, disco duro), salud, espacio, dónde están Windows y cada biblioteca de juegos | Disco duro, SSD lleno, juegos en el disco lento, exclusiones de Defender donde más se notan |
-| **Equipo y energía**: portátil o sobremesa, batería y su desgaste, Modern Standby, hibernación, plan activo | Plan propio en sobremesa, «Modo de energía» en Modern Standby, aviso si juegas con batería |
-| **Seguridad**: VBS, HVCI, directivas, Defender u otro antivirus, BitLocker | Si la integridad de memoria ya está apagada, ni se ofrece |
-| **Programas**: lanzadores, grabadores (OBS, NVIDIA App…), Discord, juegos TCP (WoW, FFXIV…), Outlook, WSL, Docker, Hyper-V, apps de la Tienda que avisan, anti-trampas, otros sistemas en el arranque | No toca el hipervisor si usas WSL o Docker, ni el indexado si tienes Outlook, ni el inicio rápido con arranque dual; Nagle sólo si tienes juegos TCP |
-| **Tu configuración**: grabación en segundo plano, aceleración del ratón, Teclas especiales, Sensor de almacenamiento, programas de inicio, red (Wi-Fi o cable y a qué velocidad) | Respeta lo que usas; propone quitar del inicio sólo lo que se abre en segundos cuando lo necesitas |
-
-Con eso hace dos cosas:
-
-- **Lo que tienes que hacer tú**, por orden de importancia: lo que ningún
-  programa puede cambiar (BIOS, cables, RAM, discos).
-- **Un plan a medida**: cada ajuste del catálogo queda como *recomendado*,
-  *opcional*, *desaconsejado en este equipo* o *no aplica*, siempre con el
-  porqué de **tu** máquina («Tu Ryzen 9 7950X3D tiene dos CCD y…», «Tienes WSL y
-  Docker Desktop, que dejaría de funcionar»). Si algo que se aplicó antes ya no
-  te conviene, el plan propone deshacerlo. Lo que debilita la seguridad nunca
-  se recomienda solo: como mucho es opcional, y lo decides tú.
-
-El informe queda en `%ProgramData%\WinJuicer\informe.txt`, y todos los datos
-en `equipo.json` junto a él.
+Por eso lo primero que hace Win Juicer es un **diagnóstico** que no cambia nada
+y que busca exactamente eso, y te dice por orden qué merece la pena arreglar.
 
 ## Cómo se usa
 
-Descarga la carpeta `WinJuicer` y haz doble clic en **`WinJuicer.cmd`**. Pide
-permisos de administrador, analiza el equipo, te enseña la ficha y lo que ha
-encontrado, y abre el menú:
+**En una línea**, como WinUtil: abre PowerShell y pega
 
-```
-  1  Análisis del equipo      qué tiene y qué lo frena (no cambia nada)
-  2  Plan a medida            lo que conviene a este equipo, y por qué
-  3  Ajustes uno a uno        estado y consejo para este equipo
-  4  Perfiles fijos           Seguro · Rendimiento · Extremo, adaptados
-  5  Programas de inicio      lo que arranca solo con Windows
-  6  Juegos                   GPU, prioridad y exclusiones de Defender
-  7  Mantenimiento            limpieza, TRIM y reparación de Windows
-  8  Deshacer                 todo, o cambio a cambio
-  9  Lo que no hacemos        los «trucos» que circulan, y por qué no
-  R  Volver a analizar        tras cambiar hardware, BIOS o programas
+```powershell
+irm https://github.com/Chomp-wq/BtJuicer/releases/download/winjuicer/winjuicer.ps1 | iex
 ```
 
-No instala nada, no se queda residente y no se conecta a internet. Funciona con
-Windows PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
+Descarga la última versión, comprueba que el zip es exactamente el publicado
+(SHA256) y la abre como administrador. Se descarga y comprueba en cada
+arranque, así que no queda nada guardado que alguien pudiera cambiar para que
+se ejecute como administrador la próxima vez. La release la publica el CI
+desde la rama principal, con todas las pruebas en verde.
+
+**O sin internet**: descarga la carpeta `WinJuicer` (o el `WinJuicer.zip` de la
+release) y haz doble clic en **`WinJuicer.cmd`**. Pide permisos de
+administrador y abre la ventana. Una copia descargada de la release sabe qué
+versión es: al abrirse mira si hay otra más nueva (lee la versión del
+arrancador publicado, 3 KB, nada más) y, si la hay, lo dice arriba con un botón
+para copiar la orden de una línea.
+
+La ventana empieza **sencilla**, para que cualquiera pueda usarla: la pestaña
+**Empezar** tiene cuatro botones grandes, en palabras normales:
+- **Optimizar Windows**: aplica sólo lo que conviene a tu equipo (nada del
+  nivel Extremo), con un punto de restauración antes. Una pregunta y listo.
+- **Mis juegos**: la galería de tus juegos (abajo).
+- **Revisar mi PC**: el diagnóstico, con cuántas cosas conviene arreglar.
+- **Deshacer**: todo lo que ha hecho Win Juicer, de golpe.
+
+Con eso, más **Equipo**, **Juegos** y **Deshacer**, no hace falta nada más.
+
+Debajo, **Protección contra contenido adulto**: opcional y para siempre (ver
+más abajo).
+
+**Modo avanzado**, la casilla de arriba a la derecha, es para quien sabe lo que
+toca: añade el resto de pestañas y abre **Ajustes**, donde eliges una a una las
+optimizaciones. Se recuerda para la próxima vez.
+- Cada ajuste dice de un vistazo su nivel (seguro, rendimiento, extremo), si
+  pide reiniciar o volver a entrar, si está aplicado y si conviene a tu equipo (★).
+- **Buscar** por nombre, por lo que hace o por su identificador; filtrar por
+  **nivel** y por **estado** (sin aplicar, aplicados, recomendados para tu
+  equipo, sólo los seleccionados). Los filtros cambian lo que ves, no lo que has
+  elegido: «Aplicar» aplica todo lo seleccionado, se vea o no.
+- **todos / ninguno** en cada categoría, y la cuenta de seleccionados en el
+  botón de aplicar. Aplicar, simular y deshacer van debajo de la lista,
+  siempre a la vista.
+- **Detalles**, a la derecha, del ajuste que tengas bajo el ratón: qué hace,
+  qué ganas, qué cuesta, su estado, si conviene a tu equipo y por qué, y **qué
+  cambia exactamente**: cada valor del registro, servicio o tarea, tal como lo
+  escribirá. Y su identificador, para `-Aplicar` y `-Deshacer`.
+- **Simular** dice qué cambiaría todo lo seleccionado, sin cambiar nada.
+- En **Perfiles**, a la derecha: **Guardar selección…** guarda lo que has
+  marcado como perfil propio; **Cargar selección…** lo vuelve a marcar (aquí o
+  en otro PC) sin aplicar nada, para revisarlo antes. **Importar…** te enseña
+  lo que va a aplicar y lo aplica si dices que sí.
+
+Las pestañas:
+
+| Pestaña | Qué tiene |
+|---|---|
+| **Empezar** | Los cuatro botones de arriba, con el estado de cada cosa. |
+| **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo», «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro) y «Medir antes y después». |
+| **Ajustes** | Todos los ajustes en una lista, para elegirlos uno a uno (arriba). Selección rápida: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, los detalles del ajuste; las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS; y los perfiles: guardar y cargar tu selección, y *Exportar lo aplicado…* e *Importar…* para llevar tu configuración a otro PC. |
+| **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
+| **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
+| **Arranque** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
+| **Juegos** | La galería de tus juegos, con sus portadas, que encuentra solo. «Optimizar todos» en un clic, o pulsa un juego para su página: frame pacer (fluidez o latencia, ritmo automático o el tuyo, calibrar), gráfica potente, prioridad por encima de lo normal, modo prudente, medir FPS y frametimes, y qué poner dentro del juego. En «Mi pantalla y el frame pacer…», cómo usas el monitor, el motor y, con todas las opciones, medir cualquier juego y las exclusiones de Defender. |
+| **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
+| **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
+| **No hacemos** | Los «trucos» que circulan, y por qué no. |
+
+Lo lento (leer el hardware, el diagnóstico, aplicar) va en segundo plano, y la
+barra de estado dice qué está haciendo. La ventana no se deja cerrar mientras
+está aplicando un cambio, para que nada quede a medias. Lo muy largo (winget, DISM, SFC) se abre
+en su propia ventana para que veas su progreso.
+
+La ventana recuerda su tamaño y dónde estaba, y cabe en pantallas pequeñas.
+Atajos: **Esc** borra lo escrito en un buscador y vuelve de la página de un
+juego a la galería, **Ctrl+F** lleva al buscador de la pestaña (juegos, ajustes
+o programas) y **F5** vuelve a leer la pestaña.
+
+Si prefieres la consola, o la ventana no puede abrirse, `WinJuicer.cmd -Consola`
+abre el menú de texto, con lo mismo:
+
+```
+   1  Diagnóstico          hardware, overclock y BIOS: qué frena a este equipo
+   2  Recomendado          lo que conviene a este equipo, según su hardware
+   3  Perfiles             Seguro · Rendimiento · Extremo
+   4  Ajustes uno a uno    estado, ganancia y coste; preferencias y componentes
+   5  Debloat              las apps que vienen con Windows, una a una
+   6  Programas de inicio  lo que arranca solo con Windows
+   7  Juegos               GPU, prioridad y exclusiones de Defender
+   8  Red y DNS            elegir servidor DNS
+   9  Instalar programas   con winget: lanzadores, navegadores, herramientas
+  10  Mantenimiento        limpieza, TRIM, reparar Windows, la red y Windows Update
+  11  Deshacer             todo, o cambio a cambio
+  12  Lo que no hacemos    los «trucos» que circulan, y por qué no
+```
+
+No se queda residente ni se conecta a internet salvo para lo que lo necesita
+(winget, reinstalar una app de la Tienda, .NET 3.5). Funciona con Windows
+PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 
 ### Desde la línea de órdenes
 
 ```powershell
-.\WinJuicer.ps1 -Analizar                               # análisis, hallazgos y plan; no cambia nada
-.\WinJuicer.ps1 -AplicarPlan -Simular                   # qué haría el plan a medida
-.\WinJuicer.ps1 -AplicarPlan -ConInicio                 # aplicarlo, y quitar del inicio lo sugerido
-.\WinJuicer.ps1 -AplicarPlan -Incluir ui.menu,red.nagle # con opcionales añadidos
+.\WinJuicer.ps1 -Diagnostico
+.\WinJuicer.ps1 -Informe C:\diagnostico.txt            # el diagnóstico, guardado en un archivo
+.\WinJuicer.ps1 -Equipo                                 # hardware y qué conviene aquí, ajuste a ajuste
+.\WinJuicer.ps1 -Recomendado -Simular                   # lo recomendado para este equipo, sin cambiar nada
+.\WinJuicer.ps1 -Recomendado
 .\WinJuicer.ps1 -Lista                                  # todos los ajustes y su estado
-.\WinJuicer.ps1 -Perfil Rendimiento                     # perfil fijo, sin lo desaconsejado aquí
-.\WinJuicer.ps1 -Aplicar juegos.ventana,ui.menu -Si     # ajustes concretos, sin preguntar
+.\WinJuicer.ps1 -Medir                                  # antes y después: comparado con la medida inicial
+.\WinJuicer.ps1 -MedirJuego 60                          # FPS y frametimes de lo que juegues (empieza en 10 s)
+.\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
+.\WinJuicer.ps1 -Juegos                                 # los juegos instalados y lo que tiene cada uno
+.\WinJuicer.ps1 -OptimizarJuegos                        # frame pacer para tu monitor (y GPU dedicada) a todos
+.\WinJuicer.ps1 -MantenerJuegos Activar                 # optimizar solos los juegos nuevos al iniciar sesión
+.\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # frame pacer al ritmo recomendado, solo cada vez que los abras
+.\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o al tuyo
+.\WinJuicer.ps1 -CalibrarJuego cs2.exe                  # lo mide con su ritmo y lo ajusta a lo que sostiene
+.\WinJuicer.ps1 -CalibrarJuego cs2.exe -Prioridad Latencia  # para competitivos: por encima de los Hz si da para ello
+.\WinJuicer.ps1 -MotorPacer rtss                        # RivaTuner en vez del driver (admite décimas)
+.\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
+.\WinJuicer.ps1 -OlvidarAjuste
+.\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el ritmo va exacto a los Hz
+.\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
+.\WinJuicer.ps1 -Perfil Rendimiento
+.\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
+.\WinJuicer.ps1 -QuitarApps Microsoft.BingNews,Clipchamp.Clipchamp
+.\WinJuicer.ps1 -Dns Cloudflare
+.\WinJuicer.ps1 -ProteccionAdultos Activar               # para siempre: estricta (o -NivelProteccion Equilibrado)
+.\WinJuicer.ps1 -ProteccionAdultos Subir                 # de equilibrada a estricta, para siempre
+.\WinJuicer.ps1 -BloquearWeb Reddit,ejemplo.com          # con la protección activa: bloqueadas para siempre
+.\WinJuicer.ps1 -ProteccionAdultos Estado
+.\WinJuicer.ps1 -Instalar Valve.Steam,Discord.Discord
+.\WinJuicer.ps1 -Exportar C:\mi-config.json             # lo que Win Juicer cambió aquí
+.\WinJuicer.ps1 -Importar C:\mi-config.json -Simular    # en otro PC: qué haría
 .\WinJuicer.ps1 -Deshacer ui.menu
 .\WinJuicer.ps1 -DeshacerTodo
 ```
 
-Los ajustes del nivel Extremo se confirman siempre uno a uno escribiendo «SI»;
-sin preguntas, sólo con `-AceptoRiesgos`. Código de salida: 0 si todo fue bien,
-1 si algún ajuste falló, 2 si un argumento no es válido.
+Los ajustes del nivel Extremo y las apps marcadas «con cuidado» se confirman
+siempre uno a uno; sin preguntas, sólo con `-AceptoRiesgos`. Código de salida:
+0 si todo fue bien, 1 si algún ajuste falló, 2 si un argumento no es válido.
+
+## Recomendado para este equipo
+
+Win Juicer lee de qué está hecho el equipo —procesador (y si es híbrido o un
+Ryzen X3D), gráficas, RAM y su referencia comercial, disco de Windows, si es
+portátil, si usa Modern Standby, impresoras, red, OneDrive, edición de Windows—
+y decide para cada ajuste si es **recomendado**, **opcional** o **no
+recomendado** aquí, y por qué. Algunos ejemplos de cómo cambia:
+
+| Si tu equipo… | Win Juicer… |
+|---|---|
+| es un sobremesa | recomienda el plan de máximo rendimiento y quitar la limitación de energía |
+| es un portátil | no lo recomienda (batería y calor); con Modern Standby, usa el «Modo de energía» |
+| tiene un Ryzen 9 X3D de dos CCD (7900X3D, 7950X3D, 9900X3D, 9950X3D) | **no aplica** el plan sin aparcar núcleos: rompería el reparto de juegos al CCD con 3D V-Cache; y marca Game Bar como necesaria |
+| tiene un Intel híbrido (núcleos P y E) | destaca quitar la limitación de energía, para que OBS o Discord no acaben en núcleos lentos |
+| tiene una RTX 40 o posterior | recomienda la programación de GPU por hardware: la necesita la generación de fotogramas de DLSS |
+| tiene una gráfica que no la admite | no la recomienda: Windows la ignoraría |
+| tiene gráfica integrada o poca RAM | recomienda quitar transparencias, animaciones, Widgets y Edge en segundo plano |
+| tiene Windows en un disco duro | recomienda apagar el indexado; con SSD, lo desaconseja |
+| no tiene impresoras | recomienda desactivar la cola de impresión |
+| tiene gráfica dedicada | recomienda que Windows Update no le cambie el driver |
+| usa WSL o Docker, o es Windows Insider, o Home | desaconseja lo que los rompería o lo que Home ignora |
+
+Ningún ajuste se queda con un «depende» genérico: cada uno lleva el motivo
+concreto para tu equipo, también cuando la respuesta es «opcional».
+
+«Para este equipo» nunca incluye preferencias ni componentes, y lo de nivel
+Extremo sólo cuando el hardware lo pide (el indexado con disco duro), y aun así
+se confirma.
+
+## Revisión de hardware, overclock y BIOS
+
+Parte del diagnóstico. Nada de esto se puede cambiar desde Windows, pero
+Windows guarda las pruebas, y Win Juicer las lee:
+
+- **XMP/EXPO, con certeza.** Lee la referencia de cada módulo (G.Skill,
+  Corsair, Kingston FURY, Crucial, TeamGroup, ADATA, Patriot) y sabe a qué
+  velocidad se vende el kit: «tu kit está certificado a 3600 y va a 2133». Avisa
+  también de kits mezclados y de cuatro módulos DDR5.
+- **Estabilidad del overclock** en los últimos 30 días: errores de hardware
+  WHEA (procesador, memoria, PCIe), pantallazos azules con su código y la causa
+  habitual (`WHEA_UNCORRECTABLE_ERROR`, `CLOCK_WATCHDOG_TIMEOUT`,
+  `MEMORY_MANAGEMENT`…), apagados inesperados, cuelgues del driver de la
+  gráfica, y las veces que el firmware frenó el procesador por temperatura o
+  potencia.
+- **El plan de energía**: si limita el procesador por debajo del 100 % o tiene
+  el turbo desactivado, cosa que algunas guías recomiendan y cuesta mucho.
+- **BIOS y microcódigo**: Core de 13.ª/14.ª generación sin el microcódigo 0x12B
+  que corrige su degradación; BIOS de AM5 anteriores a la corrección del voltaje
+  SoC con EXPO; el fTPM de AMD que da tirones con BIOS antiguas; BIOS de hace
+  años.
+- **Ryzen X3D de dos CCD**: que estén el driver «3D V-Cache Performance
+  Optimizer», Game Bar, el modo juego y el plan Equilibrado.
+- **La gráfica**: límite de potencia bajado o subido (Afterburner), funcionando
+  con menos líneas PCIe de las que tiene, Resizable BAR en NVIDIA, AMD e Intel
+  (en una Arc sin ReBAR, aviso grave), y qué ajustes del panel de NVIDIA o AMD
+  sí merecen la pena.
+- **Red**: sólo por wifi, o un cable que enlaza a 100 Mb/s.
+- **Programas**: software de overclock (Afterburner, Ryzen Master, XTU,
+  ThrottleStop), de RGB pesado (Armoury Crate, iCUE…) y antivirus de terceros
+  preinstalados.
+- **BitLocker** por software, como información: si lo quitas es decisión tuya.
+- **Pantallas**: la frecuencia por debajo de la que admite el monitor, la
+  resolución por debajo de la nativa (la lee del EDID del propio monitor) y, en
+  un sobremesa con gráfica dedicada, un monitor conectado a la salida de la
+  placa base.
+- **Discos**: además del espacio libre, cuánta vida útil ha gastado cada SSD,
+  si un NVMe pasa de 70 °C (y baja velocidad para protegerse) y lecturas que el
+  disco no pudo recuperar.
+- **Soporte de Windows**: hasta cuándo recibe parches de seguridad tu versión
+  y edición (24H2 en Home y Pro dejó de recibirlos en octubre de 2026; Windows
+  10, en octubre de 2025). Si una directiva `TargetReleaseVersion` te ata a una
+  versión antigua (algunas herramientas de «debloat» la ponen) o tienes las
+  versiones nuevas retrasadas, lo dice, y entonces no recomienda retrasarlas.
+- **Combinaciones**: lo que sólo se ve mirando las piezas juntas.
+  - La **RAM según el procesador**: en un Ryzen 5000 lo que rinde es 3600-3800
+    en 1:1 con el Infinity Fabric, así que un kit de 4000 a 3600 está bien
+    elegido y a 4000 pierde; en AM5, 6000-6400; en Zen 2 y anteriores, menos;
+    las APU aguantan más. Ya no pide el XMP de un kit por encima de eso.
+  - Qué **ajuste fino** admite tu Ryzen: Curve Optimizer en los X3D (los
+    5000X3D y 7000X3D no se pueden subir de frecuencia), PBO completo en los
+    9000X3D.
+  - **Gráficas de 8 o 4 líneas PCIe** (RTX 4060/5060, RX 6600/7600, RX 6500
+    XT, Arc B580…) en un procesador o una placa de PCIe 3.0 (APU de AM4,
+    Ryzen 5500/5700, B450/A520, Intel de 10.ª o anterior, H510).
+  - La **VRAM frente a la resolución** de tu monitor (8 GB a 1440p o 4K).
+  - Una **APU sin gráfica dedicada**: la memoria que la BIOS le reserva (UMA
+    Frame Buffer Size).
+  - **Procesador y gráfica desequilibrados**: qué ajustes dan FPS y cuáles no
+    según cuál de los dos manda.
+  - **Portátil en modo híbrido**: la pantalla la dibuja la integrada; dónde
+    se cambia a sólo la dedicada (MUX) según la marca.
+  - Un **procesador híbrido de Intel en Windows 10**, sin Thread Director.
 
 ## Los tres perfiles
 
-Para quien prefiera no ir ajuste a ajuste. Cada nivel incluye los anteriores, y
-se aplica **sin lo que el análisis desaconseja en tu equipo**.
+Cada nivel incluye los anteriores. Lo «a la carta» (preferencias, componentes,
+OneDrive) no está en ningún perfil: sólo se aplica si lo eliges.
 
 | Perfil | Qué cuesta |
 |---|---|
 | **Seguro** | Nada que nadie vaya a echar de menos. Incluye las reparaciones. |
-| **Rendimiento** | Batería, estética o funciones que no todo el mundo usa: grabación de Game Bar, Widgets, animaciones. |
+| **Rendimiento** | Batería, estética o funciones que no todo el mundo usa: grabación de Game Bar, Widgets, animaciones, ubicación. |
 | **Extremo** | Seguridad o funciones importantes. Cada ajuste se confirma por separado. |
 
 ## Qué hace
@@ -140,8 +318,10 @@ Sólo actúan si encuentran el problema; si todo está bien, no escriben nada.
 | Sin limitación de energía para programas en segundo plano | Rendimiento | Bajo |
 | Inicio rápido, con el archivo de hibernación reducido | Seguro | Medio |
 
-El plan propio tiene un GUID fijo: ejecutar la herramienta dos veces no crea
-dos planes, y deshacer lo borra.
+El plan propio parte del «Máximo rendimiento» (Ultimate Performance) de
+Windows y tiene un GUID fijo: ejecutar la herramienta dos veces no crea dos
+planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar» y
+«Quitar». En un Ryzen X3D de dos CCD no se ofrece.
 
 ### Juegos
 
@@ -151,19 +331,352 @@ dos planes, y deshacer lo borra.
 | Programación de GPU acelerada por hardware | Seguro | Bajo |
 | Optimizaciones para juegos en ventana (modelo flip en DX10/11) | Seguro | Medio |
 | Reserva multimedia para segundo plano al 10 % | Seguro | Bajo |
+| Frecuencia variable (VRR) también en juegos que no la piden | Rendimiento | Medio |
 | Sin grabación en segundo plano de Xbox Game Bar | Rendimiento | Medio |
 | Sin aceleración del ratón | Rendimiento | Bajo |
 | Sin atajos de Teclas especiales (Mayús ×5) | Rendimiento | Bajo |
 
-Y por juego, desde el menú **Juegos**:
+Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
+de alto rendimiento y prioridad por encima de lo normal para un `.exe`, y exclusiones de Microsoft
+Defender para las bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
 
-- **GPU de alto rendimiento** para un `.exe`: en portátiles con dos gráficas,
-  que no arranque en la integrada.
-- **Prioridad de CPU alta** para un `.exe`.
-- **Exclusiones de Microsoft Defender** para las bibliotecas de Steam, Epic,
-  GOG y Xbox, que detecta solas. Es lo que más acorta las cargas de todo lo que
-  Win Juicer puede tocar, y por eso es Extremo: un archivo malicioso dentro de
-  esa carpeta no se analizaría al abrirse.
+### Tus juegos
+
+La pestaña **Juegos** empieza por la lista de los juegos instalados, que Win
+Juicer encuentra solo:
+- Steam, por sus manifiestos.
+- Epic, por los suyos.
+- GOG, por el registro.
+- Xbox/Game Pass, por su `MicrosoftGame.config`.
+- EA, Ubisoft, Battle.net, Riot, Rockstar, HoYoverse, Bethesda y Wargaming,
+  por sus desinstaladores. Los lanzadores no cuentan como juegos.
+
+Para cada uno busca el `.exe` que se ejecuta de verdad: el que declara la
+tienda o, si no lo dice, el `*-Win64-Shipping.exe` de los juegos Unreal o el
+ejecutable principal con su nombre, nunca un desinstalador, un lanzador o un
+informe de errores. Lo recuerda, y con «Cambiar .exe…» eliges otro.
+
+Los muestra como una **galería**, agrupados por tienda (Steam, Epic, GOG,
+Xbox…), con un buscador. Cada juego lleva su portada:
+- **Steam**: la de la caché de su biblioteca, ya en tu PC. Steam guarda ahora
+  cada juego en su carpeta con nombres que cambian, así que Win Juicer elige la
+  vertical por su tamaño, leyendo sólo la cabecera de cada imagen.
+- **Xbox**: el logo que trae el propio juego en su carpeta.
+- Si no está en tu PC, se descarga una vez de la tienda: Steam, Epic (la URL
+  sale de la caché del catálogo de su lanzador) o GOG (su API pública). Sólo
+  por HTTPS, sólo de sus servidores, y sólo si lo que llega empieza como un JPEG
+  o un PNG de tamaño normal. Lo que no se encuentra no se vuelve a buscar en
+  una semana.
+- Si no hay portada, el icono del propio `.exe` sobre un color.
+
+Todo queda en `ProgramData\WinJuicer\portadas`. Los juegos ya optimizados
+llevan su ritmo en la esquina, y los nuevos, «NUEVO».
+
+**Optimizar todos**: a cada juego, el frame pacer al ritmo recomendado para tu
+monitor y su modo, con la receta de baja latencia en NVIDIA, y la gráfica potente
+si tienes dos. Se aplica solo cada vez que abras el juego.
+
+**La página de cada juego** (pulsa su portada):
+- **Optimizar este juego**, o **Quitar lo de Win Juicer**.
+- **Frame pacer**: activado o no y, en palabras normales, **¿qué prefieres?**:
+  *Fluidez* (el ritmo más estable, para la mayoría) o *Latencia mínima* (para
+  competitivos, y lo dice en los que lo son: CS2, VALORANT, Fortnite, Apex…).
+  **Ritmo**: *automático* (el recomendado o el calibrado para tu PC) o *elegido
+  por ti*, que se respeta aunque cambies de monitor o de modo. **Calibrar**,
+  con los pasos explicados antes de empezar. Sin NVIDIA ni RivaTuner, un botón
+  para instalar RivaTuner. **Modo prudente**: sólo el límite de FPS, sin tocar
+  la sincronización vertical ni la cola de fotogramas, para un juego que se
+  porta mal con lo demás.
+- **Más rendimiento**: la gráfica potente (con dos gráficas) y prioridad por
+  encima de lo normal (no «alta»: con prioridad alta, un juego que ocupa un
+  núcleo entero deja sin turno al sonido, al ratón y a sus propios hilos, y el
+  equipo se puede congelar).
+- **Medir**: tu última medida con su gráfica de frametimes, y un botón para
+  medir este juego en concreto.
+- **Dentro del juego**: los consejos de abajo.
+
+Cada cambio en la página se aplica al momento y se deshace como todo lo demás.
+
+**Que un juego no se congele ni se cierre por optimizarlo.**
+- **Nunca con el juego abierto.** El driver le pasa los valores nuevos a un
+  juego en marcha al momento, y cambiarle la sincronización vertical o la
+  cola de fotogramas en plena partida puede congelarlo o cerrarlo. Si el juego
+  está abierto (también al calibrar, que se hace jugando), el cambio espera:
+  la galería lo marca «→ al cerrarlo» y se aplica solo en cuanto lo cierras.
+  Si cierras Win Juicer antes, se aplica la próxima vez que lo abras o al
+  iniciar sesión.
+- **Lo que NVIDIA pone para cada juego, se queda.** Si el perfil del driver de
+  un juego trae su propio valor de sincronización vertical o de cola de
+  fotogramas, es porque ese juego lo necesita: Win Juicer no lo sobrescribe.
+  Y si NVIDIA limita un juego a ciertos FPS porque por encima falla (física,
+  temporizadores), el frame pacer no pasa de ahí.
+- **Una receta más prudente.** Ya no pone «Preferir rendimiento máximo»: tenía
+  la gráfica a tope incluso en menús y pantallas de carga, justo donde cede un
+  overclock o un undervolt al límite o la refrigeración de un portátil. Lo que
+  ya estaba aplicado de versiones anteriores se pone al día solo, una vez.
+- **Si un juego empieza a fallar después de optimizarlo**, Win Juicer lo ve en
+  el registro de Windows (un cierre con error o un cuelgue que Windows tuvo
+  que cerrar) y, si antes no le pasaba, le quita sus cambios por si eran la
+  causa, lo marca «⚠ protegido» y te lo explica. «Optimizar todos» y el
+  mantenimiento automático lo dejan en paz; si lo vuelves a optimizar desde su
+  página, es en modo prudente. Si ya fallaba antes, sólo te avisa: entonces no
+  parece cosa de Win Juicer.
+- **Con RivaTuner** el ritmo se marca a través de su enganche al juego (el
+  mismo de su contador de FPS). Si el juego trae anti-trampas (Easy Anti-Cheat,
+  BattlEye…), su página lo dice: la mayoría lo admiten, pero si se cierra o te
+  expulsa, mejor su propio límite de FPS.
+- Si sospechas de las «Optimizaciones para juegos en ventana» (de Ajustes),
+  Windows deja quitarlas para un solo juego: Configuración > Sistema >
+  Pantalla > Gráficos, el juego, Opciones.
+
+**Dentro del juego**, en su página: lo que hay que poner en las opciones del
+juego, que Win Juicer no puede cambiar desde fuera, para tu gráfica, tu
+monitor y cómo lo usas:
+- **Latencia:** NVIDIA Reflex («Activado + Boost» si tu medida dice que limita
+  el procesador), AMD Anti-Lag 2 en los juegos que lo traen (CS2, Ghost of
+  Tsushima) o Radeon Anti-Lag del panel en los demás.
+- **Sincronización vertical y limitador del juego:** qué hacer según uses VRR,
+  ELMB u otro estroboscopio, o frecuencia fija, para no sumar dos colas ni dos
+  limitadores.
+- **Si lo mediste**, qué bajar: lo que carga el procesador (distancia de
+  visión, multitudes, físicas) o la gráfica (DLSS/FSR/XeSS, sombras, reflejos).
+- **Juegos conocidos:** sabe cuáles de los más jugados tienen Reflex o Anti-Lag
+  2 (CS2, VALORANT, Fortnite, Apex, Overwatch 2, Call of Duty, Rainbow Six
+  Siege, Marvel Rivals, THE FINALS, PUBG, Cyberpunk 2077…) y lo particular de
+  algunos, como que Elden Ring no pasa de 60 FPS. A los demás les da lo general.
+
+**Optimizar automáticamente los juegos que instale** (casilla en la pestaña, o
+`-MantenerJuegos Activar`): al iniciar sesión, sin abrir Win Juicer, optimiza
+los juegos que hayas instalado desde la última vez y recalcula el frame pacer si
+ha cambiado el monitor, sus Hz o cómo lo usas, y te avisa con una
+notificación. Escribir los perfiles del driver de NVIDIA requiere permisos de
+administrador. Por eso Win Juicer se copia a `Program Files`, donde sólo un
+administrador puede cambiarlo, y la tarea ejecuta esa copia, que se actualiza
+cada vez que abres una versión nueva. Al desmarcarlo se quitan la tarea y la
+copia.
+Desde la consola, opción 0 del menú Juegos; desde la línea de órdenes,
+`-Juegos` para listarlos y `-OptimizarJuegos` para optimizarlos todos.
+
+### Medir FPS y frametimes
+
+La única forma de saber si un ajuste da FPS es medir la misma escena antes y
+después. Win Juicer lo hace con [PresentMon](https://github.com/GameTechDev/PresentMon),
+la herramienta de Intel que usan las reviews y CapFrameX: se descarga de su
+release de GitHub la primera vez y, cada vez antes de ejecutarlo, se comprueba
+que lleva la firma de Intel.
+
+Pulsas «Medir», vuelves al juego en 10 segundos y juegas 30, 60 o 120
+segundos. Al acabar dice:
+
+- **Media, 1 % bajo y 0,1 % bajo** (los FPS del 1 % y el 0,1 % de fotogramas
+  más lentos: lo que se siente como tirón), el frametime mediano y los
+  **tirones por minuto**.
+- **La latencia**: del inicio de cada fotograma a la pantalla y, cuando
+  tocas el ratón o el teclado, de ahí a la pantalla (la mediana; PresentMon la
+  mide por software, sin hardware aparte). Se compara con la medida anterior.
+- **Qué limita**: si la gráfica va al máximo (para más FPS, calidad o
+  DLSS/FSR/XeSS: ningún ajuste de Windows sube eso) o si **el procesador es el
+  límite** y la gráfica espera (bajar gráficos no sirve; sí cerrar lo que gaste
+  CPU, la RAM con XMP, el plan de energía y el frame pacer).
+- **Qué gastaba CPU en segundo plano** mientras jugabas: navegador, lanzadores,
+  Defender o Windows Update trabajando justo entonces.
+- **Cómo llega la imagen a la pantalla**: directa (Independent Flip), compuesta
+  por el escritorio (un fotograma más de latencia) o copiada con el modelo
+  antiguo (lo arregla «Optimizaciones para juegos en ventana»).
+- Si pasas de los Hz de tu pantalla, la sincronización vertical, la generación
+  de fotogramas y, con NVIDIA, la temperatura y si la gráfica bajó de frecuencia.
+- **Comparado con la medida anterior del mismo juego**: así ves si el último
+  cambio dio FPS o sólo lo parecía. También el ritmo (qué parte de los
+  fotogramas cae en su sitio y cuánto cambia uno del siguiente), la latencia
+  y la cola delante de la gráfica: mide sin frame pacer, pónselo y vuelve a
+  medir, y verás lo que gana.
+- **La gráfica de frametimes** de toda la medida, con el objetivo del frame
+  pacer como línea discontinua (en la consola, una línea de barras). Cada
+  punto es el fotograma más lento de su tramo, para que ningún pico se pierda.
+- **Si el juego tiene frame pacer, cómo de bien lo cumple** (ver abajo); si
+  no, el ritmo que le conviene.
+
+### Frame pacer
+
+Un ritmo de fotogramas por juego, por frametime, pensado para frametimes
+planos **sin sumar latencia**, que se aplica solo cada vez que abres el juego,
+con Win Juicer cerrado:
+
+- **Dónde**: con NVIDIA, en el limitador del propio driver («Velocidad máxima
+  de fotogramas»), en el perfil de ese `.exe`, por NVAPI, la API oficial de
+  NVIDIA (identificadores y estructuras de su `nvapi.h`). No se inyecta nada en
+  el juego: los anti-trampas no tienen nada que objetar. Sin NVIDIA, en el
+  perfil de ese juego de RivaTuner Statistics Server.
+- **Según tu monitor y cómo lo usas.** El monitor no dice si tienes ELMB,
+  DyAc o similar encendido, así que lo eliges una vez por monitor en «Cómo usas
+  tu monitor» (o con `-ModoMonitor`): Automático, Frecuencia variable,
+  Estroboscopio sin VRR, Estroboscopio con VRR (ELMB Sync, Aim Stabilizer
+  Sync) o Frecuencia fija. «Recalcular los ritmos» los vuelve a poner con el
+  modo nuevo.
+- **Cuánto**, como objetivo de frametime:
+  - con frecuencia variable (con o sin estroboscopio), **Hz − Hz²/3600**, la
+    cifra que usa NVIDIA Reflex (138 a 144 Hz, 157 a 165 Hz, 171 a 180 Hz, 224
+    a 240 Hz): siempre dentro del rango VRR;
+  - **con estroboscopio sin VRR** (por ejemplo ELMB a 180 Hz), **exactamente
+    los Hz**, con la sincronización vertical forzada: cada destello necesita un
+    fotograma nuevo, los cortes con estrobo se ven el doble, y como el juego no
+    produce más fotogramas de los que la pantalla enseña no se forma cola. Nunca
+    por debajo: repetiría fotogramas, y el estrobo los convierte en saltos. Si
+    tus medidas dicen que un juego no llega a los Hz, te propone la frecuencia
+    más alta de tu monitor que sí sostiene (para usar el estrobo ahí) o VRR
+    para ese juego;
+  - a frecuencia fija, los Hz;
+  - y fuera del estroboscopio sin VRR, si mediste el juego y sus frametimes
+    oscilan, **lo que sostiene el 90 % del tiempo**: un ritmo constante se nota
+    más fluido que una media más alta con tirones.
+- **La latencia**: un límite que el juego alcanza deja la gráfica por debajo
+  del 100 %, así que no se forma cola de fotogramas, que es de donde sale la
+  latencia. Con NVIDIA el perfil del juego recibe además la receta de baja
+  latencia: fotogramas pre-renderizados a 1 («Modo de baja latencia:
+  activado»; en juegos con **Reflex** manda Reflex, y el límite se aplica a
+  través de él) y, con G-SYNC, la sincronización vertical forzada, que con el
+  límite por debajo de los Hz no llega a actuar más que para tapar un corte en
+  un pico (con estroboscopio sin VRR, para que cada destello tenga su
+  fotograma). Lo que el perfil de NVIDIA de ese juego ya trae se respeta, y no
+  se fuerza «Preferir rendimiento máximo». El modo «Ultra» no tiene un
+  identificador público y no se toca. La sincronización vertical del perfil siempre queda en uno de tres
+  estados (forzada, desactivada o la del juego), así que cambiar de modo o de
+  prioridad nunca deja puesta la del anterior. Un ritmo por encima de los Hz
+  (escrito a mano o calibrado) nunca la fuerza: haría esperar cada fotograma
+  al siguiente refresco.
+- **Cómo de bien lo cumple.** Al medir un juego con frame pacer, la medida dice
+  qué parte de los fotogramas cae en su sitio (a ±4 % del objetivo), cuánto
+  cambia el frametime de un fotograma al siguiente, el error de animación de
+  PresentMon (lo que el movimiento se desvía del tiempo real) y cuánto
+  trabajaron de verdad el procesador y la gráfica en cada fotograma, que es el
+  margen que queda. Si va por encima del objetivo, avisa de que el frame pacer
+  no está actuando (RivaTuner cerrado, otro `.exe`).
+- **La latencia, primero.** Un ritmo sólo baja la latencia si la gráfica no
+  va al límite: si va, los fotogramas esperan en cola delante de ella, y esa
+  cola es latencia pura. La medida lo ve directamente: cuánto espera cada
+  fotograma entre que el procesador lo termina y la gráfica empieza con él
+  (`GPULatency` − `CPUBusy` de PresentMon), y cuánto trabaja la gráfica de
+  cada frametime. Si hay cola, lo dice, con la latencia de entrada a pantalla,
+  y propone Reflex o Anti-Lag 2 si el juego los tiene (vacían la cola sin
+  bajar el ritmo) o el «Modo de baja latencia: Ultra» del panel de NVIDIA
+  para ese juego. Win Juicer no lo pone solo: ese ajuste no tiene un
+  identificador público.
+- **Calibrar** (un juego de la lista, o `-CalibrarJuego`): lo mide 60 segundos
+  con su ritmo y lo ajusta a lo que sostiene de verdad. Si el 5 % más lento de
+  los fotogramas no llega, lo baja a ese ritmo, sin salir nunca del rango VRR.
+  Si lo sostiene pero con cola delante de la gráfica, lo baja **por latencia**
+  hasta dejarle a la gráfica un 12 % de cada fotograma: menos fotogramas,
+  pero cada uno llega antes a la pantalla. A frecuencia fija sin VRR ni
+  sincronización vertical, cada fotograma de más es menos latencia, así que
+  si sobra margen lo sube a un múltiplo de los Hz (2, 3 o 4 veces, para que
+  los cortes de imagen se queden quietos).
+  Si sobra trabajo de procesador y gráfica para bastante más, lo sube (hasta
+  el máximo de tu monitor, dejando un 15 % de margen para los picos). Con
+  estroboscopio sin VRR no baja nunca: te dice a qué frecuencia bajar el
+  monitor. Lo recuerda por juego mientras el monitor, sus Hz y cómo lo usas
+  sigan iguales; «Olvidar calibraciones» vuelve al ritmo recomendado.
+- **Prioridad por juego: fluidez o latencia mínima.** Con fluidez (la de
+  siempre), el ritmo más estable dentro de lo que el monitor enseña entero.
+  Con **latencia**, pensada para competitivos: igual hasta que lo calibras;
+  entonces, si el juego da para el doble de los Hz o más, sube a ese múltiplo
+  (hasta 1000 FPS) con la sincronización vertical desactivada en su perfil:
+  cada fotograma llega antes a la pantalla, a cambio de cortes de imagen, que
+  a esos FPS apenas se ven. También con estroboscopio. Se elige en Juegos >
+  Frame pacer junto al juego, en la consola (opción P) o con `-Prioridad`.
+- **Generación de fotogramas** (DLSS, FSR): la medida la detecta y calibrar
+  ya no sube ni baja el ritmo por la cola o el margen, que con fotogramas
+  generados no se pueden leer bien; sólo lo baja si no se cumple. Con
+  RivaTuner como motor avisa: se pelea con la generación y da tirones.
+- **Los Hz de verdad.** Windows dice 180 Hz, pero la pantalla suele ir a
+  179,96. Win Juicer lee la fracción exacta (`QueryDisplayConfig`). Con
+  estroboscopio y sincronización vertical eso importa: un ritmo de 180 es un
+  pelo más rápido que la pantalla, la cola de la sincronización vertical se
+  llena y vuelve un fotograma de latencia. RivaTuner admite décimas
+  (`LimitDenominator`), así que con él el ritmo va 0,01 por debajo del
+  refresco real («low-lag VSync»). El driver de NVIDIA sólo admite enteros, y
+  Win Juicer te lo avisa.
+- **Motor**: Automático (el driver si hay NVIDIA, si no RivaTuner), Driver de
+  NVIDIA o RivaTuner (o `-MotorPacer`). Al cambiarlo, cada juego pasa al nuevo
+  motor y se quita del anterior, y la receta de baja latencia sigue en su
+  perfil de NVIDIA.
+- **Dos limitadores a la vez**: avisa si RivaTuner tiene un límite en su perfil
+  Global o en el de un juego que ya tiene el ritmo del driver, si el panel de
+  NVIDIA tiene un límite global, o si el motor es RivaTuner y no está abierto.
+- **Lo que el panel de NVIDIA estropea**: si usas VRR y G-SYNC está
+  desactivado, o activado sólo para pantalla completa (los juegos en ventana
+  sin bordes se quedan sin él); y si la caché de sombreadores está
+  desactivada o es muy pequeña, que da tirones que ningún ritmo arregla
+  (identificadores del `NvApiDriverSettings.h` de NVIDIA).
+- **RivaTuner abierto**: después de escribir un perfil, Win Juicer le pide que
+  relea sus perfiles (`UpdateProfiles` de su propia `RTSSHooks64.dll`, desde
+  RTSS 7.3.7), así el ritmo se aplica ya, sin reiniciarlo.
+- Con RivaTuner, en su Setup: «Front edge sync» da la menor latencia y «Back
+  edge sync» los frametimes más planos.
+- Se deshace como todo lo demás, devolviendo el límite que tuviera el juego.
+  Mide antes y después: la medida compara FPS, 1 % bajo y latencia.
+
+### Ajuste fino: undervolt y overclock
+
+Pestaña **Ajuste fino** (opción 14 de la consola). Para tu procesador y tu
+gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
+
+- **Procesador, en la BIOS.**
+  - Ryzen 5000X3D (5700X3D, 5800X3D…): Curve Optimizer de -15 a -30, o un
+    offset de -0,03 a -0,05 V.
+  - 7000X3D: Curve Optimizer.
+  - 9000X3D: Curve Optimizer más PBO y Boost Override.
+  - Ryzen 5000/7000/9000: Curve Optimizer por núcleo y PBO.
+  - Intel K de 12.ª a 14.ª: AC Load Line u offset, tras el microcódigo 0x12B
+    en 13.ª y 14.ª.
+  - La placa lo guarda y lo aplica en cada arranque, antes de Windows, sin
+    ningún programa. Win Juicer no lo aplica desde Windows: las herramientas que
+    lo hacen necesitan un driver de núcleo (WinRing0 y similares) que Microsoft
+    Defender marca como vulnerable desde 2025 y que los anti-trampas vigilan.
+- **Gráfica, en su herramienta**, con la receta de cada arquitectura:
+  - RTX 50: frecuencia +200-300 y GDDR7.
+  - RTX 40: curva a 0,95-1,00 V.
+  - RTX 30: curva a 850-900 mV; la GDDR6X rinde menos, sin colgarse, si te
+    pasas de memoria.
+  - RTX 20/GTX 16, GTX 10, RX 9000/7000/6000 e Intel Arc: cada una con su
+    receta.
+  - Cómo hacer que se aplique en cada inicio: el perfil de Afterburner con
+    «Aplicar overclock al iniciar el sistema», o AMD Software, que lo conserva
+    salvo tras un cuelgue. La API pública de NVIDIA permite leer frecuencias y
+    voltajes, no fijarlos, así que Win Juicer no escribe un overclock a ciegas.
+- **Lo apuntas y lo vigila.** Escribes lo que aplicaste («Curve Optimizer
+  -30», «curva 900 mV a 1900 MHz»). Win Juicer guarda también la versión de la
+  BIOS y la velocidad de la RAM, y en cada inicio de sesión (una tarea como tu
+  usuario, sin administrador) avisa con una notificación si:
+  - una actualización de BIOS lo ha borrado;
+  - la RAM ha vuelto a otra velocidad;
+  - hay errores WHEA o cuelgues del driver de la gráfica desde entonces;
+  - Afterburner ya no arranca con Windows.
+
+Los valores son puntos de partida: cada chip es distinto. Pruébalos como dice
+cada receta y mide FPS antes y después con Juegos > Medir.
+
+### El monitor
+
+El diagnóstico lee el EDID de cada monitor: marca y modelo, **FreeSync** (y su
+rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
+
+- Los pasos exactos para tu gráfica: G-SYNC en el panel de NVIDIA con la
+  sincronización vertical como se debe y Reflex en los juegos; FreeSync en AMD
+  Software; Adaptive Sync en Intel. Y que lo actives también en el menú del
+  monitor, que a menudo viene apagado.
+- Si su rango no tiene LFC, por debajo de qué FPS vuelven los tirones.
+- La tecnología anti-desenfoque de tu marca (**ELMB** en ASUS, **DyAc** en
+  BenQ, **VRB** en Acer, **Aim Stabilizer** en Gigabyte…) y si te serviría:
+  sólo si el juego no baja nunca de los Hz, según tus medidas. Esto no viaja en
+  el EDID: Win Juicer no puede saber si tu modelo la tiene ni si está
+  encendida, por eso le dices cómo usas el monitor. Si usas el estroboscopio,
+  los consejos cambian: el ritmo exacto a los Hz, que suele funcionar sólo a
+  ciertas frecuencias, el overdrive que va con él, y qué juegos de tus medidas
+  no llegan a los Hz y a qué frecuencia bajar para ellos.
+- El overdrive en su nivel intermedio, y si su HDR merece la pena o es de
+  entrada.
+- G-Sync con módulo no se distingue desde Windows; en NVIDIA un monitor
+  FreeSync funciona como «G-Sync Compatible» y los pasos son los mismos.
 
 ### Interfaz
 
@@ -173,11 +686,23 @@ Y por juego, desde el menú **Juegos**:
 | Sin animaciones | Rendimiento | Medio |
 | Sin transparencias | Rendimiento | Bajo |
 | Menú contextual clásico | Rendimiento | Bajo |
+| Carpetas grandes al instante: sin detectar el tipo de cada carpeta | Rendimiento | Medio |
 | Búsqueda de Inicio sin resultados de Bing | Rendimiento | Medio |
 | Sin Widgets | Rendimiento | Bajo |
 
-Las animaciones y la interfaz no dan FPS: hacen que Windows *se sienta* más
-rápido, que también cuenta.
+### Privacidad
+
+Poco rendimiento aquí, y se dice. Lo que compran es menos cosas ejecutándose y
+llamando a casa por su cuenta.
+
+| Ajuste | Nivel | Impacto |
+|---|---|---|
+| Sin historial de actividad | Seguro | Bajo |
+| Sin identificador de publicidad ni encuestas | Seguro | Bajo |
+| Telemetría al mínimo y sin sus tareas (adiós a los picos de CompatTelRunner) | Rendimiento | Bajo |
+| Sin apps de fabricantes al conectar dispositivos | Rendimiento | Bajo |
+| Ubicación desactivada | Rendimiento | Bajo |
+| Copilot desactivado | Rendimiento | Bajo |
 
 ### Segundo plano, disco y red
 
@@ -186,10 +711,24 @@ rápido, que también cuenta.
 | Servicio de telemetría (DiagTrack) deshabilitado | Seguro | Bajo |
 | Apps de la Tienda sin segundo plano | Rendimiento | Bajo |
 | Sin instantáneas de Recall (PC Copilot+) | Rendimiento | Bajo |
+| Dos servicios que casi nadie usa, a manual | Rendimiento | Bajo |
+| Cola de impresión desactivada, sólo si no hay impresoras | Rendimiento | Bajo |
+| Edge sin procesos de fondo ni promociones | Rendimiento | Bajo |
 | Sin nombres cortos 8.3 en NTFS | Rendimiento | Bajo |
 | Sin fecha de último acceso en NTFS | Rendimiento | Bajo |
 | Sin algoritmo de Nagle (sólo juegos TCP, como los MMO) | Rendimiento | Bajo |
 | Sin indexado de búsqueda | Extremo | Bajo |
+
+### Actualizaciones
+
+Siguen activas: lo que cambia es qué llega por ellas y cuándo.
+
+| Ajuste | Nivel |
+|---|---|
+| No compartir actualizaciones con otros equipos | Seguro |
+| Windows Update no instala drivers (no te cambia el de la gráfica) | Rendimiento |
+| Sin reinicios automáticos con la sesión abierta | Rendimiento |
+| Versiones nuevas de Windows con un año de retraso (el «sólo seguridad» de WinUtil; no en Home) | Rendimiento |
 
 ### Seguridad: ganancias reales, costes reales
 
@@ -200,55 +739,223 @@ rápido, que también cuenta.
 
 Microsoft reconoce el coste de la integridad de memoria en juegos y propone
 desactivarla a quien priorice jugar. Win Juicer lo ofrece, explica qué pierdes,
-y no lo aplica sin que escribas «SI». Si BitLocker está activo, lo suspende
+y no lo aplica sin que lo confirmes. Si BitLocker está activo, lo suspende
 durante un reinicio antes de tocar la configuración de arranque, para que no te
 pida la clave de recuperación.
 
+### Preferencias y componentes (a la carta)
+
+Interruptores en los dos sentidos: marcados, encendidos; desmarcados, lo
+contrario, aunque ya estuviera así antes de Win Juicer.
+
+- **Preferencias:** tema oscuro, mostrar extensiones de archivo, mostrar
+  archivos ocultos, Bloq Num al iniciar, «Finalizar tarea» en la barra de tareas,
+  barra de tareas a la izquierda, pantallazo azul con detalles (útil con
+  overclock), mensajes detallados al arrancar, rutas largas, el Explorador
+  abriendo en «Este equipo», Alt+Tab sólo con ventanas (sin las pestañas de
+  Edge) y sin «Galería» en el panel del Explorador.
+- **Componentes de Windows:** .NET Framework 3.5 y DirectPlay (juegos antiguos),
+  WSL, Sandbox y Hyper-V.
+
+### Debloat
+
+Las apps que vienen con Windows, sólo las que estén instaladas, en tres grupos:
+
+- **Seguras de quitar:** Noticias, El Tiempo, Bing, Obtener ayuda, Centro de
+  opiniones, el lanzador de Microsoft 365, Solitaire, Clipchamp, Power Automate,
+  Dev Home, Películas y TV, Mapas, Cortana y las promociones preinstaladas
+  (Spotify, Netflix, Disney+, Prime Video, TikTok, Candy Crush).
+- **Opcionales:** Copilot, Outlook nuevo, Teams, To Do, Enlace Móvil, Notas
+  rápidas, Grabadora, Reloj, Cámara, Reproductor multimedia, WhatsApp…
+- **Con cuidado:** la app Xbox, Xbox Game Bar y el proveedor de identidad de
+  Xbox. Se confirman una a una.
+
+Si tu equipo usa una, sale marcada como **necesaria aquí**: Game Bar en un X3D
+de dos CCD, la pila de Xbox si tienes juegos de Game Pass. La Tienda, la
+Calculadora, Fotos o el Bloc de notas no se ofrecen.
+
+Quitar una app la desinstala para todos los usuarios; **deshacer la reinstala
+desde Microsoft Store** con winget. OneDrive también se puede desinstalar, salvo
+que tus carpetas vivan dentro de él: entonces Win Juicer se niega y dice por
+qué.
+
+### Protección contra contenido adulto (opcional, y para siempre)
+
+En **Empezar**, o en la consola (opción 15, o `-ProteccionAdultos Activar`).
+Pensada también para quien quiere **dejar el porno**: bloquea ese contenido
+**en todo el equipo**, en cualquier navegador, app o juego, y cierra los
+atajos con los que se suele saltar un filtro en un mal momento. Nada filtra
+dentro del PC, así que nada va más lento.
+
+Dos niveles; se puede subir de equilibrada a estricta, nunca bajar:
+
+| | Equilibrada | Estricta (la recomendada para una adicción) |
+|---|---|---|
+| Filtro DNS | [CleanBrowsing](https://cleanbrowsing.org/filters/), filtro de adultos | CleanBrowsing, filtro familiar: además proxies, VPN y webs con contenido mixto, como Reddit |
+| El DNS puede ir a | cualquiera menos los públicos sin filtro (Google, Cloudflare, Quad9, OpenDNS, AdGuard, NextDNS…) | sólo al filtro |
+| YouTube | modo restringido moderado | estricto |
+| Ventanas privadas y de invitado | siguen | no hay (Chrome, Edge, Brave y Firefox) |
+| Proxy en el navegador, Tor y VPN de Brave | siguen | no |
+
+En los dos:
+
+- **DNS filtrado** en cada adaptador físico, conectado o no, IPv4 e IPv6, con
+  millones de dominios en listas que ellos mantienen al día. Una consulta
+  cuesta lo mismo que con cualquier DNS público, y Windows guarda las
+  respuestas. Si CleanBrowsing no responde, Cloudflare para familias
+  (1.1.1.3) hasta que vuelva: nunca un DNS sin filtro, y nunca te quedas sin
+  internet.
+- **Cortafuegos de Windows**, para que cambiar el DNS no sirva de nada: seis
+  reglas que bloquean el DNS que no debe salir (ver la tabla), el DNS cifrado
+  por TLS y QUIC (puerto 853) y el DNS cifrado por HTTPS de los servidores
+  públicos. Si el cortafuegos se apaga, vuelve a encenderse; si lo lleva otro
+  programa (un antivirus con cortafuegos propio), se le deja: entonces sólo
+  queda el filtro.
+- **Navegadores**, por política: sin su DNS cifrado propio (preguntan al
+  filtrado), con la búsqueda segura de Google y el modo restringido de
+  YouTube, y en Edge la búsqueda segura estricta de Bing; en Firefox, su DNS
+  cifrado apagado y bloqueado. La búsqueda de Windows, en búsqueda segura
+  estricta. Chrome y Edge dirán que los «administra tu organización»: son
+  estas reglas.
+- **Archivo hosts:** un bloque propio deja sin conexión la VPN que trae Opera,
+  y las líneas que se añadan después enviando un nombre a una dirección de
+  internet (la forma de saltarse un filtro DNS) se convierten en comentario.
+  Lo que ya había antes de activarla, y lo que apunta al propio PC o a la red
+  local, se queda como estaba.
+- **Webs bloqueadas para siempre:** X, Reddit o Tumblr con un botón (con los
+  nombres de sus imágenes y vídeos), u otra cualquiera escribiéndola. Se
+  añaden al archivo hosts y no se pueden quitar.
+- **Para siempre:** se activa tras dos confirmaciones (en la consola,
+  escribiendo ACTIVAR) y después Win Juicer no la desactiva ni la baja de
+  nivel: no hay botón ni orden para quitarla, «Deshacer todo» no la toca y el
+  DNS queda fijo. Una tarea de Windows (como SYSTEM, desde la copia protegida
+  de `Program Files`) la repone sola al arrancar, al iniciar sesión, al
+  conectar una red, en cuanto cambia algo del cortafuegos y cada 15 minutos,
+  con la prioridad más baja; si nada ha cambiado, no hace nada. Si otro
+  programa deshace lo mismo una y otra vez, no se pelea con él: lo repone en
+  la siguiente revisión. Con «mantener juegos» activado, su tarea también la
+  revisa al iniciar sesión, y vuelve a crear la de la protección si alguien
+  la borró.
+- **En el móvil**, la misma idea: en Android, Ajustes, Red, DNS privado:
+  `family-filter-dns.cleanbrowsing.org` (o `adult-filter-dns.cleanbrowsing.org`
+  para la equilibrada).
+- **Lo que no puede:** ver dentro de redes sociales o apps que sirven ese
+  contenido desde sus propios dominios, ni frenar una VPN o Tor instalados
+  como programa. En la equilibrada, Firefox bloquea las webs pero no obliga a
+  la búsqueda segura. En la estricta, una VPN que traiga su propio DNS
+  (también la del trabajo) no resuelve nombres, y alguna Wi-Fi de hotel cuya
+  página de acceso sólo responde a su DNS puede no abrirse. Y quien
+  administra el equipo siempre puede desmontarla a mano: ningún programa
+  puede impedirlo, y Win Juicer no se esconde ni lucha contra Windows para
+  intentarlo. Lo que hace es no ponerlo fácil, y volver a ponerla en cuanto
+  se toca.
+
+### DNS
+
+Cloudflare (normal, contra malware, familiar), Google, Quad9, AdGuard (normal y
+familiar), OpenDNS o automático. Se cambia en los adaptadores físicos
+conectados y deshacer devuelve a cada uno lo que tenía. **No baja el ping**: el
+DNS sólo se consulta al conectar. Sirve para privacidad, para filtrar malware o
+anuncios, o porque el de tu operador falle.
+
+### Instalar programas
+
+Una lista corta, con winget: lanzadores (Steam, Epic, GOG, EA, Ubisoft,
+Battle.net, Playnite…), navegadores, Discord y compañía, OBS, utilidades,
+runtimes que piden los juegos (Visual C++, .NET) y las herramientas que menciona
+la revisión de hardware (HWiNFO, CPU-Z, GPU-Z, CrystalDiskInfo, DDU,
+NVCleanstall). Las sugeridas para tu equipo salen marcadas. Los identificadores
+son los mismos que mantiene WinUtil.
+
 ### Programas de inicio
 
-Lista lo que arranca con Windows —registro, carpetas de Inicio y tareas
-programadas de terceros— y lo activa o desactiva con el mismo interruptor que
-usa el Administrador de tareas. No borra nada.
+Lista lo que arranca con Windows —registro, carpetas de Inicio, tareas
+programadas de terceros y servicios de terceros conocidos— y lo activa o
+desactiva con el mismo interruptor que usa el Administrador de tareas. No borra
+nada.
+
+Los servicios se pasan a **manual**, no se deshabilitan: el programa todavía
+puede arrancarlos cuando los necesita. Sólo aparecen los que Win Juicer conoce
+(actualizadores y comprobación de licencia de Adobe, telemetría de Intel y HP,
+la analítica de Killer, Nahimic, Armoury Crate, Razer, Corsair, TeamViewer,
+AnyDesk, Bonjour…); el resto de servicios de terceros suelen ser drivers, audio
+o antivirus, y una lista de «cosas que arrancan» sólo invitaría a apagarlos.
+
+Reconoce los habituales y dice qué son: **prescindibles** (lanzadores de
+juegos, Spotify, actualizadores de Adobe y Java, navegadores precargados…:
+funcionan igual abriéndolos cuando hacen falta), **opcionales** (Discord,
+OneDrive, el software de periféricos y RGB, Afterburner: según para qué los
+uses) o **necesarios** (Seguridad de Windows, el panel de audio, el touchpad).
+Los actualizadores de navegadores y antivirus no se tocan: son por donde llegan
+los parches. El diagnóstico cuenta cuántos prescindibles arrancan.
+
+### Antes y después
+
+Justo antes de aplicar el primer cambio, Win Juicer toma una **medida
+inicial**: tiempo del último arranque (el que cronometra Windows), programas,
+tareas y servicios de inicio, procesos y servicios en marcha, memoria en uso y
+espacio libre. «Medir antes y después» (o `-Medir`) mide otra vez y lo compara,
+en verde lo que ha mejorado. El arranque sólo cambia después de reiniciar, y la
+memoria y los procesos dependen de lo que tengas abierto: lo justo es medir las
+dos veces recién reiniciado y con todo cerrado (si no, lo avisa). «Nueva
+medida inicial» empieza la comparación desde ahora.
+
+### Exportar e importar
+
+Como en WinUtil: *Exportar* guarda en un JSON lo que Win Juicer ha cambiado en
+este equipo —ajustes, preferencias, apps quitadas y DNS— y en otro PC
+*Importar* lo aplica, con el mismo motor y el mismo diario, así que también se
+deshace. Lo que sólo tiene sentido aquí (programas de inicio, ajustes de un
+`.exe`) no se exporta, y lo que no aplique en el otro equipo se salta y lo dice.
 
 ### Mantenimiento
 
 Limpieza de temporales, informes de errores y descargas de Windows Update;
-TRIM o desfragmentado según la unidad; limpieza de componentes; y DISM + SFC.
-Esto no se puede deshacer, así que sólo borra lo que Windows regenera. **La
-caché de shaders y Prefetch no se tocan**: vaciarlas hace que la siguiente
-partida tenga tirones.
+TRIM o desfragmentado según la unidad; limpieza de componentes; DISM + SFC;
+restablecer la red (Winsock y TCP/IP) y Windows Update (su caché se renombra, no
+se borra). Esto no se puede deshacer, así que sólo borra lo que Windows
+regenera. **La caché de shaders y Prefetch no se tocan**: vaciarlas hace que la
+siguiente partida tenga tirones.
 
 ## Lo que no hace, y por qué
 
 No desactiva SysMain, ni el archivo de paginación, ni la compresión de memoria,
 ni Defender, ni Windows Update, ni las mitigaciones de Spectre. No «libera RAM».
 No borra la caché de shaders. No fuerza el HPET. No toca las claves «Games» de
-MMCSS ni `Win32PrioritySeparation`. No limpia el registro. No desinstala apps en
-bloque ni desactiva servicios en masa. No cambia el DNS «para bajar el ping».
+MMCSS ni `Win32PrioritySeparation`. No limpia el registro. No quita todas las
+apps de la Tienda de golpe ni desactiva servicios en masa. No desinstala Edge a
+la fuerza. No desactiva IPv6 ni Teredo. No cambia el DNS «para bajar el ping».
 
-Cada una de estas cosas tiene su explicación en el menú **Lo que no hacemos**.
-Resumen: o no hacen nada medible, o rompen algo, o las dos cosas. Varias, de
-hecho, las **deshace** Win Juicer si otro programa las dejó puestas.
+Cada una de estas cosas tiene su explicación en **No hacemos**. Resumen: o no
+hacen nada medible, o rompen algo, o las dos cosas. Varias, de hecho, las
+**deshace** Win Juicer si otro programa las dejó puestas.
 
 ## Cómo deshace
 
 Antes de cambiar nada, cada ajuste guarda en
 `%ProgramData%\WinJuicer\diario.json` el valor exacto que había: si una clave no
 existía, si un servicio estaba en automático retrasado, qué plan de energía
-estaba activo. El diario se escribe *antes* de aplicar, para que ni un corte de
-luz a medias deje el equipo sin vuelta atrás.
+estaba activo, qué DNS tenía cada adaptador, qué apps estaban instaladas. El
+diario se escribe *antes* de aplicar, para que ni un corte de luz a medias deje
+el equipo sin vuelta atrás.
 
 - **Deshacer** devuelve cada ajuste a como estaba antes de que Win Juicer lo
-  tocara **por primera vez**, aunque lo hayas aplicado varias veces.
+  tocara **por primera vez**, aunque lo hayas aplicado varias veces o hayas
+  cambiado de DNS tres veces.
 - Las claves que Win Juicer creó se borran al deshacer, salvo que otro programa
   haya escrito en ellas después.
 - Cada ajuste se aplica entero o no se aplica: si una parte falla, lo ya hecho
   se revierte en el momento.
 - Si Windows no conserva un cambio, se dice en lugar de darlo por bueno.
-- Antes de aplicar un perfil intenta crear un **punto de restauración**, y dice
-  si Windows lo creó o no (sólo permite uno cada 24 horas).
+- La única excepción, a propósito, es la **protección contra contenido
+  adulto**: no pasa por el diario, y ni «Deshacer» ni «Deshacer todo» la
+  quitan (ver arriba). Deshacer un DNS que pusiste antes de activarla deja el
+  filtrado como está.
+- Antes de aplicar intenta crear un **punto de restauración**, y dice si
+  Windows lo creó o no (sólo permite uno cada 24 horas).
 
-El registro de lo que se hizo, con fecha, queda en
+La ventana y la consola usan el mismo diario: lo que hagas en una se deshace en
+la otra. El registro de lo que se hizo, con fecha, queda en
 `%ProgramData%\WinJuicer\registro.log`.
 
 ## Un detalle si tu cuenta no es de administrador
@@ -264,16 +971,34 @@ WinJuicer/
   WinJuicer.cmd           doble clic: arranca PowerShell sin que la política lo bloquee
   WinJuicer.ps1           pide administrador, parámetros de línea de órdenes
   WinJuicer.psm1          el módulo, que reúne src/
-  src/Backend.ps1         único punto que toca registro, servicios y programas del sistema
-  src/Engine.ps1          estado, aplicar, verificar, deshacer y el diario
-  src/Catalog.ps1         los ajustes, con su texto, su consejo según el equipo, y los mitos
-  src/Native.ps1          SystemParametersInfo, pantallas, núcleos P/E y CCD, Modern Standby
-  src/Inventory.ps1       el análisis del equipo, y los clasificadores de hardware y software
-  src/Advisor.ps1         hallazgos, veredicto de cada ajuste y el plan a medida
+  src/Backend.ps1         único punto que toca registro, servicios, apps, DNS y características
+  src/Engine.ps1          estado, aplicar, verificar, deshacer, interruptores y el diario
+  src/Catalog.ps1         los ajustes, con su texto, y los mitos
+  src/Native.ps1          SystemParametersInfo, modos de pantalla, Modern Standby, núcleos híbridos
+  src/Hardware.ps1        de qué está hecho el equipo
+  src/Advisor.ps1         qué conviene a este equipo, y por qué
+  src/Audit.ps1           el diagnóstico
+  src/Tuning.ps1          la revisión de hardware: BIOS, overclock, estabilidad
+  src/Debloat.ps1         las apps que vienen con Windows, y OneDrive
+  src/Network.ps1         DNS, restablecer la red y Windows Update
+  src/Apps.ps1            instalar con winget
+  src/Config.ps1          exportar e importar la configuración
+  src/Measure.ps1         antes y después: medir y comparar
+  src/Library.ps1         los juegos instalados y su .exe, y configurarlos en un paso
+  src/Covers.ps1          portadas de la galería: caché de Steam, logos de Xbox, tiendas, icono
+  src/Upkeep.ps1          mantener los juegos optimizados al iniciar sesión
+  src/GameTips.ps1        qué poner dentro de cada juego según tu gráfica y tu monitor
+  src/Frames.ps1          FPS y frametimes con PresentMon
+  src/Monitor.ps1         el monitor: EDID, FreeSync, VRR, HDR y consejos
+  src/Limiter.ps1         frame pacer por juego: ritmo, calibración, conflictos
+  src/FineTune.ps1        undervolt de CPU y overclock de GPU: recetas, registro y vigilancia
+  src/Version.ps1         aviso de versión nueva
   src/Startup.ps1         programas de inicio
   src/Games.ps1           bibliotecas de juegos y ajustes por ejecutable
   src/Maintenance.ps1     limpieza y mantenimiento
-  src/Console.ps1         menús y pantallas
+  src/Console.ps1         menús de texto y línea de órdenes
+  src/Gui.ps1             la ventana
+  build/                  el zip y el arrancador de «irm … | iex»
   tests/                  Pester
 ```
 
@@ -281,34 +1006,32 @@ Todo lo que toca la máquina pasa por `Backend.ps1`, que tiene una versión en
 memoria. Así el motor y **cada uno de los ajustes del catálogo** se prueban sin
 Windows: se aplican sobre una máquina simulada —con los destrozos típicos de
 otros optimizadores ya hechos— y se comprueba que deshacer la deja idéntica,
-byte a byte.
-
-El análisis y el asesor están separados por la misma razón: recoger datos sí
-habla con Windows, pero decidir qué conviene sólo lee el perfil del equipo. Las
-pruebas montan equipos inventados —un sobremesa con Ryzen 9 7950X3D, un portátil
-con Modern Standby, batería y dos gráficas, un equipo con disco duro y Outlook,
-uno con WSL y Docker, uno con arranque dual…— y comprueban el consejo que recibe
-cada uno.
+byte a byte. Lo mismo para quitar y reinstalar apps, cambiar el DNS de varios
+adaptadores y los interruptores en los dos sentidos. Lo que interpreta el
+hardware (referencias de RAM, microcódigo, nombres de procesadores y gráficas,
+salida de powercfg y nvidia-smi, códigos de pantallazo) son funciones puras
+probadas con las cadenas que dan equipos reales.
 
 ## Estado
 
 Escrito y probado en Linux con PowerShell 7 y Pester: el motor, el diario, el
-catálogo entero en ida y vuelta, el gestor de inicio, los ajustes por juego, los
-clasificadores de hardware y software, y el consejo que recibe cada uno de una
-docena de equipos inventados. El análisis estático comprueba que el código es
-válido en Windows PowerShell 5.1.
+catálogo entero en ida y vuelta, los interruptores, el debloat, el DNS, el
+consejero con perfiles de hardware de ejemplo, la revisión de hardware y la
+línea de órdenes. El análisis estático comprueba que el código es válido en
+Windows PowerShell 5.1.
 
 En GitHub Actions corre además sobre Windows Server 2025 (compilación 26100, la
 misma base que Windows 11 24H2), en 5.1 y en 7, contra el registro, los
-servicios, powercfg y bcdedit de verdad: hace el análisis completo de la máquina
-del runner sin un solo error, aplica su plan a medida y los tres niveles
-completos, lo deshace todo y comprueba que no queda rastro.
+servicios, powercfg y bcdedit de verdad: aplica los tres niveles completos en la
+máquina del runner, lo deshace todo y comprueba que no queda rastro; hace la
+revisión de hardware y estabilidad con los registros de eventos reales; lista
+las apps y las características; y construye la ventana y dibuja cada pestaña.
 
 Lo que una máquina virtual no tiene no se ha podido probar en ningún sitio: una
-pantalla y una gráfica reales, batería y Modern Standby, BitLocker, y la
-hibernación (la VM no la admite, así que de «Inicio rápido» sólo se ha probado
-que, al fallar, deja todo como estaba). Es lo primero que conviene mirar en un PC
-de verdad, empezando por el análisis, que no cambia nada.
+pantalla y una gráfica reales (nvidia-smi, Resizable BAR), batería y Modern
+Standby, BitLocker, la hibernación, quitar y reinstalar apps de la Tienda de
+verdad, winget, y la ventana vista por una persona. Es lo primero que conviene
+mirar en un PC de verdad, empezando por la pestaña Equipo, que no cambia nada.
 
 ## Pruebas
 

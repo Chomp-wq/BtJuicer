@@ -271,6 +271,462 @@ function Set-WinTask {
     }
 }
 
+# The Appx cmdlets are a Windows PowerShell module that PowerShell 7 can only
+# reach through a compatibility session, which loses errors on the way.
+# Running the script in powershell.exe and reading JSON back behaves the same
+# from both.
+function Invoke-WinPowerShell {
+    param([Parameter(Mandatory)][string]$Script)
+    $prefix = "`$ProgressPreference = 'SilentlyContinue'; `$ErrorActionPreference = 'Stop'`n"
+    if ($PSVersionTable.PSEdition -ne 'Core') {
+        return , @(& ([scriptblock]::Create($prefix + $Script)) | ForEach-Object { ConvertTo-JuicerHashtable $_ })
+    }
+    $full = $prefix + "@(`n$Script`n) | ConvertTo-Json -Depth 4 -Compress"
+    $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    $r = Invoke-WinNative $exe @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($full)))
+    if ($r.Code -ne 0) { throw "Windows PowerShell: $($r.Output)" }
+    $json = @($r.Output -split "`n" | Where-Object { $_ -match '^\s*[\[{]' })[-1]
+    ConvertFrom-JuicerWinPsJson $json
+}
+
+# What the Windows PowerShell child printed, as one flat list of hashtables.
+# ConvertFrom-Json hands a JSON array over item by item in PowerShell 7 and
+# whole in 5.1 and 6; read as one array, the list came back inside another
+# list, and every Store app read as not installed.
+function ConvertFrom-JuicerWinPsJson {
+    param([string]$Json)
+    if (-not $Json) { return , @() }
+    , @($Json | ConvertFrom-Json | ForEach-Object { $_ } | ForEach-Object { ConvertTo-JuicerHashtable $_ })
+}
+
+function ConvertTo-WinPsLiteral {
+    param([string]$Text)
+    "'" + ($Text -replace "'", "''") + "'"
+}
+
+# Listing every package for every user takes seconds; the engine asks about
+# one package at a time, so the list is read once and dropped after a change.
+$script:AppxCache = $null
+
+function Read-WinAppx {
+    param([string]$Name)
+    if ($null -eq $script:AppxCache) {
+        $list = Invoke-WinPowerShell @'
+$p = @{}
+foreach ($a in @(Get-AppxPackage -AllUsers)) {
+    $p[$a.Name] = [pscustomobject]@{ Name = $a.Name; Installed = $true; Provisioned = $false }
+}
+foreach ($v in @(Get-AppxProvisionedPackage -Online)) {
+    if ($p.ContainsKey($v.DisplayName)) { $p[$v.DisplayName].Provisioned = $true }
+    else { $p[$v.DisplayName] = [pscustomobject]@{ Name = $v.DisplayName; Installed = $false; Provisioned = $true } }
+}
+$p.Values
+'@
+        $script:AppxCache = @{}
+        foreach ($a in $list) { if ($a.Name) { $script:AppxCache[[string]$a.Name] = $a } }
+    }
+    $hit = $script:AppxCache[$Name]
+    if ($null -eq $hit) { return $null }
+    @{ Installed = [bool]$hit.Installed; Provisioned = [bool]$hit.Provisioned }
+}
+
+function Remove-WinAppx {
+    param([string]$Name)
+    $n = ConvertTo-WinPsLiteral $Name
+    $script:AppxCache = $null
+    [void](Invoke-WinPowerShell @"
+Get-AppxPackage -AllUsers -Name $n | Remove-AppxPackage -AllUsers
+Get-AppxProvisionedPackage -Online | Where-Object { `$_.DisplayName -eq $n } | Remove-AppxProvisionedPackage -Online | Out-Null
+"@)
+}
+
+# Store apps come back from the Store itself; winget is how to ask it without
+# opening a window.
+function Add-WinAppx {
+    param([string]$Name, [string]$StoreId)
+    if (-not $StoreId) { throw "$Name no tiene identificador de Microsoft Store: reinstálala desde la Tienda." }
+    if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'winget no está disponible: instala «Instalador de aplicación» desde Microsoft Store.' }
+    $script:AppxCache = $null
+    $r = Invoke-WinNative 'winget.exe' @('install', '--id', $StoreId, '--source', 'msstore', '--accept-package-agreements', '--accept-source-agreements', '--silent', '--disable-interactivity')
+    if ($r.Code -ne 0) { throw "winget no pudo reinstalar $Name ($($r.Code)): $($r.Output)" }
+}
+
+# Physical adapters that are connected. Virtual ones (VPN, Hyper-V) keep
+# whatever DNS their software gave them.
+function Get-WinNetAdapters {
+    , @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' } | ForEach-Object {
+            @{
+                Guid = [string]$_.InterfaceGuid; Name = [string]$_.Name; Description = [string]$_.InterfaceDescription
+                Wireless = ([int]$_.NdisPhysicalMedium -eq 9); LinkSpeed = [int64]$_.ReceiveLinkSpeed
+            }
+        })
+}
+
+# Every physical adapter that can carry traffic, connected or not, and
+# whether IPv6 is on in it: the content protection covers them all, so that
+# a Wi-Fi that connects later is already filtered.
+function Get-WinNetAdaptersAll {
+    , @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -in 'Up', 'Disconnected' } | ForEach-Object {
+            $v6 = $true
+            try { $v6 = [bool](Get-NetAdapterBinding -Name $_.Name -ComponentID 'ms_tcpip6' -ErrorAction Stop).Enabled } catch { Write-Verbose "Sin datos de IPv6 de $($_.Name)" }
+            @{ Guid = [string]$_.InterfaceGuid; Name = [string]$_.Name; Description = [string]$_.InterfaceDescription; Ipv6 = $v6 }
+        })
+}
+
+# Whether a DNS server answers now: one quick question, from no cache.
+function Test-WinDnsServer {
+    param([string]$Server)
+    try {
+        $null = Resolve-DnsName -Name 'www.msftconnecttest.com' -Server $Server -Type A -DnsOnly -NoHostsFile -QuickTimeout -ErrorAction Stop
+        $true
+    } catch {
+        $false
+    }
+}
+
+# Clearing first and then setting is the only way to bring back exactly what
+# was there: Set-DnsClientServerAddress leaves alone a family it is not given.
+function Set-WinDns {
+    param([string]$Interface, [string[]]$V4, [string[]]$V6)
+    $a = Get-NetAdapter -ErrorAction Stop | Where-Object { [string]$_.InterfaceGuid -eq $Interface } | Select-Object -First 1
+    if (-not $a) { throw "No encuentro el adaptador $Interface." }
+    Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ResetServerAddresses -ErrorAction Stop
+    $all = @(@($V4) + @($V6) | Where-Object { $_ })
+    if ($all.Count -gt 0) { Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $all -ErrorAction Stop }
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+}
+
+# --- Firewall and hosts file, for the content protection ---------------------
+
+# The rules with these names as Windows applies them (the active store: a rule
+# there is one that works), with every condition that could narrow them.
+function Get-WinFwRules {
+    param([string[]]$Names)
+    $out = @()
+    foreach ($r in @(Get-NetFirewallRule -PolicyStore ActiveStore -Name $Names -ErrorAction SilentlyContinue)) {
+        $port = Get-NetFirewallPortFilter -AssociatedNetFirewallRule $r
+        $addr = Get-NetFirewallAddressFilter -AssociatedNetFirewallRule $r
+        $app = Get-NetFirewallApplicationFilter -AssociatedNetFirewallRule $r
+        $svc = Get-NetFirewallServiceFilter -AssociatedNetFirewallRule $r
+        $nic = Get-NetFirewallInterfaceTypeFilter -AssociatedNetFirewallRule $r
+        $out += @{
+            Name = [string]$r.Name; Enabled = ([string]$r.Enabled -eq 'True'); Action = [string]$r.Action; Direction = [string]$r.Direction; Profile = [string]$r.Profile
+            Protocol = [string]$port.Protocol; RemotePort = @($port.RemotePort | ForEach-Object { [string]$_ }); LocalPort = @($port.LocalPort | ForEach-Object { [string]$_ })
+            RemoteAddress = @($addr.RemoteAddress | ForEach-Object { [string]$_ }); LocalAddress = @($addr.LocalAddress | ForEach-Object { [string]$_ })
+            Program = [string]$app.Program; Service = [string]$svc.Service; InterfaceType = [string]$nic.InterfaceType
+        }
+    }
+    , $out
+}
+
+# A block rule, outbound, for every profile, written anew: a rule someone
+# narrowed is easier to replace than to put back field by field.
+function Set-WinFwRule {
+    param([hashtable]$Rule, [string]$Group, [switch]$Disabled)
+    Remove-NetFirewallRule -Name $Rule.Name -ErrorAction SilentlyContinue
+    $p = @{
+        Name = $Rule.Name; DisplayName = $Rule.Title; Description = $Rule.Description; Group = $Group
+        Direction = 'Outbound'; Action = 'Block'; Protocol = $Rule.Protocol; RemotePort = $Rule.Port; RemoteAddress = @($Rule.Remote)
+        Profile = 'Any'; Enabled = $(if ($Disabled) { 'False' } else { 'True' })
+    }
+    New-NetFirewallRule @p -ErrorAction Stop | Out-Null
+}
+
+# Which profiles of Windows' firewall are off, and whether another program
+# registered as the firewall (it turns Windows' off, and is left in charge).
+function Get-WinFwState {
+    $off = @(Get-NetFirewallProfile -PolicyStore ActiveStore -ErrorAction Stop | Where-Object { [string]$_.Enabled -eq 'False' } | ForEach-Object { [string]$_.Name })
+    $third = $false
+    try { $third = @(Get-CimInstance -Namespace 'root/SecurityCenter2' -ClassName FirewallProduct -ErrorAction Stop).Count -gt 0 } catch { Write-Verbose "Sin Centro de seguridad (Windows Server): $_" }
+    @{ Off = $off; ThirdParty = $third }
+}
+
+function Get-WinHostsPath { Join-Path $env:SystemRoot 'System32\drivers\etc\hosts' }
+
+# Read and written byte for byte (Latin-1 maps each byte to one character and
+# back), so whatever encoding the file had, the lines it already had stay
+# exactly as they were.
+function Read-WinHosts {
+    $p = Get-WinHostsPath
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    [Text.Encoding]::GetEncoding(28591).GetString([IO.File]::ReadAllBytes($p))
+}
+
+function Write-WinHosts {
+    param([string]$Text)
+    $p = Get-WinHostsPath
+    $attr = $null
+    if (Test-Path -LiteralPath $p) {
+        $item = Get-Item -LiteralPath $p -Force
+        $attr = $item.Attributes
+        # Read-only on purpose, often: it is put back after.
+        if ($attr -band [IO.FileAttributes]::ReadOnly) { $item.Attributes = $attr -band (-bnot [IO.FileAttributes]::ReadOnly) }
+    }
+    try {
+        [IO.File]::WriteAllBytes($p, [Text.Encoding]::GetEncoding(28591).GetBytes($Text))
+    } finally {
+        if ($null -ne $attr) { (Get-Item -LiteralPath $p -Force).Attributes = $attr }
+    }
+    Clear-DnsClientCache -ErrorAction SilentlyContinue
+}
+
+# Reading goes through WMI: «dism /Get-Features» takes up to a minute, and
+# the window asks for every component when it opens. Changing goes through
+# dism, which also brings in what a feature depends on.
+# InstallState: 1 enabled, 2 disabled, 3 not on disk (Windows Update brings
+# it), 4 unknown.
+#
+# WMI keeps reporting the old state of a feature changed with /NoRestart until
+# the reboot; dism answers 3010 then. What was changed is remembered, tied to
+# this boot, so that verifying, undoing and rolling back see the new state.
+$script:FeatureCache = $null
+
+function Get-WinBootId {
+    try { return (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime.ToString('s') } catch { return '' }
+}
+
+function Get-WinPendingFeatures {
+    $path = Join-Path (Get-JuicerHome) 'componentes-pendientes.json'
+    $p = @{ Boot = (Get-WinBootId); Features = @{} }
+    if (Test-Path -LiteralPath $path) {
+        try {
+            $saved = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($path) | ConvertFrom-Json)
+            if ($saved.Boot -eq $p.Boot -and $saved.Features) { $p.Features = $saved.Features }
+        } catch {
+            Write-JuicerLog "Componentes pendientes ilegibles: $_"
+        }
+    }
+    $p
+}
+
+function Read-WinFeature {
+    param([string]$Name)
+    if ($null -eq $script:FeatureCache) {
+        $cache = @{}
+        foreach ($f in @(Get-CimInstance Win32_OptionalFeature -ErrorAction Stop)) { $cache[[string]$f.Name] = [int]$f.InstallState }
+        $script:FeatureCache = $cache
+    }
+    $state = $script:FeatureCache[$Name]
+    if ($null -eq $state -or $state -notin 1, 2, 3) { return $null }
+    $pending = (Get-WinPendingFeatures).Features
+    if ($pending.ContainsKey($Name)) { return @{ Enabled = [bool]$pending[$Name] } }
+    @{ Enabled = ($state -eq 1) }
+}
+
+function Set-WinFeature {
+    param([string]$Name, [bool]$Enabled)
+    $script:FeatureCache = $null
+    $arguments = if ($Enabled) { @('/Online', '/English', '/Enable-Feature', "/FeatureName:$Name", '/All', '/NoRestart') } else { @('/Online', '/English', '/Disable-Feature', "/FeatureName:$Name", '/NoRestart') }
+    $r = Invoke-WinNative 'dism.exe' $arguments
+    # 3010: done, a restart finishes it.
+    if ($r.Code -notin 0, 3010) { throw "dism no pudo cambiar ${Name} ($($r.Code)): $($r.Output)" }
+    $p = Get-WinPendingFeatures
+    if ($r.Code -eq 3010) { $p.Features[$Name] = $Enabled } else { $p.Features.Remove($Name) }
+    [IO.File]::WriteAllText((Join-Path (Get-JuicerHome) 'componentes-pendientes.json'), (ConvertTo-JuicerJson $p), (New-Object Text.UTF8Encoding $false))
+}
+
+# Frame limits per program: the NVIDIA driver's when there is one, RTSS's
+# profiles otherwise. Read returns @{ Backend; Fps (null = none); Existed }.
+$script:FpsBackendName = $null
+
+function Get-WinRtssDir {
+    foreach ($d in @(${env:ProgramFiles(x86)}, $env:ProgramFiles)) {
+        if (-not $d) { continue }
+        $dir = Join-Path $d 'RivaTuner Statistics Server'
+        if (Test-Path -LiteralPath (Join-Path $dir 'RTSS.exe')) { return $dir }
+    }
+    $null
+}
+
+$script:NvApiOk = $null
+
+function Test-WinNvApi {
+    if ($null -eq $script:NvApiOk) {
+        $script:NvApiOk = $false
+        try {
+            Initialize-JuicerNvApi
+            $script:NvApiOk = [WinJuicer.NvDrs]::Available()
+        } catch {
+            Write-JuicerLog "NVAPI no disponible: $_"
+        }
+    }
+    $script:NvApiOk
+}
+
+function Get-WinFpsEngines {
+    @(if (Test-WinNvApi) { 'nvidia' }; if (Get-WinRtssDir) { 'rtss' })
+}
+
+# The driver's when there is one, RivaTuner otherwise, unless the frame
+# pacer was told to use one of them (and it is there).
+function Get-WinFpsBackend {
+    if ($null -eq $script:FpsBackendName) {
+        $engines = @(Get-WinFpsEngines)
+        $want = Get-JuicerPacerEngine
+        $script:FpsBackendName = if ($engines -contains $want) { $want } elseif ($engines.Count -gt 0) { $engines[0] } else { '' }
+    }
+    $script:FpsBackendName
+}
+
+function Get-WinRtssProfile { param([string]$Exe) Join-Path (Join-Path (Get-WinRtssDir) 'Profiles') "$Exe.cfg" }
+
+function Read-WinFpsLimit {
+    param([string]$Exe, [string]$Backend)
+    switch ($(if ($Backend) { $Backend } else { Get-WinFpsBackend })) {
+        'nvidia' {
+            if (-not (Test-WinNvApi)) { return $null }
+            $v = [WinJuicer.NvDrs]::GetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId)
+            return @{ Backend = 'nvidia'; Fps = $(if ($v -gt 0) { $v } else { $null }); Existed = ($v -ge 0) }
+        }
+        'rtss' {
+            if (-not (Get-WinRtssDir)) { return $null }
+            $f = Get-WinRtssProfile $Exe
+            if (-not (Test-Path -LiteralPath $f)) { return @{ Backend = 'rtss'; Fps = $null; Existed = $false } }
+            $v = Get-JuicerRtssLimit ([IO.File]::ReadAllLines($f))
+            return @{ Backend = 'rtss'; Fps = $(if ($v -gt 0) { [int][Math]::Round($v) } else { $null }); Exact = $v; Existed = $true }
+        }
+    }
+    $null
+}
+
+# Fps 0 or null takes the limit away. For RTSS, a new profile starts as a
+# copy of the Global one, as RTSS itself does; Remove deletes it again.
+# Exact, RTSS only: a fractional cap (179.95), for which the driver's
+# whole numbers are not enough.
+function Set-WinFpsLimit {
+    param([string]$Exe, $Fps, [string]$Backend, [switch]$Remove, [double]$Exact = 0)
+    $n = if ($Fps) { [int]$Fps } else { 0 }
+    switch ($Backend) {
+        'nvidia' { Initialize-JuicerNvApi; [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } else { -1 })) }
+        'rtss' {
+            $f = Get-WinRtssProfile $Exe
+            if ($Remove) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; Update-WinRtssProfiles; return }
+            $lines = if (Test-Path -LiteralPath $f) { [IO.File]::ReadAllLines($f) } else {
+                $global = Join-Path (Split-Path -Parent $f) 'Global'
+                if (Test-Path -LiteralPath $global) { [IO.File]::ReadAllLines($global) } else { @() }
+            }
+            [IO.File]::WriteAllLines($f, [string[]](Set-JuicerRtssLimit $lines $n $Exact), (New-Object Text.ASCIIEncoding))
+            Update-WinRtssProfiles
+        }
+        default { throw 'El frame pacer necesita una gráfica NVIDIA o RivaTuner Statistics Server.' }
+    }
+}
+
+# Whatever else limits frames on this PC, for the frame pacer to warn of
+# two limiters at once: RTSS's Global profile and the games it limits, and
+# the global frame limit of NVIDIA's control panel.
+function Get-WinPacerState {
+    # Nv*: the user values of NVIDIA's global profile, -1 when there is none.
+    $s = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
+    $dir = Get-WinRtssDir
+    if ($dir) {
+        $s.RtssInstalled = $true
+        $s.RtssRunning = $null -ne (Get-Process -Name 'RTSS' -ErrorAction SilentlyContinue)
+        $profiles = Join-Path $dir 'Profiles'
+        $global = Join-Path $profiles 'Global'
+        if (Test-Path -LiteralPath $global) { $s.RtssGlobal = Get-JuicerRtssLimit ([IO.File]::ReadAllLines($global)) }
+        foreach ($f in @(Get-ChildItem -LiteralPath $profiles -Filter '*.exe.cfg' -File -ErrorAction SilentlyContinue)) {
+            $v = Get-JuicerRtssLimit ([IO.File]::ReadAllLines($f.FullName))
+            if ($v -gt 0) { $s.RtssGames[$f.Name.Substring(0, $f.Name.Length - 4).ToLowerInvariant()] = $v }
+        }
+    }
+    if (Test-WinNvApi) {
+        try {
+            $v = [WinJuicer.NvDrs]::GetGlobalDword([WinJuicer.NvDrs]::FrameRateLimiterId)
+            if ($v -gt 0) { $s.NvGlobal = [int]$v }
+            # VRR_MODE_ID, PS_SHADERDISKCACHE_ID, PS_SHADERDISKCACHE_MAX_SIZE_ID (MB).
+            $s.NvVrrMode = [WinJuicer.NvDrs]::GetGlobalDword([uint32]0x1194F158)
+            $s.NvShaderCache = [WinJuicer.NvDrs]::GetGlobalDword([uint32]0x00198FFF)
+            $s.NvShaderCacheMb = [WinJuicer.NvDrs]::GetGlobalDword([uint32]0x00AC8497)
+        } catch {
+            Write-JuicerLog "No se pudo leer el perfil global de NVIDIA: $_"
+        }
+    }
+    $s
+}
+
+# A RivaTuner that is running reads its profiles when it starts: after
+# writing one, it is told to read them again, through UpdateProfiles in its
+# own RTSSHooks64.dll (RTSS 7.3.7 and later; with an older one, or if it is
+# not running, the profile applies the next time it starts).
+function Update-WinRtssProfiles {
+    $dir = Get-WinRtssDir
+    if (-not $dir -or [IntPtr]::Size -ne 8 -or -not (Get-Process -Name 'RTSS' -ErrorAction SilentlyContinue)) { return }
+    $dll = Join-Path $dir 'RTSSHooks64.dll'
+    if (-not (Test-Path -LiteralPath $dll)) { return }
+    try {
+        if (-not ('WinJuicer.Rtss' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace WinJuicer {
+    public static class Rtss {
+        [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr LoadLibraryW(string path);
+        [DllImport("kernel32.dll", CharSet = CharSet.Ansi)] static extern IntPtr GetProcAddress(IntPtr module, string name);
+        [UnmanagedFunctionPointer(CallingConvention.StdCall)] delegate void NoArgs();
+        // False when this RTSS has no UpdateProfiles.
+        public static bool UpdateProfiles(string dll) {
+            IntPtr m = LoadLibraryW(dll);
+            if (m == IntPtr.Zero) return false;
+            IntPtr f = GetProcAddress(m, "UpdateProfiles");
+            if (f == IntPtr.Zero) return false;
+            ((NoArgs)Marshal.GetDelegateForFunctionPointer(f, typeof(NoArgs)))();
+            return true;
+        }
+    }
+}
+'@
+        }
+        if (-not [WinJuicer.Rtss]::UpdateProfiles($dll)) { Write-JuicerLog 'Este RivaTuner no tiene UpdateProfiles: el perfil se aplicará al reiniciarlo.' }
+    } catch {
+        Write-JuicerLog "No se pudo pedir a RivaTuner que relea sus perfiles: $_"
+    }
+}
+
+# Any other DWORD of a program's NVIDIA profile: @{ Value; Predefined },
+# the user's value and the one NVIDIA ships for that game, null for none.
+function Read-WinNvSetting {
+    param([string]$Exe, [uint32]$Id)
+    if (-not (Test-WinNvApi)) { return $null }
+    $v = [WinJuicer.NvDrs]::GetInfo($Exe, $Id)
+    @{ Value = $(if ($v[0] -ge 0) { [uint32]$v[0] } else { $null }); Predefined = $(if ($v[1] -ge 0) { [uint32]$v[1] } else { $null }) }
+}
+
+# Whether a program with this .exe name is running now. A game's profile is
+# never written while it runs: the driver hands a running game the new
+# values, and changing its sync or its queue under it can freeze it.
+function Test-WinProcessRunning {
+    param([string]$Exe)
+    $name = [IO.Path]::GetFileNameWithoutExtension(([string]$Exe).Trim().Trim('"'))
+    if (-not $name) { return $false }
+    $null -ne (Get-Process -Name ([WildcardPattern]::Escape($name)) -ErrorAction SilentlyContinue | Select-Object -First 1)
+}
+
+# Programs that closed with an error or stopped responding since a date,
+# from the Application log: «Application Error» 1000 (it crashed) and
+# «Application Hang» 1002 (it hung and was closed). @{ Exe; Kind; Time;
+# Module } each; null when the log cannot be read.
+function Read-WinAppIncidents {
+    param([datetime]$Since)
+    $out = @()
+    foreach ($f in @(@{ Provider = 'Application Error'; Id = 1000; Kind = 'Cierre' }, @{ Provider = 'Application Hang'; Id = 1002; Kind = 'Cuelgue' })) {
+        $ev = Get-JuicerEvents @{ LogName = 'Application'; ProviderName = $f.Provider; Id = $f.Id; StartTime = $Since }
+        if ($null -eq $ev) { return $null }
+        foreach ($e in $ev) {
+            $p = @($e.Properties | ForEach-Object { $_.Value })
+            if ($p.Count -eq 0 -or -not $p[0]) { continue }
+            $out += @{ Exe = ([string]$p[0]).ToLowerInvariant(); Kind = $f.Kind; Time = $e.TimeCreated.ToString('s'); Module = $(if ($f.Id -eq 1000 -and $p.Count -gt 3) { [string]$p[3] } else { '' }) }
+        }
+    }
+    , $out
+}
+
+function Set-WinNvSetting {
+    param([string]$Exe, [uint32]$Id, $Value)
+    Initialize-JuicerNvApi
+    [WinJuicer.NvDrs]::SetDword($Exe, $Id, $(if ($null -ne $Value) { [long]$Value } else { -1 }))
+}
+
 function New-JuicerWindowsBackend {
     @{
         Name         = 'Windows'
@@ -294,11 +750,31 @@ function New-JuicerWindowsBackend {
         DefRemove    = { param([string]$Path) Remove-MpPreference -ExclusionPath $Path -ErrorAction Stop }
         TaskRead     = ${function:Read-WinTask}
         TaskWrite    = ${function:Set-WinTask}
-        MemCompressionGet = { [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression }
-        MemCompressionSet = {
-            param([bool]$Enabled)
-            if ($Enabled) { Enable-MMAgent -MemoryCompression -ErrorAction Stop } else { Disable-MMAgent -MemoryCompression -ErrorAction Stop }
-        }
+        AppxRead     = ${function:Read-WinAppx}
+        AppxRemove   = ${function:Remove-WinAppx}
+        AppxAdd      = ${function:Add-WinAppx}
+        NetAdapters  = ${function:Get-WinNetAdapters}
+        DnsSet       = ${function:Set-WinDns}
+        NetAdaptersAll = ${function:Get-WinNetAdaptersAll}
+        DnsProbe     = ${function:Test-WinDnsServer}
+        FwRules      = ${function:Get-WinFwRules}
+        FwSet        = ${function:Set-WinFwRule}
+        FwState      = ${function:Get-WinFwState}
+        FwOn         = { param([string[]]$Profiles) Set-NetFirewallProfile -Name $Profiles -Enabled True -ErrorAction Stop }
+        HostsRead    = ${function:Read-WinHosts}
+        HostsWrite   = ${function:Write-WinHosts}
+        FeatRead     = ${function:Read-WinFeature}
+        FeatSet      = ${function:Set-WinFeature}
+        FpsBackend   = ${function:Get-WinFpsBackend}
+        FpsEngines   = ${function:Get-WinFpsEngines}
+        FpsReset     = { $script:FpsBackendName = $null }
+        FpsRead      = ${function:Read-WinFpsLimit}
+        FpsWrite     = ${function:Set-WinFpsLimit}
+        NvRead       = ${function:Read-WinNvSetting}
+        NvWrite      = ${function:Set-WinNvSetting}
+        ProcRunning  = ${function:Test-WinProcessRunning}
+        AppIncidents = ${function:Read-WinAppIncidents}
+        PacerState   = ${function:Get-WinPacerState}
     }
 }
 
@@ -320,7 +796,23 @@ function New-JuicerMemoryBackend {
         Spi      = @{}   # action -> bool
         Defender = New-Object System.Collections.ArrayList
         Tasks    = @{}   # 'path|name' -> @{ Enabled }
-        MemCompression = $true
+        Appx     = @{}   # name -> @{ Installed; Provisioned }
+        Adapters = New-Object System.Collections.ArrayList   # @{ Guid; Name; Description; Wireless; LinkSpeed }
+        Features = @{}   # name -> @{ Enabled }
+        FpsBackend = ''   # 'nvidia', 'rtss' or '' for none
+        FpsLimits = @{}   # exe -> fps; an entry with 0 is a profile without a limit
+        NvSettings = @{}  # 'exe|id' -> value, the user values of NVIDIA profiles
+        NvPredefined = @{}  # 'exe|id' -> value NVIDIA ships for that game
+        Running  = New-Object System.Collections.ArrayList   # .exe names open now
+        Incidents = New-Object System.Collections.ArrayList  # @{ Exe; Kind; Time; Module }
+        DnsDown  = New-Object System.Collections.ArrayList   # DNS servers that do not answer
+        Firewall = @{}    # rule name -> the rule, as FwRules gives it
+        FwOff    = New-Object System.Collections.ArrayList   # firewall profiles turned off
+        FwThirdParty = $false   # another program is the firewall
+        Hosts    = ((@('# Copyright (c) 1993-2009 Microsoft Corp.', '#', '# This is a sample HOSTS file used by Microsoft TCP/IP for Windows.', '#', "#`t127.0.0.1       localhost", "#`t::1             localhost") -join "`r`n") + "`r`n")
+        FpsExact = @{}    # exe -> fractional cap (RTSS)
+        FpsEngines = $null  # engines the PC has; null = just FpsBackend
+        Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
         Calls    = New-Object System.Collections.ArrayList
         Run      = $Run
     }
@@ -367,8 +859,90 @@ function New-JuicerMemoryBackend {
             @{ Enabled = $t.Enabled }
         }
         TaskWrite   = { param($Path, $Name, $Enabled) $script:Mem.Tasks["$Path|$Name"].Enabled = [bool]$Enabled }
-        MemCompressionGet = { [bool]$script:Mem.MemCompression }
-        MemCompressionSet = { param($Enabled) $script:Mem.MemCompression = [bool]$Enabled }
+        AppxRead    = {
+            param($Name)
+            $a = $script:Mem.Appx[$Name]
+            if ($null -eq $a) { return $null }
+            @{ Installed = $a.Installed; Provisioned = $a.Provisioned }
+        }
+        AppxRemove  = { param($Name) $script:Mem.Appx.Remove($Name) }
+        # Like the Store: it comes back for the user, not as a provisioned package.
+        AppxAdd     = {
+            param($Name, $StoreId)
+            if (-not $StoreId) { throw "$Name no tiene identificador de Microsoft Store." }
+            [void]$script:Mem.Calls.Add("winget install --id $StoreId --source msstore")
+            $script:Mem.Appx[$Name] = @{ Installed = $true; Provisioned = $false }
+        }
+        NetAdapters = { , @($script:Mem.Adapters) }
+        NetAdaptersAll = { , @($script:Mem.Adapters) }
+        DnsProbe    = { param($Server) $script:Mem.DnsDown -notcontains $Server }
+        FwRules     = { param($Names) , @($Names | ForEach-Object { $script:Mem.Firewall[$_] } | Where-Object { $_ }) }
+        FwSet       = {
+            param($Rule, $Group, [switch]$Disabled)
+            $script:Mem.Firewall[$Rule.Name] = @{
+                Name = $Rule.Name; Group = $Group; Title = $Rule.Title; Enabled = -not $Disabled; Action = 'Block'; Direction = 'Outbound'; Profile = 'Any'
+                Protocol = $Rule.Protocol; RemotePort = @($Rule.Port); LocalPort = @('Any'); RemoteAddress = @($Rule.Remote); LocalAddress = @('Any')
+                Program = 'Any'; Service = 'Any'; InterfaceType = 'Any'
+            }
+        }
+        FwState     = { @{ Off = @($script:Mem.FwOff); ThirdParty = [bool]$script:Mem.FwThirdParty } }
+        FwOn        = { param($Profiles) foreach ($p in @($Profiles)) { $script:Mem.FwOff.Remove($p) } }
+        HostsRead   = { $script:Mem.Hosts }
+        HostsWrite  = { param($Text) $script:Mem.Hosts = $Text }
+        # What Windows does: the static servers live in NameServer, empty when
+        # they come from DHCP.
+        DnsSet      = {
+            param($Interface, $V4, $V6)
+            Write-MemRegValue "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$Interface" 'NameServer' 'String' (@($V4) -join ',')
+            Write-MemRegValue "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\$Interface" 'NameServer' 'String' (@($V6) -join ',')
+        }
+        FeatRead    = {
+            param($Name)
+            $f = $script:Mem.Features[$Name]
+            if ($null -eq $f) { return $null }
+            @{ Enabled = $f.Enabled }
+        }
+        FeatSet     = { param($Name, $Enabled) $script:Mem.Features[$Name].Enabled = [bool]$Enabled }
+        # FpsBackend is the engine in use; FpsEngines, what the PC has
+        # (by default just that one), to switch between them.
+        FpsBackend  = {
+            $all = @(if ($null -ne $script:Mem.FpsEngines) { $script:Mem.FpsEngines } elseif ($script:Mem.FpsBackend) { $script:Mem.FpsBackend })
+            $want = Get-JuicerPacerEngine
+            if ($all -contains $want) { $want } else { $script:Mem.FpsBackend }
+        }
+        FpsEngines  = { @(if ($null -ne $script:Mem.FpsEngines) { $script:Mem.FpsEngines } elseif ($script:Mem.FpsBackend) { $script:Mem.FpsBackend }) }
+        FpsReset    = { }
+        FpsRead     = {
+            param($Exe, $Backend)
+            $by = if ($Backend) { $Backend } else { & (Get-JuicerBackend).FpsBackend }
+            if (-not $by -or @(& (Get-JuicerBackend).FpsEngines) -notcontains $by) { return $null }
+            $has = $script:Mem.FpsLimits.ContainsKey($Exe)
+            $v = if ($has) { [int]$script:Mem.FpsLimits[$Exe] } else { 0 }
+            @{ Backend = $by; Fps = $(if ($v -gt 0) { $v } else { $null }); Exact = [double]$script:Mem.FpsExact[$Exe]; Existed = $has }
+        }
+        FpsWrite    = {
+            param($Exe, $Fps, $Backend, [switch]$Remove, [double]$Exact = 0)
+            if (@(& (Get-JuicerBackend).FpsEngines) -notcontains $Backend) { throw "Motor del frame pacer $Backend no disponible" }
+            if ($Remove) { $script:Mem.FpsLimits.Remove($Exe) } else { $script:Mem.FpsLimits[$Exe] = $(if ($Fps) { [int]$Fps } else { 0 }) }
+            if ($Exact -gt 0 -and $Backend -eq 'rtss' -and -not $Remove) { $script:Mem.FpsExact[$Exe] = $Exact } else { $script:Mem.FpsExact.Remove($Exe) }
+        }
+        NvRead      = {
+            param($Exe, $Id)
+            if (@(& (Get-JuicerBackend).FpsEngines) -notcontains 'nvidia') { return $null }
+            $k = '{0}|{1}' -f $Exe, [uint32]$Id
+            @{
+                Value = $(if ($script:Mem.NvSettings.ContainsKey($k)) { [uint32]$script:Mem.NvSettings[$k] } else { $null })
+                Predefined = $(if ($script:Mem.NvPredefined.ContainsKey($k)) { [uint32]$script:Mem.NvPredefined[$k] } else { $null })
+            }
+        }
+        NvWrite     = {
+            param($Exe, $Id, $Value)
+            $k = '{0}|{1}' -f $Exe, [uint32]$Id
+            if ($null -eq $Value) { $script:Mem.NvSettings.Remove($k) } else { $script:Mem.NvSettings[$k] = [uint32]$Value }
+        }
+        PacerState  = { $script:Mem.Pacer }
+        ProcRunning = { param($Exe) $script:Mem.Running -contains (ConvertTo-JuicerExeName $Exe) }
+        AppIncidents = { param($Since) , @($script:Mem.Incidents | Where-Object { [datetime]$_.Time -ge $Since }) }
     }
 }
 

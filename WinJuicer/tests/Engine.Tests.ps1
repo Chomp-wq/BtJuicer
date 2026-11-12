@@ -357,6 +357,28 @@ Describe 'Programas de inicio' {
         Get-MachineSnapshot $m | Should -Be $before
     }
 
+    It 'clasifica las entradas conocidas, y no se confunde de programa' -ForEach @(
+        @{ N = 'Steam'; C = '"C:\Program Files (x86)\Steam\steam.exe" -silent'; V = 'Prescindible' }
+        @{ N = 'EpicGamesLauncher'; C = 'C:\Epic\EpicGamesLauncher.exe -silent'; V = 'Prescindible' }
+        @{ N = 'MicrosoftEdgeAutoLaunch_0123'; C = 'msedge.exe --no-startup-window'; V = 'Prescindible' }
+        @{ N = 'Discord'; C = 'Update.exe --processStart Discord.exe'; V = 'Opcional' }
+        @{ N = 'TeamSpeak 3 Client'; C = 'ts3client_win64.exe'; V = $null }
+        @{ N = 'com.squirrel.Teams.Teams'; C = 'Update.exe --processStart Teams.exe'; V = 'Opcional' }
+        @{ N = 'SecurityHealth'; C = '%windir%\system32\SecurityHealthSystray.exe'; V = 'Necesario' }
+        @{ N = 'RtkAudUService'; C = 'RtkAudUService64.exe -background'; V = 'Necesario' }
+        @{ N = 'Mi programa'; C = 'C:\x\mio.exe'; V = $null }
+    ) {
+        $got = Get-JuicerStartupVerdict $N $C
+        if ($null -eq $V) { $got | Should -BeNullOrEmpty } else { $got.Verdict | Should -Be $V; $got.Why | Should -Not -BeNullOrEmpty }
+    }
+
+    It 'el diagnóstico cuenta los prescindibles' {
+        Write-JuicerReg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Run' 'Steam' 'String' '"C:\Steam\steam.exe" -silent'
+        $items = @(Get-JuicerStartupReview | Where-Object { $_.Kind -eq 'Registro' })
+        ($items | Where-Object { $_.Name -eq 'Steam' }).Verdict | Should -Be 'Prescindible'
+        ($items | Where-Object { $_.Name -eq 'Discord' }).Verdict | Should -Be 'Opcional'
+    }
+
     It 'el formato binario es el del Administrador de tareas' {
         $off = New-JuicerApprovedBytes $false
         $off.Count | Should -Be 12
@@ -398,7 +420,8 @@ Describe 'Juegos' {
             (Invoke-JuicerTweak $t).Outcome | Should -Be 'Aplicado'
         }
         @(Get-JuicerConfiguredGames).Count | Should -Be 3
-        (Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\juego.exe\PerfOptions' 'CpuPriorityClass').Value | Should -Be 3
+        # Above normal (6), not high (3): high can freeze the whole PC.
+        (Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options\juego.exe\PerfOptions' 'CpuPriorityClass').Value | Should -Be 6
         [void](Undo-JuicerAll)
         Get-MachineSnapshot $m | Should -Be $before
     }
@@ -415,7 +438,7 @@ Describe 'Diagnóstico (partes puras)' {
 
     It 'detecta canal simple, mismo canal y XMP apagado' {
         $one = @([pscustomobject]@{ Capacity = 16GB; Speed = 3200; ConfiguredClockSpeed = 2133; SMBIOSMemoryType = 26; DeviceLocator = 'DIMM_A2'; BankLabel = '' })
-        $f = Get-JuicerRamFindings (Get-JuicerMemoryTraits $one $false) $false
+        $f = Get-JuicerRamFindings $one $false
         @($f | Where-Object { $_.Severity -eq 'Alto' -and $_.Title -like '*canal simple*' }).Count | Should -Be 1
         @($f | Where-Object { $_.Title -like '*velocidad estándar*' }).Count | Should -Be 1
 
@@ -423,7 +446,7 @@ Describe 'Diagnóstico (partes puras)' {
             [pscustomobject]@{ Capacity = 8GB; Speed = 6000; ConfiguredClockSpeed = 6000; SMBIOSMemoryType = 34; DeviceLocator = 'DIMM_A1'; BankLabel = '' }
             [pscustomobject]@{ Capacity = 8GB; Speed = 6000; ConfiguredClockSpeed = 6000; SMBIOSMemoryType = 34; DeviceLocator = 'DIMM_A2'; BankLabel = '' }
         )
-        $f = Get-JuicerRamFindings (Get-JuicerMemoryTraits $same $false) $false
+        $f = Get-JuicerRamFindings $same $false
         @($f | Where-Object { $_.Title -like '*mismo canal (A)*' }).Count | Should -Be 1
         @($f | Where-Object { $_.Title -like '*velocidad estándar*' }).Count | Should -Be 0
 
@@ -431,7 +454,7 @@ Describe 'Diagnóstico (partes puras)' {
             [pscustomobject]@{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 6000; SMBIOSMemoryType = 34; DeviceLocator = 'DIMM_A2'; BankLabel = '' }
             [pscustomobject]@{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 6000; SMBIOSMemoryType = 34; DeviceLocator = 'DIMM_B2'; BankLabel = '' }
         )
-        @(Get-JuicerRamFindings (Get-JuicerMemoryTraits $good $false) $false | Where-Object { $_.Severity -ne 'Info' }).Count | Should -Be 0
+        @(Get-JuicerRamFindings $good $false | Where-Object { $_.Severity -ne 'Info' }).Count | Should -Be 0
     }
 
     It 'no pide XMP en portátiles' {
@@ -439,7 +462,7 @@ Describe 'Diagnóstico (partes puras)' {
             [pscustomobject]@{ Capacity = 8GB; Speed = 3200; ConfiguredClockSpeed = 2666; SMBIOSMemoryType = 26; DeviceLocator = 'ChannelA-DIMM0'; BankLabel = '' }
             [pscustomobject]@{ Capacity = 8GB; Speed = 3200; ConfiguredClockSpeed = 2666; SMBIOSMemoryType = 26; DeviceLocator = 'ChannelB-DIMM0'; BankLabel = '' }
         )
-        @(Get-JuicerRamFindings (Get-JuicerMemoryTraits $lap $true) $true | Where-Object { $_.Title -like '*velocidad estándar*' }).Count | Should -Be 0
+        @(Get-JuicerRamFindings $lap $true | Where-Object { $_.Title -like '*velocidad estándar*' }).Count | Should -Be 0
     }
 
     It 'compara la frecuencia de cada pantalla con su máximo' {
