@@ -124,7 +124,9 @@
     Win Juicer no la desactiva ni la baja de nivel, «Deshacer todo» no la toca
     y una tarea la repone si algo la cambia. Pide escribir ACTIVAR (o -Si).
     Subir: de equilibrada a estricta. Bloquear: las webs de -BloquearWeb, para
-    siempre. Estado: dice si está activa. Mantener: lo que ejecuta su tarea.
+    siempre. Estado: dice si está activa. Comprobar: prueba de verdad si este
+    PC está filtrado y dice por qué no, si no lo está (una VPN, un navegador
+    abierto desde antes…). Mantener: lo que ejecuta su tarea.
 
 .PARAMETER NivelProteccion
     Con -ProteccionAdultos Activar. Estricto (por defecto, el recomendado si es
@@ -197,7 +199,7 @@ param(
     [switch]$OptimizarJuegos,
     [switch]$Mantener,
     [ValidateSet('', 'Activar', 'Desactivar')][string]$MantenerJuegos = '',
-    [ValidateSet('Activar', 'Subir', 'Bloquear', 'Mantener', 'Estado')][string]$ProteccionAdultos,
+    [ValidateSet('Activar', 'Subir', 'Bloquear', 'Mantener', 'Estado', 'Comprobar')][string]$ProteccionAdultos,
     [ValidateSet('Equilibrado', 'Estricto')][string]$NivelProteccion,
     [string[]]$BloquearWeb = @(),
     [int]$Fps,

@@ -232,7 +232,7 @@ Describe 'Protección contra contenido adulto' {
         (Get-JuicerShieldInfo).Level | Should -Be 1
         (Get-JuicerDnsServers $M.Backend.State.Adapters[0].Guid).V4 | Should -Be $Adult
         @($fixed | Where-Object { $_ -like 'Cortafuegos:*' }).Count | Should -Be 6
-        $fixed | Should -Contain 'Archivo hosts: la VPN de Opera y las webs que bloqueas'
+        $fixed | Should -Contain 'Archivo hosts: Brave Search, la VPN de Opera y las webs que bloqueas'
     }
 
     It 'deshacer un DNS de antes no quita el filtrado' {
@@ -285,7 +285,7 @@ Describe 'Protección contra contenido adulto' {
         # Taking the mark off brings it back to a comment; and the block, if deleted, comes back.
         $M.Backend.State.Hosts = $h.Replace('# Win Juicer (proteccion) la desactivo: 104.18.0.1', '104.18.0.1') -replace '(?m)^(0\.0\.0\.0|::) api\.sec-tunnel\.com\r?\n', ''
         $fixed = @(Repair-JuicerShield)
-        $fixed | Should -Contain 'Archivo hosts: la VPN de Opera y las webs que bloqueas'
+        $fixed | Should -Contain 'Archivo hosts: Brave Search, la VPN de Opera y las webs que bloqueas'
         $M.Backend.State.Hosts | Should -Be $h
         @(Repair-JuicerShield) | Should -BeNullOrEmpty
     }
@@ -1937,5 +1937,83 @@ Describe 'Mantener los juegos optimizados' {
 
     It 'desde la línea de órdenes' {
         @(Start-Juicer -Mantener -Si 6>$null)[-1] | Should -Be 0
+    }
+}
+
+Describe 'Protección y Brave' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        $script:Brave = 'HKLM\SOFTWARE\Policies\BraveSoftware\Brave'
+    }
+
+    It 'en los dos niveles: sin Tor, sin Brave Search y sin quedarse en segundo plano' {
+        foreach ($level in 1, 2) {
+            $script:M = New-NetMachine
+            [void](Enable-JuicerShield -Level $level)
+            (Read-JuicerReg $Brave 'TorDisabled').Value | Should -Be 1 -Because "nivel $level"
+            (Read-JuicerReg $Brave 'BackgroundModeEnabled').Value | Should -Be 0
+            (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'BackgroundModeEnabled').Value | Should -Be 0
+            (Read-JuicerReg $Brave 'DefaultSearchProviderEnabled').Value | Should -Be 1
+            (Read-JuicerReg $Brave 'DefaultSearchProviderSearchURL').Value | Should -BeLike '*google*safe=active*'
+            $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 search\.brave\.com\r?$'
+            $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 imgs\.search\.brave\.com\r?$'
+            # Its VPN only goes at the strict level, as before.
+            [bool](Read-JuicerReg $Brave 'BraveVPNDisabled') | Should -Be ($level -eq 2)
+        }
+    }
+
+    It 'avisa a los navegadores abiertos y vacía la caché de DNS, sólo cuando cambia algo' {
+        [void](Enable-JuicerShield -Level 1)
+        @($M.Backend.State.Calls | Where-Object { $_ -eq 'RefreshPolicyEx' }).Count | Should -Be 1
+        @($M.Backend.State.Calls | Where-Object { $_ -eq 'Clear-DnsClientCache' }).Count | Should -Be 1
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+        @($M.Backend.State.Calls | Where-Object { $_ -eq 'RefreshPolicyEx' }).Count | Should -Be 1
+        Read-JuicerReg 'HKLM\SOFTWARE\WinJuicer\Proteccion' 'Navegadores' | Should -Not -BeNullOrEmpty
+    }
+
+    It 'la comprobación: todo bien' {
+        [void](Enable-JuicerShield)
+        $M.Backend.State.Route = @{ Name = 'Ethernet'; Description = 'Realtek'; Virtual = $false; Servers = @('185.228.168.168', '2a0d:2a00:1::') }
+        $M.Backend.State.Resolve['pornhub.com|185.228.168.168'] = @('0.0.0.0')
+        $M.Backend.State.Resolve['pornhub.com|'] = @('0.0.0.0')
+        [void]$M.Backend.State.Browsers.Add(@{ Name = 'brave'; Started = (Get-Date).AddMinutes(5) })
+        $c = @(Get-JuicerShieldCheck)
+        @($c | Where-Object { $_.Ok -ne $true }) | Should -BeNullOrEmpty
+        $c.Count | Should -Be 3
+    }
+
+    It 'la comprobación: Brave abierto desde antes, que es lo que pasa al activarla con él abierto' {
+        [void]$M.Backend.State.Browsers.Add(@{ Name = 'brave'; Started = (Get-Date).AddHours(-2) })
+        [void](Enable-JuicerShield)
+        $bad = @(Get-JuicerShieldCheck | Where-Object { $_.Ok -eq $false })
+        $bad.Count | Should -Be 1
+        $bad[0].Title | Should -Be 'Brave está abierto desde antes de la protección'
+        $bad[0].Detail | Should -BeLike '*junto al reloj*'
+    }
+
+    It 'la comprobación: una VPN se lleva el tráfico, y Windows abre la web sin filtrar' {
+        [void](Enable-JuicerShield)
+        $M.Backend.State.Route = @{ Name = 'ProtonVPN'; Description = 'Wintun Userspace Tunnel'; Virtual = $true; Servers = @('10.2.0.1') }
+        $M.Backend.State.Resolve['pornhub.com|185.228.168.168'] = @('0.0.0.0')
+        $M.Backend.State.Resolve['pornhub.com|'] = @('66.254.114.41')
+        $bad = @(Get-JuicerShieldCheck | Where-Object { $_.Ok -eq $false })
+        $bad.Count | Should -Be 2
+        $bad[0].Title | Should -BeLike '*ProtonVPN*adaptador virtual*'
+        $bad[1].Title | Should -Be 'Windows todavía abre pornhub.com (66.254.114.41)'
+    }
+
+    It 'la comprobación: sin conexión no da nada por bueno ni por malo' {
+        [void](Enable-JuicerShield)
+        $c = @(Get-JuicerShieldCheck)
+        ($c | Where-Object { $_.Title -like 'Sin conexión*' }).Ok | Should -BeNullOrEmpty
+        @($c | Where-Object { $_.Ok -eq $false }) | Should -BeNullOrEmpty
+    }
+
+    It 'por línea de órdenes: 0 si funciona, 1 si no' {
+        [void](Enable-JuicerShield)
+        [void]$M.Backend.State.Browsers.Add(@{ Name = 'chrome'; Started = (Get-Date).AddDays(-1) })
+        @(Start-Juicer -ProteccionAdultos Comprobar 6>$null)[-1] | Should -Be 1
+        $M.Backend.State.Browsers.Clear()
+        @(Start-Juicer -ProteccionAdultos Comprobar 6>$null)[-1] | Should -Be 0
     }
 }

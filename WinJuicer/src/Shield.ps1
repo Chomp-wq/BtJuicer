@@ -92,6 +92,24 @@ $script:ShieldBypassHosts = @(
     'opera-proxy.net', 'de0.opera-proxy.net', 'eu0.opera-proxy.net', 'am0.opera-proxy.net', 'as0.opera-proxy.net'
 )
 
+# Brave Search, Brave's own default engine: nothing can force its SafeSearch,
+# and it serves result pictures from its own servers, which a DNS filter
+# cannot tell apart. Brave searches Google instead, with SafeSearch forced.
+$script:ShieldSearchHosts = @('search.brave.com', 'imgs.search.brave.com', 'cdn.search.brave.com')
+
+# The search Brave gets instead: Google, whose SafeSearch the policy and the
+# filter both force.
+$script:ShieldBraveSearch = [ordered]@{
+    DefaultSearchProviderEnabled    = @{ Kind = 'DWord'; Value = 1 }
+    DefaultSearchProviderName       = @{ Kind = 'String'; Value = 'Google' }
+    DefaultSearchProviderKeyword    = @{ Kind = 'String'; Value = 'google.com' }
+    DefaultSearchProviderSearchURL  = @{ Kind = 'String'; Value = '{google:baseURL}search?q={searchTerms}&safe=active' }
+    DefaultSearchProviderSuggestURL = @{ Kind = 'String'; Value = '{google:baseURL}complete/search?output=chrome&q={searchTerms}' }
+}
+
+# A name every adult filter blocks, to see whether this PC is filtered.
+$script:ShieldProbeName = 'pornhub.com'
+
 # Sites that are not adult sites but carry a lot of it, blocked for good when
 # the owner asks: each with the names its pages, pictures and videos use.
 $script:ShieldPresets = [ordered]@{
@@ -209,13 +227,23 @@ function Get-JuicerShieldPolicies {
         @{ Type = 'Registry'; Path = $w.Path; Name = 'DnsOverHttpsMode'; Kind = 'String'; Value = 'off'; Label = "${n}: sin DNS cifrado propio (usa el filtrado)" }
         @{ Type = 'Registry'; Path = $w.Path; Name = 'ForceGoogleSafeSearch'; Kind = 'DWord'; Value = 1; Label = "${n}: búsqueda segura de Google" }
         @{ Type = 'Registry'; Path = $w.Path; Name = 'ForceYouTubeRestrict'; Kind = 'DWord'; Value = $(if ($strict) { 2 } else { 1 }); Label = "${n}: modo restringido de YouTube ($(if ($strict) { 'estricto' } else { 'moderado' }))" }
+        # Closing the window must close the browser: one left running in the
+        # background keeps old DNS answers and old rules.
+        @{ Type = 'Registry'; Path = $w.Path; Name = 'BackgroundModeEnabled'; Kind = 'DWord'; Value = 0; Label = "${n}: se cierra del todo al cerrarlo" }
         if ($w.Bing) { @{ Type = 'Registry'; Path = $w.Path; Name = 'ForceBingSafeSearch'; Kind = 'DWord'; Value = 2; Label = "${n}: búsqueda segura estricta de Bing" } }
+        if ($w.Brave) {
+            # A Tor window goes around any DNS filter, at either level.
+            @{ Type = 'Registry'; Path = $w.Path; Name = 'TorDisabled'; Kind = 'DWord'; Value = 1; Label = "${n}: sin ventanas de Tor" }
+            foreach ($k in $script:ShieldBraveSearch.Keys) {
+                $v = $script:ShieldBraveSearch[$k]
+                @{ Type = 'Registry'; Path = $w.Path; Name = $k; Kind = $v.Kind; Value = $v.Value; Label = "${n}: busca en Google con búsqueda segura, no en Brave Search" }
+            }
+        }
         if ($strict) {
             @{ Type = 'Registry'; Path = $w.Path; Name = $w.Private; Kind = 'DWord'; Value = 1; Label = "${n}: sin ventanas privadas" }
             @{ Type = 'Registry'; Path = $w.Path; Name = 'BrowserGuestModeEnabled'; Kind = 'DWord'; Value = 0; Label = "${n}: sin ventanas de invitado" }
             @{ Type = 'Registry'; Path = $w.Path; Name = 'ProxyMode'; Kind = 'String'; Value = 'direct'; Label = "${n}: sin proxy" }
             if ($w.Brave) {
-                @{ Type = 'Registry'; Path = $w.Path; Name = 'TorDisabled'; Kind = 'DWord'; Value = 1; Label = "${n}: sin ventanas de Tor" }
                 @{ Type = 'Registry'; Path = $w.Path; Name = 'BraveVPNDisabled'; Kind = 'DWord'; Value = 1; Label = "${n}: sin su VPN" }
             }
         }
@@ -580,7 +608,7 @@ function Repair-JuicerShieldHosts {
     } else {
         $list = @($prev.Value)
     }
-    $want = @($script:ShieldBypassHosts) + @(Get-JuicerShieldBlocked)
+    $want = @($script:ShieldBypassHosts) + @($script:ShieldSearchHosts) + @(Get-JuicerShieldBlocked)
     $r = Update-JuicerShieldHosts $text $list $want
     if ($r.Text -ceq [string]$text) { return }
     & $b.HostsWrite $r.Text
@@ -588,7 +616,7 @@ function Repair-JuicerShieldHosts {
     # Its own block, when that is what was missing or changed (not just the
     # line endings of the rest).
     $block = (Update-JuicerShieldHosts '' @() $want).Text.TrimEnd()
-    if (-not (([string]$text) -replace "`r?`n", "`r`n").Contains($block)) { 'Archivo hosts: la VPN de Opera y las webs que bloqueas' }
+    if (-not (([string]$text) -replace "`r?`n", "`r`n").Contains($block)) { 'Archivo hosts: Brave Search, la VPN de Opera y las webs que bloqueas' }
 }
 
 # --- Sites blocked for good ---------------------------------------------------------
@@ -689,14 +717,22 @@ function Repair-JuicerShield {
     if ($b.FwRules) {
         try { foreach ($x in @(Repair-JuicerShieldFirewall $level)) { [void]$fixed.Add($x) } } catch { Write-JuicerLog "Protección: cortafuegos: $_" }
     }
+    $policies = 0
     foreach ($p in @(Get-JuicerShieldPolicies $level) + @(Get-JuicerShieldUserPolicies)) {
         try {
             if (Test-JuicerAction $p) { continue }
             Invoke-JuicerAction $p @{}
             [void]$fixed.Add($p.Label)
+            $policies++
         } catch {
             Write-JuicerLog "Protección: no se pudo poner «$($p.Label)»: $_"
         }
+    }
+    if ($policies -gt 0) {
+        # When the browsers' rules last changed: one open since before has
+        # not got them yet.
+        Write-JuicerReg $script:ShieldKey 'Navegadores' 'String' ((Get-Date).ToString('s', [Globalization.CultureInfo]::InvariantCulture))
+        if ($b.PolicyRefresh) { try { & $b.PolicyRefresh } catch { Write-JuicerLog "Protección: no se pudo avisar a los navegadores: $_" } }
     }
     if ($b.HostsRead) {
         try { foreach ($x in @(Repair-JuicerShieldHosts)) { [void]$fixed.Add($x) } } catch { Write-JuicerLog "Protección: archivo hosts: $_" }
@@ -714,9 +750,83 @@ function Repair-JuicerShield {
         }
     }
     $list = @($fixed | Select-Object -Unique)
-    if ($list.Count -gt 0) { Write-JuicerLog ('Protección puesta al día: ' + ($list -join '; ')) }
+    if ($list.Count -gt 0) {
+        # Whatever was looked up before the filter is still in Windows' cache.
+        if ($b.DnsFlush) { try { & $b.DnsFlush } catch { Write-JuicerLog "Protección: no se pudo vaciar la caché de DNS: $_" } }
+        Write-JuicerLog ('Protección puesta al día: ' + ($list -join '; '))
+    }
     $list
 }
+
+# --- Checking that it works ------------------------------------------------------------
+
+# Whether the protection actually filters on this PC, as a list of
+# @{ Ok; Title; Detail }: Ok is $true, $false (that is why it fails) or $null
+# (could not tell). It looks at the way traffic really leaves, asks Windows for
+# a name every filter blocks, and lists the browsers opened before the rules.
+function Get-JuicerShieldCheck {
+    $b = Get-JuicerBackend
+    $out = New-Object System.Collections.ArrayList
+    $add = { param($Ok, $Title, $Detail = '') [void]$out.Add(@{ Ok = $Ok; Title = $Title; Detail = $Detail }) }
+    if (-not (Test-JuicerShield)) {
+        & $add $false 'La protección no está activada' 'Actívala primero.'
+        return $out.ToArray()
+    }
+    $filters = @($script:ShieldDns.Values | ForEach-Object { @($_.V4) + @($_.V6) })
+
+    $route = $null
+    if ($b.DnsRoute) { try { $route = & $b.DnsRoute } catch { Write-JuicerLog "Protección: sin la ruta de salida: $_" } }
+    if (-not $route) {
+        & $add $null 'Sin conexión a internet ahora mismo' 'Conéctate y vuelve a comprobarlo.'
+    } else {
+        $servers = @($route.Servers | Where-Object { $_ })
+        $other = @($servers | Where-Object { $ip = $_; @($filters | Where-Object { Test-JuicerIpListEqual @($ip) @($_) }).Count -eq 0 })
+        if ($servers.Count -gt 0 -and $other.Count -eq 0) {
+            & $add $true "Tu conexión ($($route.Name)) usa el DNS filtrado"
+        } elseif ($route.Virtual) {
+            $dns = if ($other.Count -gt 0) { $other -join ', ' } else { 'su propio DNS' }
+            $desc = if ($route.Description) { " ($($route.Description))" } else { '' }
+            & $add $false "Tu conexión sale por «$($route.Name)», un adaptador virtual sin el DNS filtrado" "Es una VPN o un adaptador de Hyper-V$desc, y usa $dns. Mientras salgas por ahí, nada se filtra. Desconecta la VPN, o, si es Hyper-V, quita el conmutador virtual externo."
+        } else {
+            & $add $false "Tu conexión ($($route.Name)) no usa el DNS filtrado" ('Usa ' + ($other -join ', ') + '. La tarea de la protección lo corrige sola; si vuelve a pasar, otro programa está cambiando el DNS.')
+        }
+    }
+
+    if ($b.ResolveName) {
+        $probe = $script:ShieldProbeName
+        $filter = $script:ShieldDns[(Select-JuicerShieldDns)].V4[0]
+        $viaFilter = & $b.ResolveName $probe $filter
+        $viaWindows = & $b.ResolveName $probe ''
+        $filterBlocks = @($viaFilter.Ips | Where-Object { Test-JuicerPublicIp $_ }).Count -eq 0
+        $leak = @($viaWindows.Ips | Where-Object { (Test-JuicerPublicIp $_) -and @($viaFilter.Ips) -notcontains $_ })
+        if ($viaWindows.Error -and $viaFilter.Error -and @($viaWindows.Ips).Count -eq 0) {
+            & $add $null 'No se pudo hacer la prueba con una web para adultos' 'Puede que ahora no haya conexión.'
+        } elseif ($leak.Count -gt 0) {
+            & $add $false "Windows todavía abre $probe ($($leak -join ', '))" 'El DNS de esta conexión no es el filtrado (mira el punto anterior), o algo responde por él.'
+        } elseif (-not $filterBlocks) {
+            & $add $null "El filtro no bloqueó $probe en esta prueba" 'No se puede saber si filtra: vuelve a comprobarlo en unos minutos.'
+        } else {
+            & $add $true "Prueba real: $probe está bloqueada en este PC"
+        }
+    }
+
+    if ($b.Browsers) {
+        $mark = Read-JuicerReg $script:ShieldKey 'Navegadores'
+        if (-not $mark) { $mark = Read-JuicerReg $script:ShieldKey 'Desde' }
+        $since = [datetime]::MinValue
+        if ($mark) { [void][datetime]::TryParse([string]$mark.Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$since) }
+        $names = @{ brave = 'Brave'; chrome = 'Chrome'; msedge = 'Edge'; firefox = 'Firefox' }
+        $stale = @(& $b.Browsers | Where-Object { $_.Started -and $_.Started -lt $since } | ForEach-Object { $names[[string]$_.Name] })
+        if ($stale.Count -gt 0) {
+            $tip = if (@($stale | Where-Object { $_ -ne 'Firefox' }).Count -gt 0) { ' Cerrar la ventana no basta: siguen abiertos en segundo plano. Usa el icono junto al reloj, «Salir», o reinicia el PC. Desde ahora, cerrarlos los cierra del todo.' } else { '' }
+            & $add $false "$($stale -join ', ') está abierto desde antes de la protección" "Todavía usa las respuestas de DNS y las reglas de antes, así que puede seguir cargando webs bloqueadas.$tip"
+        } else {
+            & $add $true 'Ningún navegador abierto desde antes de la protección'
+        }
+    }
+    $out.ToArray()
+}
+
 
 # Turns it on, at a level (2, estricta, unless asked otherwise), or raises it:
 # the marks first, so that even a start cut halfway is finished by the task or
@@ -791,14 +901,14 @@ function Get-JuicerShieldExplanation {
     param([int]$Level = 2)
     if ($Level -ge 2) {
         @(
-            'Estricta, la recomendada si es para dejar el porno. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro familiar de CleanBrowsing, que además cierra proxies y VPN, y Reddit y otras webs con contenido mixto. Obliga a la búsqueda segura de Google y Bing, pone YouTube en modo restringido estricto y quita las ventanas privadas y de invitado de Chrome, Edge, Brave y Firefox.'
+            'Estricta, la recomendada si es para dejar el porno. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro familiar de CleanBrowsing, que además cierra proxies y VPN, y Reddit y otras webs con contenido mixto. Obliga a la búsqueda segura de Google y Bing, pone YouTube en modo restringido estricto y quita las ventanas privadas y de invitado de Chrome, Edge, Brave y Firefox. En Brave también las de Tor, y busca en Google con búsqueda segura en vez de en Brave Search, que no se puede filtrar.'
             'Y cierra los atajos: el DNS sólo puede ir al filtro (el cortafuegos de Windows bloquea cualquier otro, también el cifrado de Google, Cloudflare y compañía), los navegadores no usan ni su propio DNS ni un proxy, la VPN de Opera no conecta, y lo que se añada al archivo hosts para saltárselo se desactiva. Además puedes bloquear para siempre X, Reddit, Tumblr o la web que quieras. Nada filtra dentro de tu PC: las webs cargan igual de rápido.'
             'Es para siempre: una vez activada, Win Juicer no te deja desactivarla ni bajarla de nivel. No hay botón para quitarla, «Deshacer todo» no la toca y, si algo la cambia, una tarea la vuelve a poner sola, en segundos si es el cortafuegos.'
             'Lo que no puede: una VPN o Tor instalados como programa, ni apps que sirven ese contenido desde sus propios dominios. Una VPN que traiga su propio DNS, también la del trabajo, no resolverá nombres, y alguna Wi-Fi de hotel con página de acceso puede no abrirla. Chrome y Edge dirán que «los administra tu organización»: son estas reglas. Para el móvil, en Android: Ajustes, Red, DNS privado: family-filter-dns.cleanbrowsing.org.'
         )
     } else {
         @(
-            'Equilibrada. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro de adultos de CleanBrowsing, y obliga a la búsqueda segura de Google y Bing y al modo restringido de YouTube en Chrome, Edge y Brave. Reddit, las VPN y las ventanas privadas siguen funcionando.'
+            'Equilibrada. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro de adultos de CleanBrowsing, y obliga a la búsqueda segura de Google y Bing y al modo restringido de YouTube en Chrome, Edge y Brave. En Brave, además, quita las ventanas de Tor y busca en Google con búsqueda segura en vez de en Brave Search, que no se puede filtrar. Reddit, las VPN y las ventanas privadas normales siguen funcionando.'
             'Cierra los atajos más comunes: el DNS de Google, Cloudflare, Quad9 y otros públicos no responde (tampoco el cifrado), los navegadores no usan su propio DNS, la VPN de Opera no conecta, y lo que se añada al archivo hosts para saltárselo se desactiva. Puedes bloquear para siempre X, Reddit, Tumblr o la web que quieras. Nada filtra dentro de tu PC: las webs cargan igual de rápido.'
             'Es para siempre: una vez activada, Win Juicer no te deja desactivarla. No hay botón para quitarla, «Deshacer todo» no la toca y, si algo la cambia, una tarea la vuelve a poner sola. Más adelante puedes pasar a la estricta, pero no volver.'
             'Lo que no puede: una VPN, un proxy o Tor, ni apps que sirven ese contenido desde sus propios dominios. En Firefox bloquea las webs, pero no obliga a la búsqueda segura. Chrome y Edge dirán que «los administra tu organización»: son estas reglas. Para el móvil, en Android: Ajustes, Red, DNS privado: adult-filter-dns.cleanbrowsing.org.'
