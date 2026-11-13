@@ -1,9 +1,10 @@
 // Opens real pages in a real Brave, the way a person would, and says what
 // came back. Run by Test-Brave.ps1, before and after turning the protection on.
 // A visible window: Brave Search answers headless browsers with a captcha.
+import { execFile } from 'node:child_process';
 import { chromium } from 'playwright-core';
 
-const [exe, phase] = process.argv.slice(2);
+const [exe, phase, juicer] = process.argv.slice(2);
 const browser = await chromium.launch({ executablePath: exe, headless: false });
 const page = await browser.newPage();
 
@@ -39,6 +40,27 @@ async function search(q) {
   r.links = links.length;
   r.adult = [...new Set(links.filter((h) => /pornhub|xvideos|xnxx|xhamster|redtube|youporn/i.test(new URL(h).hostname)).map((h) => new URL(h).hostname))];
   return r;
+}
+
+// Brave open on a search, as on the PC of someone who updates Win Juicer with
+// the protection already on: what that tab shows, and the same tab, again and
+// again, once the new version opens, until it loads or two minutes go by.
+if (phase === 'actualizar') {
+  const out = { antes: await open('https://search.brave.com/search?q=hola') };
+  const t0 = Date.now();
+  out.abrir = await new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', juicer, '-Lista'],
+    { windowsHide: true, maxBuffer: 1 << 26 }, (e) => resolve(e ? String(e.message).split('\n')[0] : 'ok')));
+  for (;;) {
+    out.despues = await open('https://search.brave.com/search?q=hola');
+    out.segundos = Math.round((Date.now() - t0) / 1000);
+    if (out.despues.loaded || out.segundos > 120) break;
+    await page.waitForTimeout(3000);
+  }
+  out.braveAdult = await search('pornhub');
+  out.xvideos = await open('https://www.xvideos.com/');
+  await browser.close();
+  console.log(JSON.stringify(out));
+  process.exit(0);
 }
 
 const out = {

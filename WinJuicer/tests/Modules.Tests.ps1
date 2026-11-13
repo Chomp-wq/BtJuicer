@@ -2074,4 +2074,44 @@ Describe 'Protección y Brave' {
         $M.Backend.State.Browsers.Clear()
         @(Start-Juicer -ProteccionAdultos Comprobar 6>$null)[-1] | Should -Be 0
     }
+
+    # What a new version fixes reaches the PC when Win Juicer opens, not 15
+    # minutes later: the task runs the copy just updated.
+    Context 'al abrir Win Juicer' {
+        BeforeAll {
+            # Start-ScheduledTask only exists on Windows; to mock it, it has to exist.
+            $script:Stub = -not (Get-Command Start-ScheduledTask -ErrorAction SilentlyContinue)
+            if ($script:Stub) { function global:Start-ScheduledTask { param([string]$TaskName) } }
+        }
+        AfterAll {
+            if ($script:Stub) { Remove-Item function:global:Start-ScheduledTask -ErrorAction SilentlyContinue }
+        }
+        BeforeEach {
+            $script:On = $true
+            Mock -ModuleName WinJuicer Test-JuicerShield { $script:On }
+            Mock -ModuleName WinJuicer Test-JuicerShieldTask { $true }
+            Mock -ModuleName WinJuicer Test-JuicerUpkeep { -not $script:On }
+            Mock -ModuleName WinJuicer Install-JuicerCopy { 'C:\Program Files\WinJuicer' }
+            Mock -ModuleName WinJuicer Start-ScheduledTask { }
+        }
+
+        It 'con la protección activada, su tarea corre ya con la copia nueva' {
+            Update-JuicerCopy
+            Should -Invoke -ModuleName WinJuicer Install-JuicerCopy -Times 1 -Exactly
+            Should -Invoke -ModuleName WinJuicer Start-ScheduledTask -Times 1 -Exactly -ParameterFilter { $TaskName -eq 'Win Juicer - Protección contra contenido adulto' }
+        }
+
+        It 'si la copia no se pudo poner al día, no la corre: sería la vieja' {
+            Mock -ModuleName WinJuicer Install-JuicerCopy { throw 'Acceso denegado' }
+            Update-JuicerCopy
+            Should -Invoke -ModuleName WinJuicer Start-ScheduledTask -Times 0 -Exactly
+        }
+
+        It 'sin la protección, sólo la copia del mantenimiento de los juegos' {
+            $script:On = $false
+            Update-JuicerCopy
+            Should -Invoke -ModuleName WinJuicer Install-JuicerCopy -Times 1 -Exactly
+            Should -Invoke -ModuleName WinJuicer Start-ScheduledTask -Times 0 -Exactly
+        }
+    }
 }

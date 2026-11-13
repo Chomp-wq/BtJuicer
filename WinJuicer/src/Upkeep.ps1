@@ -152,9 +152,14 @@ function Unregister-JuicerUpkeep {
 }
 
 # Called when Win Juicer opens elevated: the protected copy follows the
-# version in use, so the task never runs an old one.
+# version in use, so the task never runs an old one. And the protection's task
+# runs it now: what a new version fixes in the protection reaches the PC as
+# soon as it opens, not at the next round of 15 minutes.
 function Update-JuicerCopy {
     if ((Test-JuicerUpkeep) -or (Test-JuicerShield)) {
-        try { [void](Install-JuicerCopy) } catch { Write-JuicerLog "No se pudo actualizar la copia de Program Files: $_" }
+        try { [void](Install-JuicerCopy) } catch { Write-JuicerLog "No se pudo actualizar la copia de Program Files: $_"; return }
+    }
+    if ((Test-JuicerShield) -and (Test-JuicerShieldTask)) {
+        try { Start-ScheduledTask -TaskName $script:ShieldTask -ErrorAction Stop } catch { Write-JuicerLog "Protección: su tarea no se pudo poner en marcha ahora: $_" }
     }
 }
