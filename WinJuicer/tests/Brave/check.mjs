@@ -31,8 +31,19 @@ if (phase === 'despues') {
   try {
     const p = await shown.newPage();
     await p.goto('chrome://policy', { timeout: 15000 });
-    await p.waitForFunction(() => document.body.innerText.includes('DnsOverHttpsMode'), null, { timeout: 15000 }).catch(() => {});
-    out.policy = await p.evaluate(() => document.body.innerText);
+    // Its text lives inside shadow roots, which innerText does not reach.
+    const deepText = () => {
+      const walk = (n) => {
+        let t = '';
+        if (n.nodeType === Node.TEXT_NODE) return n.textContent + ' ';
+        if (n.shadowRoot) t += walk(n.shadowRoot);
+        for (const c of n.childNodes) t += walk(c);
+        return t;
+      };
+      return walk(document.documentElement).replace(/\s+/g, ' ');
+    };
+    await p.waitForFunction(`(${deepText})().includes('DnsOverHttpsMode')`, null, { timeout: 20000 }).catch(() => {});
+    out.policy = await p.evaluate(deepText);
   } catch (e) {
     out.policy = 'ERROR ' + String(e.message).split('\n')[0];
   }
