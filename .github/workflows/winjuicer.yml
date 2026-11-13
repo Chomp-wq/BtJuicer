@@ -60,6 +60,24 @@ jobs:
 
   # Capturas de cada pestaña de la ventana, dibujada con el hardware real del
   # runner, para revisar cómo se ve sin tener Windows a mano. No bloquea nada.
+  # La protección contra contenido adulto, en un Brave de verdad: una web para
+  # adultos carga antes de activarla y no después. Activa la protección para
+  # siempre, así que sólo aquí, en una máquina desechable.
+  brave:
+    runs-on: windows-latest
+    env:
+      WINJUICER_PRUEBAS_REALES: '1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Instalar Brave
+        shell: pwsh
+        run: choco install brave -y --no-progress
+
+      - name: La protección, en Brave
+        shell: pwsh
+        run: ./WinJuicer/tests/Brave/Test-Brave.ps1
+
   capturas:
     runs-on: windows-latest
     steps:
