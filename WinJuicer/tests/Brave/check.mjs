@@ -7,15 +7,26 @@ const [exe, phase] = process.argv.slice(2);
 const browser = await chromium.launch({ executablePath: exe, headless: false });
 const page = await browser.newPage();
 
+// Where a page really ends up: a site may hand over to another one with a
+// script, which Playwright reports as the first navigation being interrupted.
 async function open(url) {
+  let error = '';
   try {
-    const r = await page.goto(url, { timeout: 25000, waitUntil: 'domcontentloaded' });
-    let title = '';
-    try { title = await page.title(); } catch { /* page gone */ }
-    return { loaded: true, status: r ? r.status() : 0, url: page.url(), title };
+    await page.goto(url, { timeout: 25000, waitUntil: 'domcontentloaded' });
   } catch (e) {
-    return { loaded: false, error: String(e.message).split('\n')[0] };
+    error = String(e.message).split('\n')[0];
   }
+  try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch { /* keeps what there is */ }
+  await page.waitForTimeout(1500);
+  const final = page.url();
+  let title = '';
+  let text = '';
+  try { title = await page.title(); } catch { /* page gone */ }
+  try { text = (await page.evaluate(() => document.body ? document.body.innerText : '')).replace(/\s+/g, ' ').slice(0, 300); } catch { /* page gone */ }
+  const failed = final.startsWith('chrome-error:') || /ERR_[A-Z_]+/.test(text) && final === 'chrome-error://chromewebdata/';
+  const code = (text.match(/ERR_[A-Z_]+/) || [''])[0];
+  if (failed || (error && !final.startsWith('http'))) return { loaded: false, url: final, error: code || error, text };
+  return { loaded: true, url: final, title, interrupted: error ? true : false };
 }
 
 // A search for an adult site: which result links point at adult domains.

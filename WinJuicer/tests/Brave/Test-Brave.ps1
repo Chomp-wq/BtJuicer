@@ -33,7 +33,7 @@ try {
         $r = $json | ConvertFrom-Json
         foreach ($k in 'control', 'xvideos', 'pornhub', 'braveSearch', 'braveAdult') {
             $x = $r.$k
-            Write-Host ('  {0,-8} {1,-12} {2}' -f $Phase, $k, $(if ($x.loaded) { "cargó: «$($x.title)» $($x.url)" } else { "no cargó: $($x.error)" }))
+            Write-Host ('  {0,-8} {1,-12} {2}' -f $Phase, $k, $(if ($x.loaded) { "cargó: «$($x.title)» $($x.url)" } else { "no cargó: $($x.error) $($x.url) $($x.text)" }))
         }
         $a = $r.braveAdult
         if ($a.loaded) { Write-Host ('  {0,-8} {1,-12} captcha: {2}; enlaces: {3}; a webs para adultos: {4}' -f $Phase, 'braveAdult', $a.captcha, $a.links, (@($a.adult) -join ', ')) }
@@ -41,6 +41,19 @@ try {
     }
     # Loaded means the real site, not a block page or an error page.
     function Test-Adult($x) { $x.loaded -and ($x.title -match 'xvideos|pornhub|porn') }
+
+    function Show-BraveDns([string]$When) {
+        foreach ($n in 'search.brave.com', 'forcesafe.search.brave.com', 'safe.search.brave.com') {
+            foreach ($srv in @('', '185.228.168.10', '185.228.168.168')) {
+                $p = @{ Name = $n; Type = 'A'; DnsOnly = $true; ErrorAction = 'Stop' }
+                if ($srv) { $p.Server = $srv }
+                $r = try { @(Resolve-DnsName @p | ForEach-Object { if ($_.Type -eq 'A') { [string]$_.IPAddress } elseif ($_.Type -eq 'CNAME') { "CNAME $($_.NameHost)" } }) -join ', ' } catch { "ERROR $($_.Exception.Message)" }
+                Write-Host ('  {0,-8} {1,-28} vía {2,-16} {3}' -f $When, $n, $(if ($srv) { $srv } else { 'Windows' }), $r)
+            }
+        }
+    }
+    Write-Host '--- DNS de Brave Search antes ---'
+    Show-BraveDns 'antes'
 
     Write-Host 'Antes de activar la protección:'
     $before = Invoke-Check 'antes'
@@ -58,7 +71,8 @@ try {
     if (-not $after.control.loaded) { $fail += 'example.com ya no carga: la protección corta internet.' }
     foreach ($k in $baseline) { if (Test-Adult $after.$k) { $fail += "$k sigue cargando en Brave." } }
     # Searching from Brave must work: Brave Search, through its forced SafeSearch.
-    Write-Host '--- DNS de Brave Search ---'
+    Write-Host '--- DNS de Brave Search después ---'
+    Show-BraveDns 'despues'
     $safe = @(Resolve-DnsName forcesafe.search.brave.com -Type A -DnsOnly -ErrorAction SilentlyContinue | Where-Object { $_.Type -eq 'A' } | ForEach-Object { [string]$_.IPAddress } | Sort-Object)
     $now = @(Resolve-DnsName search.brave.com -Type A -ErrorAction SilentlyContinue | Where-Object { $_.Type -eq 'A' } | ForEach-Object { [string]$_.IPAddress } | Sort-Object)
     Write-Host "  forcesafe.search.brave.com: $($safe -join ', ')"
