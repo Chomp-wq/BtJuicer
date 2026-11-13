@@ -31,10 +31,12 @@ try {
         $json = & node check.mjs $brave $Phase
         if ($LASTEXITCODE -ne 0) { throw "La prueba de Brave falló ($Phase)." }
         $r = $json | ConvertFrom-Json
-        foreach ($k in 'control', 'xvideos', 'pornhub', 'braveSearch') {
+        foreach ($k in 'control', 'xvideos', 'pornhub', 'braveSearch', 'braveAdult') {
             $x = $r.$k
             Write-Host ('  {0,-8} {1,-12} {2}' -f $Phase, $k, $(if ($x.loaded) { "cargó: «$($x.title)» $($x.url)" } else { "no cargó: $($x.error)" }))
         }
+        $a = $r.braveAdult
+        if ($a.loaded) { Write-Host ('  {0,-8} {1,-12} captcha: {2}; enlaces: {3}; a webs para adultos: {4}' -f $Phase, 'braveAdult', $a.captcha, $a.links, (@($a.adult) -join ', ')) }
         $r
     }
     # Loaded means the real site, not a block page or an error page.
@@ -55,7 +57,19 @@ try {
     $fail = @()
     if (-not $after.control.loaded) { $fail += 'example.com ya no carga: la protección corta internet.' }
     foreach ($k in $baseline) { if (Test-Adult $after.$k) { $fail += "$k sigue cargando en Brave." } }
-    if ($after.braveSearch.loaded -and $after.braveSearch.url -match 'search\.brave\.com') { $fail += 'Brave Search sigue cargando.' }
+    # Searching from Brave must work: Brave Search, through its forced SafeSearch.
+    Write-Host '--- DNS de Brave Search ---'
+    $safe = @(Resolve-DnsName forcesafe.search.brave.com -Type A -DnsOnly -ErrorAction SilentlyContinue | Where-Object { $_.Type -eq 'A' } | ForEach-Object { [string]$_.IPAddress } | Sort-Object)
+    $now = @(Resolve-DnsName search.brave.com -Type A -ErrorAction SilentlyContinue | Where-Object { $_.Type -eq 'A' } | ForEach-Object { [string]$_.IPAddress } | Sort-Object)
+    Write-Host "  forcesafe.search.brave.com: $($safe -join ', ')"
+    Write-Host "  search.brave.com ahora:      $($now -join ', ')"
+    Get-Content -LiteralPath "$env:SystemRoot\System32\drivers\etc\hosts" | Select-String 'search\.brave\.com' | ForEach-Object { Write-Host "  hosts: $_" }
+    if ($safe.Count -eq 0) { $fail += 'forcesafe.search.brave.com no resuelve a través del filtro.' }
+    elseif (($now -join ',') -ne ($safe -join ',')) { $fail += 'search.brave.com no apunta a la búsqueda segura de Brave.' }
+    if (-not ($after.braveSearch.loaded -and $after.braveSearch.url -match 'search\.brave\.com')) { $fail += "Brave Search no carga después: buscar desde Brave no funcionaría ($($after.braveSearch.error))." }
+    $ba = $after.braveAdult
+    if ($ba.loaded -and -not $ba.captcha -and @($ba.adult).Count -gt 0) { $fail += "Brave Search enseña webs para adultos: $(@($ba.adult) -join ', ')." }
+    if ($ba.loaded -and $ba.captcha) { Write-Host '  (Brave Search respondió con un captcha: no se pueden ver los resultados desde aquí.)' }
     Write-Host '--- brave://policy ---'
     Write-Host $after.policy
     # Each rule the protection sets, listed by Brave and taken: «Status OK».
@@ -72,7 +86,7 @@ try {
     if ($check -notmatch 'está bloqueada en este PC') { $fail += 'La comprobación de Win Juicer no confirmó el bloqueo con su prueba real.' }
 
     if ($fail.Count -gt 0) { $fail | ForEach-Object { Write-Host "FALLO: $_" }; exit 1 }
-    Write-Host "Bien: $($baseline -join ' y ') cargaban antes y ya no; Brave Search bloqueado; Brave aplica las reglas."
+    Write-Host "Bien: $($baseline -join ' y ') cargaban antes y ya no; Brave Search funciona, con su búsqueda segura; Brave aplica las reglas."
 } finally {
     Pop-Location
 }

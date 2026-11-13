@@ -92,12 +92,16 @@ $script:ShieldBypassHosts = @(
     'opera-proxy.net', 'de0.opera-proxy.net', 'eu0.opera-proxy.net', 'am0.opera-proxy.net', 'as0.opera-proxy.net'
 )
 
-# Brave Search, Brave's own default engine: nothing can force its SafeSearch,
-# and it serves result pictures from its own servers, which a DNS filter
-# cannot tell apart. Blocked; Brave refuses any policy that sets its default
-# engine, so whoever uses Brave picks Google there by hand, where SafeSearch
-# is forced.
-$script:ShieldSearchHosts = @('search.brave.com', 'imgs.search.brave.com', 'cdn.search.brave.com')
+# Brave Search, Brave's own default engine, serves result pictures from its
+# own servers, where a DNS filter cannot see them; and Brave refuses any
+# policy that changes its engine, so blocking it leaves Brave unable to search
+# at all. Brave documents how a network forces its SafeSearch instead:
+# search.brave.com answered as forcesafe.search.brave.com, leaving its other
+# names (imgs., cdn.) alone. A hosts file cannot hold an alias, so it holds
+# forcesafe's addresses, looked up again on every run; until they have been
+# found once, search.brave.com is blocked.
+$script:ShieldBraveSearchHost = 'search.brave.com'
+$script:ShieldBraveSafeHost = 'forcesafe.search.brave.com'
 
 # What an earlier version set to change Brave's engine. Brave blocks those
 # policies and lists them as errors, so they go: nothing is lost by it.
@@ -553,12 +557,18 @@ function Get-JuicerHostsPublicEntries {
 # name anywhere public) turned into a comment. Lines pointing at this PC or
 # the local network stay as they are. @{ Text; Disabled }.
 function Update-JuicerShieldHosts {
-    param([string]$Text, [string[]]$Previous = @(), [string[]]$Block = @())
+    param([string]$Text, [string[]]$Previous = @(), [string[]]$Block = @(), [string[]]$Map = @())
     $prev = @{}
     foreach ($p in $Previous) { if ($p) { $prev[$p.ToLowerInvariant()] = $true } }
     $names = @($Block | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Select-Object -Unique)
+    # «ip name» lines of its own, such as Brave Search's safe addresses.
+    $maps = @($Map | Where-Object { $_ } | ForEach-Object { ($_.Trim() -replace '\s+', ' ').ToLowerInvariant() } | Select-Object -Unique)
+    $mapped = @(@($maps | ForEach-Object { ($_ -split ' ')[1] }) + $script:ShieldBraveSearchHost | Select-Object -Unique)
+    # Names that only its block may send anywhere.
+    $guarded = @($names) + @($mapped)
     $ours = @{}
     foreach ($n in $names) { $ours["0.0.0.0 $n"] = $true; $ours[":: $n"] = $true }
+    foreach ($m in $maps) { $ours[$m] = $true }
     $out = New-Object System.Collections.ArrayList
     $disabled = @()
     $inBlock = $false
@@ -567,12 +577,13 @@ function Update-JuicerShieldHosts {
         if ($t -eq $script:ShieldHostsBegin) { $inBlock = $true; continue }
         if ($t -eq $script:ShieldHostsEnd) { $inBlock = $false; continue }
         $flat = ($t -replace '\s+', ' ').ToLowerInvariant()
-        if ($inBlock -and ($t -eq '' -or $flat -match '^(0\.0\.0\.0|::) \S+$')) { continue }
+        $e = ConvertFrom-JuicerHostsLine $line
+        # Its own lines are rebuilt below, a mapped name's old addresses too.
+        if ($inBlock -and ($t -eq '' -or $flat -match '^(0\.0\.0\.0|::) \S+$' -or ($e -and @($e.Names).Count -eq 1 -and $mapped -contains $e.Names[0]))) { continue }
         $inBlock = $false
         if ($ours.ContainsKey($flat)) { continue }
-        $e = ConvertFrom-JuicerHostsLine $line
         if ($e -and (Test-JuicerPublicIp $e.Ip)) {
-            $new = @($e.Names | Where-Object { $names -contains $_ -or -not $prev.ContainsKey("$($e.Ip) $_") })
+            $new = @($e.Names | Where-Object { $guarded -contains $_ -or -not $prev.ContainsKey("$($e.Ip) $_") })
             if ($new.Count -gt 0) {
                 [void]$out.Add($script:ShieldHostsOff + $t)
                 $disabled += $t
@@ -585,8 +596,31 @@ function Update-JuicerShieldHosts {
     if ($out.Count -gt 0) { [void]$out.Add('') }
     [void]$out.Add($script:ShieldHostsBegin)
     foreach ($n in $names) { [void]$out.Add("0.0.0.0 $n"); [void]$out.Add(":: $n") }
+    foreach ($m in $maps) { [void]$out.Add($m) }
     [void]$out.Add($script:ShieldHostsEnd)
     @{ Text = (($out -join "`r`n") + "`r`n"); Disabled = $disabled }
+}
+
+# forcesafe.search.brave.com's addresses now, as «ip search.brave.com» lines:
+# the last ones found when it cannot be looked up, none if it never could.
+function Get-JuicerBraveSafeMap {
+    $b = Get-JuicerBackend
+    $ips = @()
+    if ($b.ResolveName) {
+        try {
+            $r = & $b.ResolveName $script:ShieldBraveSafeHost ''
+            $ips = @($r.Ips | Where-Object { Test-JuicerPublicIp $_ } | Sort-Object -Unique)
+        } catch {
+            Write-JuicerLog "Protección: no se pudo buscar $($script:ShieldBraveSafeHost): $_"
+        }
+    }
+    $saved = Read-JuicerReg $script:ShieldKey 'BraveSegura'
+    if ($ips.Count -gt 0) {
+        if (-not $saved -or (@($saved.Value) -join ',') -ne ($ips -join ',')) { Write-JuicerReg $script:ShieldKey 'BraveSegura' 'MultiString' $ips }
+    } elseif ($saved) {
+        $ips = @($saved.Value | Where-Object { $_ })
+    }
+    foreach ($ip in $ips) { "$ip $($script:ShieldBraveSearchHost)" }
 }
 
 function Repair-JuicerShieldHosts {
@@ -600,15 +634,20 @@ function Repair-JuicerShieldHosts {
     } else {
         $list = @($prev.Value)
     }
-    $want = @($script:ShieldBypassHosts) + @($script:ShieldSearchHosts) + @(Get-JuicerShieldBlocked)
-    $r = Update-JuicerShieldHosts $text $list $want
+    $map = @(Get-JuicerBraveSafeMap)
+    $want = @($script:ShieldBypassHosts) + @(Get-JuicerShieldBlocked)
+    if ($map.Count -eq 0) { $want += $script:ShieldBraveSearchHost }
+    $r = Update-JuicerShieldHosts $text $list $want $map
     if ($r.Text -ceq [string]$text) { return }
     & $b.HostsWrite $r.Text
     foreach ($d in $r.Disabled) { "Archivo hosts: desactivada «$d», que saltaba el filtro" }
     # Its own block, when that is what was missing or changed (not just the
     # line endings of the rest).
-    $block = (Update-JuicerShieldHosts '' @() $want).Text.TrimEnd()
-    if (-not (([string]$text) -replace "`r?`n", "`r`n").Contains($block)) { 'Archivo hosts: Brave Search, la VPN de Opera y las webs que bloqueas' }
+    $block = (Update-JuicerShieldHosts '' @() $want $map).Text.TrimEnd()
+    if (-not (([string]$text) -replace "`r?`n", "`r`n").Contains($block)) {
+        if ($map.Count -gt 0) { 'Archivo hosts: Brave Search con su búsqueda segura obligatoria, la VPN de Opera y las webs que bloqueas' }
+        else { 'Archivo hosts: Brave Search bloqueado hasta poder forzar su búsqueda segura, la VPN de Opera y las webs que bloqueas' }
+    }
 }
 
 # --- Sites blocked for good ---------------------------------------------------------
@@ -805,6 +844,16 @@ function Get-JuicerShieldCheck {
         }
     }
 
+    if ($b.HostsRead) {
+        $hosts = [string](& $b.HostsRead)
+        $safe = @(([regex]::Matches($hosts, '(?m)^[ \t]*(\S+)[ \t]+search\.brave\.com[ \t]*\r?$')) | ForEach-Object { $_.Groups[1].Value })
+        if (@($safe | Where-Object { Test-JuicerPublicIp $_ }).Count -gt 0) {
+            & $add $true 'Brave Search, con su búsqueda segura obligatoria'
+        } elseif ($safe.Count -gt 0) {
+            & $add $null 'Brave Search está bloqueado por ahora' 'Todavía no se ha podido forzar su búsqueda segura, porque hace falta conexión. La tarea lo hará sola en unos minutos; mientras, en Brave puedes elegir Google como buscador (Configuración, Motor de búsqueda).'
+        }
+    }
+
     if ($b.Browsers) {
         $mark = Read-JuicerReg $script:ShieldKey 'Navegadores'
         if (-not $mark) { $mark = Read-JuicerReg $script:ShieldKey 'Desde' }
@@ -896,14 +945,14 @@ function Get-JuicerShieldExplanation {
     param([int]$Level = 2)
     if ($Level -ge 2) {
         @(
-            'Estricta, la recomendada si es para dejar el porno. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro familiar de CleanBrowsing, que además cierra proxies y VPN, y Reddit y otras webs con contenido mixto. Obliga a la búsqueda segura de Google y Bing, pone YouTube en modo restringido estricto y quita las ventanas privadas y de invitado de Chrome, Edge, Brave y Firefox. En Brave también las de Tor, y Brave Search queda bloqueado porque no se puede filtrar: elige Google como buscador en Brave.'
+            'Estricta, la recomendada si es para dejar el porno. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro familiar de CleanBrowsing, que además cierra proxies y VPN, y Reddit y otras webs con contenido mixto. Obliga a la búsqueda segura de Google y Bing, pone YouTube en modo restringido estricto y quita las ventanas privadas y de invitado de Chrome, Edge, Brave y Firefox. En Brave también las de Tor, y su buscador, Brave Search, sólo funciona con la búsqueda segura.'
             'Y cierra los atajos: el DNS sólo puede ir al filtro (el cortafuegos de Windows bloquea cualquier otro, también el cifrado de Google, Cloudflare y compañía), los navegadores no usan ni su propio DNS ni un proxy, la VPN de Opera no conecta, y lo que se añada al archivo hosts para saltárselo se desactiva. Además puedes bloquear para siempre X, Reddit, Tumblr o la web que quieras. Nada filtra dentro de tu PC: las webs cargan igual de rápido.'
             'Es para siempre: una vez activada, Win Juicer no te deja desactivarla ni bajarla de nivel. No hay botón para quitarla, «Deshacer todo» no la toca y, si algo la cambia, una tarea la vuelve a poner sola, en segundos si es el cortafuegos.'
             'Lo que no puede: una VPN o Tor instalados como programa, ni apps que sirven ese contenido desde sus propios dominios. Una VPN que traiga su propio DNS, también la del trabajo, no resolverá nombres, y alguna Wi-Fi de hotel con página de acceso puede no abrirla. Chrome y Edge dirán que «los administra tu organización»: son estas reglas. Para el móvil, en Android: Ajustes, Red, DNS privado: family-filter-dns.cleanbrowsing.org.'
         )
     } else {
         @(
-            'Equilibrada. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro de adultos de CleanBrowsing, y obliga a la búsqueda segura de Google y Bing y al modo restringido de YouTube en Chrome, Edge y Brave. En Brave, además, quita las ventanas de Tor y bloquea Brave Search, que no se puede filtrar: elige Google como buscador en Brave. Reddit, las VPN y las ventanas privadas normales siguen funcionando.'
+            'Equilibrada. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro de adultos de CleanBrowsing, y obliga a la búsqueda segura de Google y Bing y al modo restringido de YouTube en Chrome, Edge y Brave. En Brave, además, quita las ventanas de Tor y obliga a la búsqueda segura de su buscador, Brave Search. Reddit, las VPN y las ventanas privadas normales siguen funcionando.'
             'Cierra los atajos más comunes: el DNS de Google, Cloudflare, Quad9 y otros públicos no responde (tampoco el cifrado), los navegadores no usan su propio DNS, la VPN de Opera no conecta, y lo que se añada al archivo hosts para saltárselo se desactiva. Puedes bloquear para siempre X, Reddit, Tumblr o la web que quieras. Nada filtra dentro de tu PC: las webs cargan igual de rápido.'
             'Es para siempre: una vez activada, Win Juicer no te deja desactivarla. No hay botón para quitarla, «Deshacer todo» no la toca y, si algo la cambia, una tarea la vuelve a poner sola. Más adelante puedes pasar a la estricta, pero no volver.'
             'Lo que no puede: una VPN, un proxy o Tor, ni apps que sirven ese contenido desde sus propios dominios. En Firefox bloquea las webs, pero no obliga a la búsqueda segura. Chrome y Edge dirán que «los administra tu organización»: son estas reglas. Para el móvil, en Android: Ajustes, Red, DNS privado: adult-filter-dns.cleanbrowsing.org.'

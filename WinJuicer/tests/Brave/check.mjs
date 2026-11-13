@@ -1,9 +1,10 @@
 // Opens real pages in a real Brave, the way a person would, and says what
 // came back. Run by Test-Brave.ps1, before and after turning the protection on.
+// A visible window: Brave Search answers headless browsers with a captcha.
 import { chromium } from 'playwright-core';
 
 const [exe, phase] = process.argv.slice(2);
-const browser = await chromium.launch({ executablePath: exe, headless: true });
+const browser = await chromium.launch({ executablePath: exe, headless: false });
 const page = await browser.newPage();
 
 async function open(url) {
@@ -17,19 +18,28 @@ async function open(url) {
   }
 }
 
+// A search for an adult site: which result links point at adult domains.
+async function search(q) {
+  const r = await open('https://search.brave.com/search?q=' + encodeURIComponent(q) + '&source=web');
+  if (!r.loaded) return r;
+  await page.waitForTimeout(2500);
+  const links = await page.$$eval('a[href]', (as) => as.map((a) => a.href));
+  r.captcha = /captcha/i.test(r.title) || /captcha/i.test(r.url);
+  r.links = links.length;
+  r.adult = [...new Set(links.filter((h) => /pornhub|xvideos|xnxx|xhamster|redtube|youporn/i.test(new URL(h).hostname)).map((h) => new URL(h).hostname))];
+  return r;
+}
+
 const out = {
   control: await open('https://example.com/'),
   xvideos: await open('https://www.xvideos.com/'),
   pornhub: await open('https://www.pornhub.com/'),
   braveSearch: await open('https://search.brave.com/search?q=hola'),
+  braveAdult: await search('pornhub'),
 };
-await browser.close();
 if (phase === 'despues') {
-  // The policy page renders nothing headless: a visible window, waiting for
-  // the rules to show up.
-  const shown = await chromium.launch({ executablePath: exe, headless: false });
   try {
-    const p = await shown.newPage();
+    const p = await browser.newPage();
     await p.goto('chrome://policy', { timeout: 15000 });
     // Its text lives inside shadow roots, which innerText does not reach.
     const deepText = () => {
@@ -47,6 +57,6 @@ if (phase === 'despues') {
   } catch (e) {
     out.policy = 'ERROR ' + String(e.message).split('\n')[0];
   }
-  await shown.close();
 }
+await browser.close();
 console.log(JSON.stringify(out));
