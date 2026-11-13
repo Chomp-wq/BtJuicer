@@ -23,16 +23,19 @@ const out = {
   pornhub: await open('https://www.pornhub.com/'),
   braveSearch: await open('https://search.brave.com/search?q=hola'),
 };
+await browser.close();
 if (phase === 'despues') {
+  // The policy page renders nothing headless: a visible window, waiting for
+  // the rules to show up.
+  const shown = await chromium.launch({ executablePath: exe, headless: false });
   try {
-    // A fresh tab: the last one may be sitting on an error page.
-    const p = await browser.newPage();
-    await p.goto('brave://policy', { timeout: 15000 });
-    await p.waitForTimeout(3000);
-    out.policy = await p.innerText('body');
+    const p = await shown.newPage();
+    await p.goto('chrome://policy', { timeout: 15000 });
+    await p.waitForFunction(() => document.body.innerText.includes('DnsOverHttpsMode'), null, { timeout: 15000 }).catch(() => {});
+    out.policy = await p.evaluate(() => document.body.innerText);
   } catch (e) {
     out.policy = 'ERROR ' + String(e.message).split('\n')[0];
   }
+  await shown.close();
 }
-await browser.close();
 console.log(JSON.stringify(out));
