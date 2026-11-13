@@ -1,0 +1,95 @@
+// Opens real pages in a real Brave, the way a person would, and says what
+// came back. Run by Test-Brave.ps1, before and after turning the protection on.
+// A visible window: Brave Search answers headless browsers with a captcha.
+import { execFile } from 'node:child_process';
+import { chromium } from 'playwright-core';
+
+const [exe, phase, juicer] = process.argv.slice(2);
+const browser = await chromium.launch({ executablePath: exe, headless: false });
+const page = await browser.newPage();
+
+// Where a page really ends up: a site may hand over to another one with a
+// script, which Playwright reports as the first navigation being interrupted.
+async function open(url) {
+  let error = '';
+  try {
+    await page.goto(url, { timeout: 25000, waitUntil: 'domcontentloaded' });
+  } catch (e) {
+    error = String(e.message).split('\n')[0];
+  }
+  try { await page.waitForLoadState('domcontentloaded', { timeout: 15000 }); } catch { /* keeps what there is */ }
+  await page.waitForTimeout(1500);
+  const final = page.url();
+  let title = '';
+  let text = '';
+  try { title = await page.title(); } catch { /* page gone */ }
+  try { text = (await page.evaluate(() => document.body ? document.body.innerText : '')).replace(/\s+/g, ' ').slice(0, 300); } catch { /* page gone */ }
+  const failed = final.startsWith('chrome-error:') || /ERR_[A-Z_]+/.test(text) && final === 'chrome-error://chromewebdata/';
+  const code = (text.match(/ERR_[A-Z_]+/) || [''])[0];
+  if (failed || (error && !final.startsWith('http'))) return { loaded: false, url: final, error: code || error, text };
+  return { loaded: true, url: final, title, interrupted: error ? true : false };
+}
+
+// A search for an adult site: which result links point at adult domains.
+async function search(q) {
+  const r = await open('https://search.brave.com/search?q=' + encodeURIComponent(q) + '&source=web');
+  if (!r.loaded) return r;
+  await page.waitForTimeout(2500);
+  const links = await page.$$eval('a[href]', (as) => as.map((a) => a.href));
+  r.captcha = /captcha/i.test(r.title) || /captcha/i.test(r.url);
+  r.links = links.length;
+  r.adult = [...new Set(links.filter((h) => /pornhub|xvideos|xnxx|xhamster|redtube|youporn/i.test(new URL(h).hostname)).map((h) => new URL(h).hostname))];
+  return r;
+}
+
+// Brave open on a search, as on the PC of someone who updates Win Juicer with
+// the protection already on: what that tab shows, and the same tab, again and
+// again, once the new version opens, until it loads or two minutes go by.
+if (phase === 'actualizar') {
+  const out = { antes: await open('https://search.brave.com/search?q=hola') };
+  const t0 = Date.now();
+  out.abrir = await new Promise((resolve) => execFile('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', juicer, '-Lista'],
+    { windowsHide: true, maxBuffer: 1 << 26 }, (e) => resolve(e ? String(e.message).split('\n')[0] : 'ok')));
+  for (;;) {
+    out.despues = await open('https://search.brave.com/search?q=hola');
+    out.segundos = Math.round((Date.now() - t0) / 1000);
+    if (out.despues.loaded || out.segundos > 120) break;
+    await page.waitForTimeout(3000);
+  }
+  out.braveAdult = await search('pornhub');
+  out.xvideos = await open('https://www.xvideos.com/');
+  await browser.close();
+  console.log(JSON.stringify(out));
+  process.exit(0);
+}
+
+const out = {
+  control: await open('https://example.com/'),
+  xvideos: await open('https://www.xvideos.com/'),
+  pornhub: await open('https://www.pornhub.com/'),
+  braveSearch: await open('https://search.brave.com/search?q=hola'),
+  braveAdult: await search('pornhub'),
+};
+if (phase === 'despues') {
+  try {
+    const p = await browser.newPage();
+    await p.goto('chrome://policy', { timeout: 15000 });
+    // Its text lives inside shadow roots, which innerText does not reach.
+    const deepText = () => {
+      const walk = (n) => {
+        let t = '';
+        if (n.nodeType === Node.TEXT_NODE) return n.textContent + ' ';
+        if (n.shadowRoot) t += walk(n.shadowRoot);
+        for (const c of n.childNodes) t += walk(c);
+        return t;
+      };
+      return walk(document.documentElement).replace(/\s+/g, ' ');
+    };
+    await p.waitForFunction(`(${deepText})().includes('DnsOverHttpsMode')`, null, { timeout: 20000 }).catch(() => {});
+    out.policy = await p.evaluate(deepText);
+  } catch (e) {
+    out.policy = 'ERROR ' + String(e.message).split('\n')[0];
+  }
+}
+await browser.close();
+console.log(JSON.stringify(out));

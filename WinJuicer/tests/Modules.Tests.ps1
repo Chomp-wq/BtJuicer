@@ -232,7 +232,7 @@ Describe 'Protección contra contenido adulto' {
         (Get-JuicerShieldInfo).Level | Should -Be 1
         (Get-JuicerDnsServers $M.Backend.State.Adapters[0].Guid).V4 | Should -Be $Adult
         @($fixed | Where-Object { $_ -like 'Cortafuegos:*' }).Count | Should -Be 6
-        $fixed | Should -Contain 'Archivo hosts: Brave Search, la VPN de Opera y las webs que bloqueas'
+        $fixed | Should -Contain 'Archivo hosts: Brave Search bloqueado hasta poder forzar su búsqueda segura, la VPN de Opera y las webs que bloqueas'
     }
 
     It 'deshacer un DNS de antes no quita el filtrado' {
@@ -285,7 +285,7 @@ Describe 'Protección contra contenido adulto' {
         # Taking the mark off brings it back to a comment; and the block, if deleted, comes back.
         $M.Backend.State.Hosts = $h.Replace('# Win Juicer (proteccion) la desactivo: 104.18.0.1', '104.18.0.1') -replace '(?m)^(0\.0\.0\.0|::) api\.sec-tunnel\.com\r?\n', ''
         $fixed = @(Repair-JuicerShield)
-        $fixed | Should -Contain 'Archivo hosts: Brave Search, la VPN de Opera y las webs que bloqueas'
+        $fixed | Should -Contain 'Archivo hosts: Brave Search bloqueado hasta poder forzar su búsqueda segura, la VPN de Opera y las webs que bloqueas'
         $M.Backend.State.Hosts | Should -Be $h
         @(Repair-JuicerShield) | Should -BeNullOrEmpty
     }
@@ -1946,20 +1946,69 @@ Describe 'Protección y Brave' {
         $script:Brave = 'HKLM\SOFTWARE\Policies\BraveSoftware\Brave'
     }
 
-    It 'en los dos niveles: sin Tor, sin Brave Search y sin quedarse en segundo plano' {
+    It 'en los dos niveles: sin Tor, Brave Search con búsqueda segura y sin quedarse en segundo plano' {
         foreach ($level in 1, 2) {
             $script:M = New-NetMachine
+            $M.Backend.State.Resolve['forcesafe.search.brave.com|'] = @('203.0.113.10', '203.0.113.11')
             [void](Enable-JuicerShield -Level $level)
             (Read-JuicerReg $Brave 'TorDisabled').Value | Should -Be 1 -Because "nivel $level"
             (Read-JuicerReg $Brave 'BackgroundModeEnabled').Value | Should -Be 0
             (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'BackgroundModeEnabled').Value | Should -Be 0
-            (Read-JuicerReg $Brave 'DefaultSearchProviderEnabled').Value | Should -Be 1
-            (Read-JuicerReg $Brave 'DefaultSearchProviderSearchURL').Value | Should -BeLike '*google*safe=active*'
-            $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 search\.brave\.com\r?$'
-            $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 imgs\.search\.brave\.com\r?$'
+            # Brave blocks the default-search policies: none is set.
+            Read-JuicerReg $Brave 'DefaultSearchProviderEnabled' | Should -BeNullOrEmpty
+            # search.brave.com answered as forcesafe.search.brave.com; its
+            # other names, as they are.
+            $M.Backend.State.Hosts | Should -Match '(?m)^203\.0\.113\.10 search\.brave\.com\r?$'
+            $M.Backend.State.Hosts | Should -Match '(?m)^203\.0\.113\.11 search\.brave\.com\r?$'
+            $M.Backend.State.Hosts | Should -Not -Match '0\.0\.0\.0 search\.brave\.com'
+            $M.Backend.State.Hosts | Should -Not -Match 'imgs\.search\.brave\.com'
             # Its VPN only goes at the strict level, as before.
             [bool](Read-JuicerReg $Brave 'BraveVPNDisabled') | Should -Be ($level -eq 2)
         }
+    }
+
+    It 'Brave Search: bloqueado sin conexión, con búsqueda segura en cuanto se puede, y nadie lo desvía' {
+        # No answer yet: blocked, so that nothing unfiltered gets through.
+        [void](Enable-JuicerShield -Level 1)
+        $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 search\.brave\.com\r?$'
+        ($(Get-JuicerShieldCheck) | Where-Object { $_.Title -like 'Brave Search*' }).Ok | Should -BeNullOrEmpty
+        # It answers: its addresses instead of the block.
+        $M.Backend.State.Resolve['forcesafe.search.brave.com|'] = @('203.0.113.10')
+        @(Repair-JuicerShield) | Should -Contain 'Archivo hosts: Brave Search con su búsqueda segura obligatoria, la VPN de Opera y las webs que bloqueas'
+        $M.Backend.State.Hosts | Should -Match '(?m)^203\.0\.113\.10 search\.brave\.com\r?$'
+        $M.Backend.State.Hosts | Should -Not -Match '0\.0\.0\.0 search\.brave\.com'
+        ($(Get-JuicerShieldCheck) | Where-Object { $_.Title -like 'Brave Search*' }).Ok | Should -BeTrue
+        # Without an answer again, the last addresses stay.
+        $M.Backend.State.Resolve.Remove('forcesafe.search.brave.com|')
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
+        $M.Backend.State.Hosts | Should -Match '(?m)^203\.0\.113\.10 search\.brave\.com\r?$'
+        # The addresses move: the block follows, and the old line goes.
+        $M.Backend.State.Resolve['forcesafe.search.brave.com|'] = @('203.0.113.20')
+        [void](Repair-JuicerShield)
+        $M.Backend.State.Hosts | Should -Match '(?m)^203\.0\.113\.20 search\.brave\.com\r?$'
+        $M.Backend.State.Hosts | Should -Not -Match '203\.0\.113\.10'
+        # Someone points it elsewhere, outside the block: it is turned off.
+        $M.Backend.State.Hosts += "198.51.100.7 search.brave.com`r`n"
+        @(Repair-JuicerShield) | Should -Contain 'Archivo hosts: desactivada «198.51.100.7 search.brave.com», que saltaba el filtro'
+    }
+
+    It 'lo que bloqueaba la versión anterior (imágenes y cdn de Brave Search) vuelve a funcionar' {
+        [void](Enable-JuicerShield -Level 1)
+        $M.Backend.State.Hosts = $M.Backend.State.Hosts.Replace('# <<< Win Juicer', "0.0.0.0 imgs.search.brave.com`r`n:: imgs.search.brave.com`r`n0.0.0.0 cdn.search.brave.com`r`n# <<< Win Juicer")
+        $M.Backend.State.Resolve['forcesafe.search.brave.com|'] = @('203.0.113.10')
+        [void](Repair-JuicerShield)
+        $M.Backend.State.Hosts | Should -Not -Match 'imgs\.search\.brave\.com'
+        $M.Backend.State.Hosts | Should -Not -Match 'cdn\.search\.brave\.com'
+    }
+
+    It 'quita las reglas de buscador que Brave rechaza, si una versión anterior las puso' {
+        [void](Enable-JuicerShield -Level 1)
+        Write-JuicerReg $Brave 'DefaultSearchProviderEnabled' 'DWord' 1
+        Write-JuicerReg $Brave 'DefaultSearchProviderSearchURL' 'String' 'x'
+        [void](Repair-JuicerShield)
+        Read-JuicerReg $Brave 'DefaultSearchProviderEnabled' | Should -BeNullOrEmpty
+        Read-JuicerReg $Brave 'DefaultSearchProviderSearchURL' | Should -BeNullOrEmpty
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
     }
 
     It 'avisa a los navegadores abiertos y vacía la caché de DNS, sólo cuando cambia algo' {
@@ -1976,10 +2025,12 @@ Describe 'Protección y Brave' {
         $M.Backend.State.Route = @{ Name = 'Ethernet'; Description = 'Realtek'; Virtual = $false; Servers = @('185.228.168.168', '2a0d:2a00:1::') }
         $M.Backend.State.Resolve['pornhub.com|185.228.168.168'] = @('0.0.0.0')
         $M.Backend.State.Resolve['pornhub.com|'] = @('0.0.0.0')
+        $M.Backend.State.Resolve['forcesafe.search.brave.com|'] = @('203.0.113.10')
+        [void](Repair-JuicerShield)
         [void]$M.Backend.State.Browsers.Add(@{ Name = 'brave'; Started = (Get-Date).AddMinutes(5) })
         $c = @(Get-JuicerShieldCheck)
         @($c | Where-Object { $_.Ok -ne $true }) | Should -BeNullOrEmpty
-        $c.Count | Should -Be 3
+        $c.Count | Should -Be 4
     }
 
     It 'la comprobación: Brave abierto desde antes, que es lo que pasa al activarla con él abierto' {
@@ -2002,6 +2053,13 @@ Describe 'Protección y Brave' {
         $bad[1].Title | Should -Be 'Windows todavía abre pornhub.com (66.254.114.41)'
     }
 
+    It 'la comprobación: «no existe» es el bloqueo del filtro, no un fallo' {
+        [void](Enable-JuicerShield)
+        $M.Backend.State.Resolve['pornhub.com|185.228.168.168'] = 'NXDOMAIN'
+        $M.Backend.State.Resolve['pornhub.com|'] = 'NXDOMAIN'
+        (@(Get-JuicerShieldCheck) | Where-Object { $_.Title -like '*pornhub*' }).Ok | Should -BeTrue
+    }
+
     It 'la comprobación: sin conexión no da nada por bueno ni por malo' {
         [void](Enable-JuicerShield)
         $c = @(Get-JuicerShieldCheck)
@@ -2015,5 +2073,45 @@ Describe 'Protección y Brave' {
         @(Start-Juicer -ProteccionAdultos Comprobar 6>$null)[-1] | Should -Be 1
         $M.Backend.State.Browsers.Clear()
         @(Start-Juicer -ProteccionAdultos Comprobar 6>$null)[-1] | Should -Be 0
+    }
+
+    # What a new version fixes reaches the PC when Win Juicer opens, not 15
+    # minutes later: the task runs the copy just updated.
+    Context 'al abrir Win Juicer' {
+        BeforeAll {
+            # Start-ScheduledTask only exists on Windows; to mock it, it has to exist.
+            $script:Stub = -not (Get-Command Start-ScheduledTask -ErrorAction SilentlyContinue)
+            if ($script:Stub) { function global:Start-ScheduledTask { param([string]$TaskName) } }
+        }
+        AfterAll {
+            if ($script:Stub) { Remove-Item function:global:Start-ScheduledTask -ErrorAction SilentlyContinue }
+        }
+        BeforeEach {
+            $script:On = $true
+            Mock -ModuleName WinJuicer Test-JuicerShield { $script:On }
+            Mock -ModuleName WinJuicer Test-JuicerShieldTask { $true }
+            Mock -ModuleName WinJuicer Test-JuicerUpkeep { -not $script:On }
+            Mock -ModuleName WinJuicer Install-JuicerCopy { 'C:\Program Files\WinJuicer' }
+            Mock -ModuleName WinJuicer Start-ScheduledTask { }
+        }
+
+        It 'con la protección activada, su tarea corre ya con la copia nueva' {
+            Update-JuicerCopy
+            Should -Invoke -ModuleName WinJuicer Install-JuicerCopy -Times 1 -Exactly
+            Should -Invoke -ModuleName WinJuicer Start-ScheduledTask -Times 1 -Exactly -ParameterFilter { $TaskName -eq 'Win Juicer - Protección contra contenido adulto' }
+        }
+
+        It 'si la copia no se pudo poner al día, no la corre: sería la vieja' {
+            Mock -ModuleName WinJuicer Install-JuicerCopy { throw 'Acceso denegado' }
+            Update-JuicerCopy
+            Should -Invoke -ModuleName WinJuicer Start-ScheduledTask -Times 0 -Exactly
+        }
+
+        It 'sin la protección, sólo la copia del mantenimiento de los juegos' {
+            $script:On = $false
+            Update-JuicerCopy
+            Should -Invoke -ModuleName WinJuicer Install-JuicerCopy -Times 1 -Exactly
+            Should -Invoke -ModuleName WinJuicer Start-ScheduledTask -Times 0 -Exactly
+        }
     }
 }
