@@ -58,10 +58,12 @@ try {
     if ($after.braveSearch.loaded -and $after.braveSearch.url -match 'search\.brave\.com') { $fail += 'Brave Search sigue cargando.' }
     Write-Host '--- brave://policy ---'
     Write-Host $after.policy
-    foreach ($p in 'DnsOverHttpsMode', 'TorDisabled', 'BackgroundModeEnabled', 'ForceGoogleSafeSearch', 'DefaultSearchProviderSearchURL') {
-        if ($after.policy -notmatch $p) { $fail += "Brave no muestra la regla $p." }
+    # Each rule the protection sets, listed by Brave and taken: «Status OK».
+    foreach ($p in 'DnsOverHttpsMode', 'TorDisabled', 'BackgroundModeEnabled', 'ForceGoogleSafeSearch', 'ForceYouTubeRestrict') {
+        if ($after.policy -notmatch "\b$p\b") { $fail += "Brave no muestra la regla $p."; continue }
+        if ($after.policy -notmatch "\b$p\b.{0,200}?Status OK") { $fail += "Brave no acepta la regla $p." }
     }
-    if ($after.policy -match '(?i)unknown policy|política desconocida') { $fail += 'Brave no reconoce alguna de las reglas.' }
+    if ($after.policy -match 'Status (Error|Warning)') { $fail += 'Brave rechaza o avisa de alguna regla (ver brave://policy arriba).' }
 
     Write-Host 'Comprobación de Win Juicer:'
     $check = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'WinJuicer.ps1') -ProteccionAdultos Comprobar *>&1 | Out-String

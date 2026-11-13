@@ -818,10 +818,12 @@ En los dos:
   YouTube, y en Edge la búsqueda segura estricta de Bing; en Firefox, su DNS
   cifrado apagado y bloqueado. Chrome, Edge y Brave se cierran del todo al
   cerrarlos, en vez de seguir en segundo plano con las respuestas de DNS de
-  antes. **Brave** busca en Google con búsqueda segura en vez de en Brave
-  Search, que queda bloqueado: no hay forma de imponer su búsqueda segura, y
-  sirve las imágenes de los resultados desde sus propios servidores, donde un
-  filtro DNS no las ve. Sus ventanas de Tor, que se saltan cualquier filtro,
+  antes. En **Brave**, Brave Search queda bloqueado: no hay forma de
+  imponer su búsqueda segura, y sirve las imágenes de los resultados desde sus
+  propios servidores, donde un filtro DNS no las ve. Brave no deja que una
+  regla le cambie el buscador, así que hay que elegir Google a mano
+  (Configuración, Motor de búsqueda), donde la búsqueda segura sí es
+  obligatoria. Sus ventanas de Tor, que se saltan cualquier filtro,
   tampoco están. La búsqueda de Windows, en búsqueda segura
   estricta. Chrome y Edge dirán que los «administra tu organización»: son
   estas reglas.

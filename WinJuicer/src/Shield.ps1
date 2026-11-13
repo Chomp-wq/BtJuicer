@@ -94,18 +94,14 @@ $script:ShieldBypassHosts = @(
 
 # Brave Search, Brave's own default engine: nothing can force its SafeSearch,
 # and it serves result pictures from its own servers, which a DNS filter
-# cannot tell apart. Brave searches Google instead, with SafeSearch forced.
+# cannot tell apart. Blocked; Brave refuses any policy that sets its default
+# engine, so whoever uses Brave picks Google there by hand, where SafeSearch
+# is forced.
 $script:ShieldSearchHosts = @('search.brave.com', 'imgs.search.brave.com', 'cdn.search.brave.com')
 
-# The search Brave gets instead: Google, whose SafeSearch the policy and the
-# filter both force.
-$script:ShieldBraveSearch = [ordered]@{
-    DefaultSearchProviderEnabled    = @{ Kind = 'DWord'; Value = 1 }
-    DefaultSearchProviderName       = @{ Kind = 'String'; Value = 'Google' }
-    DefaultSearchProviderKeyword    = @{ Kind = 'String'; Value = 'google.com' }
-    DefaultSearchProviderSearchURL  = @{ Kind = 'String'; Value = '{google:baseURL}search?q={searchTerms}&safe=active' }
-    DefaultSearchProviderSuggestURL = @{ Kind = 'String'; Value = '{google:baseURL}complete/search?output=chrome&q={searchTerms}' }
-}
+# What an earlier version set to change Brave's engine. Brave blocks those
+# policies and lists them as errors, so they go: nothing is lost by it.
+$script:ShieldBraveIgnored = @('DefaultSearchProviderEnabled', 'DefaultSearchProviderName', 'DefaultSearchProviderKeyword', 'DefaultSearchProviderSearchURL', 'DefaultSearchProviderSuggestURL')
 
 # A name every adult filter blocks, to see whether this PC is filtered.
 $script:ShieldProbeName = 'pornhub.com'
@@ -234,10 +230,6 @@ function Get-JuicerShieldPolicies {
         if ($w.Brave) {
             # A Tor window goes around any DNS filter, at either level.
             @{ Type = 'Registry'; Path = $w.Path; Name = 'TorDisabled'; Kind = 'DWord'; Value = 1; Label = "${n}: sin ventanas de Tor" }
-            foreach ($k in $script:ShieldBraveSearch.Keys) {
-                $v = $script:ShieldBraveSearch[$k]
-                @{ Type = 'Registry'; Path = $w.Path; Name = $k; Kind = $v.Kind; Value = $v.Value; Label = "${n}: busca en Google con búsqueda segura, no en Brave Search" }
-            }
         }
         if ($strict) {
             @{ Type = 'Registry'; Path = $w.Path; Name = $w.Private; Kind = 'DWord'; Value = 1; Label = "${n}: sin ventanas privadas" }
@@ -728,6 +720,9 @@ function Repair-JuicerShield {
             Write-JuicerLog "Protección: no se pudo poner «$($p.Label)»: $_"
         }
     }
+    foreach ($k in $script:ShieldBraveIgnored) {
+        if (Read-JuicerReg 'HKLM\SOFTWARE\Policies\BraveSoftware\Brave' $k) { Remove-JuicerReg 'HKLM\SOFTWARE\Policies\BraveSoftware\Brave' $k; $policies++ }
+    }
     if ($policies -gt 0) {
         # When the browsers' rules last changed: one open since before has
         # not got them yet.
@@ -901,14 +896,14 @@ function Get-JuicerShieldExplanation {
     param([int]$Level = 2)
     if ($Level -ge 2) {
         @(
-            'Estricta, la recomendada si es para dejar el porno. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro familiar de CleanBrowsing, que además cierra proxies y VPN, y Reddit y otras webs con contenido mixto. Obliga a la búsqueda segura de Google y Bing, pone YouTube en modo restringido estricto y quita las ventanas privadas y de invitado de Chrome, Edge, Brave y Firefox. En Brave también las de Tor, y busca en Google con búsqueda segura en vez de en Brave Search, que no se puede filtrar.'
+            'Estricta, la recomendada si es para dejar el porno. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro familiar de CleanBrowsing, que además cierra proxies y VPN, y Reddit y otras webs con contenido mixto. Obliga a la búsqueda segura de Google y Bing, pone YouTube en modo restringido estricto y quita las ventanas privadas y de invitado de Chrome, Edge, Brave y Firefox. En Brave también las de Tor, y Brave Search queda bloqueado porque no se puede filtrar: elige Google como buscador en Brave.'
             'Y cierra los atajos: el DNS sólo puede ir al filtro (el cortafuegos de Windows bloquea cualquier otro, también el cifrado de Google, Cloudflare y compañía), los navegadores no usan ni su propio DNS ni un proxy, la VPN de Opera no conecta, y lo que se añada al archivo hosts para saltárselo se desactiva. Además puedes bloquear para siempre X, Reddit, Tumblr o la web que quieras. Nada filtra dentro de tu PC: las webs cargan igual de rápido.'
             'Es para siempre: una vez activada, Win Juicer no te deja desactivarla ni bajarla de nivel. No hay botón para quitarla, «Deshacer todo» no la toca y, si algo la cambia, una tarea la vuelve a poner sola, en segundos si es el cortafuegos.'
             'Lo que no puede: una VPN o Tor instalados como programa, ni apps que sirven ese contenido desde sus propios dominios. Una VPN que traiga su propio DNS, también la del trabajo, no resolverá nombres, y alguna Wi-Fi de hotel con página de acceso puede no abrirla. Chrome y Edge dirán que «los administra tu organización»: son estas reglas. Para el móvil, en Android: Ajustes, Red, DNS privado: family-filter-dns.cleanbrowsing.org.'
         )
     } else {
         @(
-            'Equilibrada. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro de adultos de CleanBrowsing, y obliga a la búsqueda segura de Google y Bing y al modo restringido de YouTube en Chrome, Edge y Brave. En Brave, además, quita las ventanas de Tor y busca en Google con búsqueda segura en vez de en Brave Search, que no se puede filtrar. Reddit, las VPN y las ventanas privadas normales siguen funcionando.'
+            'Equilibrada. Bloquea las webs para adultos en todo el equipo, en cualquier navegador, app o juego, con el filtro de adultos de CleanBrowsing, y obliga a la búsqueda segura de Google y Bing y al modo restringido de YouTube en Chrome, Edge y Brave. En Brave, además, quita las ventanas de Tor y bloquea Brave Search, que no se puede filtrar: elige Google como buscador en Brave. Reddit, las VPN y las ventanas privadas normales siguen funcionando.'
             'Cierra los atajos más comunes: el DNS de Google, Cloudflare, Quad9 y otros públicos no responde (tampoco el cifrado), los navegadores no usan su propio DNS, la VPN de Opera no conecta, y lo que se añada al archivo hosts para saltárselo se desactiva. Puedes bloquear para siempre X, Reddit, Tumblr o la web que quieras. Nada filtra dentro de tu PC: las webs cargan igual de rápido.'
             'Es para siempre: una vez activada, Win Juicer no te deja desactivarla. No hay botón para quitarla, «Deshacer todo» no la toca y, si algo la cambia, una tarea la vuelve a poner sola. Más adelante puedes pasar a la estricta, pero no volver.'
             'Lo que no puede: una VPN, un proxy o Tor, ni apps que sirven ese contenido desde sus propios dominios. En Firefox bloquea las webs, pero no obliga a la búsqueda segura. Chrome y Edge dirán que «los administra tu organización»: son estas reglas. Para el móvil, en Android: Ajustes, Red, DNS privado: adult-filter-dns.cleanbrowsing.org.'

@@ -1953,13 +1953,23 @@ Describe 'Protección y Brave' {
             (Read-JuicerReg $Brave 'TorDisabled').Value | Should -Be 1 -Because "nivel $level"
             (Read-JuicerReg $Brave 'BackgroundModeEnabled').Value | Should -Be 0
             (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Google\Chrome' 'BackgroundModeEnabled').Value | Should -Be 0
-            (Read-JuicerReg $Brave 'DefaultSearchProviderEnabled').Value | Should -Be 1
-            (Read-JuicerReg $Brave 'DefaultSearchProviderSearchURL').Value | Should -BeLike '*google*safe=active*'
+            # Brave blocks the default-search policies: none is set.
+            Read-JuicerReg $Brave 'DefaultSearchProviderEnabled' | Should -BeNullOrEmpty
             $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 search\.brave\.com\r?$'
             $M.Backend.State.Hosts | Should -Match '(?m)^0\.0\.0\.0 imgs\.search\.brave\.com\r?$'
             # Its VPN only goes at the strict level, as before.
             [bool](Read-JuicerReg $Brave 'BraveVPNDisabled') | Should -Be ($level -eq 2)
         }
+    }
+
+    It 'quita las reglas de buscador que Brave rechaza, si una versión anterior las puso' {
+        [void](Enable-JuicerShield -Level 1)
+        Write-JuicerReg $Brave 'DefaultSearchProviderEnabled' 'DWord' 1
+        Write-JuicerReg $Brave 'DefaultSearchProviderSearchURL' 'String' 'x'
+        [void](Repair-JuicerShield)
+        Read-JuicerReg $Brave 'DefaultSearchProviderEnabled' | Should -BeNullOrEmpty
+        Read-JuicerReg $Brave 'DefaultSearchProviderSearchURL' | Should -BeNullOrEmpty
+        @(Repair-JuicerShield) | Should -BeNullOrEmpty
     }
 
     It 'avisa a los navegadores abiertos y vacía la caché de DNS, sólo cuando cambia algo' {
