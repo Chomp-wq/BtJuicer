@@ -799,7 +799,7 @@ function Get-JuicerShieldCheck {
         $viaWindows = & $b.ResolveName $probe ''
         $filterBlocks = @($viaFilter.Ips | Where-Object { Test-JuicerPublicIp $_ }).Count -eq 0
         $leak = @($viaWindows.Ips | Where-Object { (Test-JuicerPublicIp $_) -and @($viaFilter.Ips) -notcontains $_ })
-        if ($viaWindows.Error -and $viaFilter.Error -and @($viaWindows.Ips).Count -eq 0) {
+        if (($viaWindows.Error -and -not $viaWindows.NxDomain) -and ($viaFilter.Error -and -not $viaFilter.NxDomain)) {
             & $add $null 'No se pudo hacer la prueba con una web para adultos' 'Puede que ahora no haya conexión.'
         } elseif ($leak.Count -gt 0) {
             & $add $false "Windows todavía abre $probe ($($leak -join ', '))" 'El DNS de esta conexión no es el filtrado (mira el punto anterior), o algo responde por él.'

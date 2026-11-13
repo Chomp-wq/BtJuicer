@@ -2002,6 +2002,13 @@ Describe 'Protección y Brave' {
         $bad[1].Title | Should -Be 'Windows todavía abre pornhub.com (66.254.114.41)'
     }
 
+    It 'la comprobación: «no existe» es el bloqueo del filtro, no un fallo' {
+        [void](Enable-JuicerShield)
+        $M.Backend.State.Resolve['pornhub.com|185.228.168.168'] = 'NXDOMAIN'
+        $M.Backend.State.Resolve['pornhub.com|'] = 'NXDOMAIN'
+        (@(Get-JuicerShieldCheck) | Where-Object { $_.Title -like '*pornhub*' }).Ok | Should -BeTrue
+    }
+
     It 'la comprobación: sin conexión no da nada por bueno ni por malo' {
         [void](Enable-JuicerShield)
         $c = @(Get-JuicerShieldCheck)

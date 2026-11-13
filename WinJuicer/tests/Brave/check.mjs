@@ -25,9 +25,11 @@ const out = {
 };
 if (phase === 'despues') {
   try {
-    await page.goto('brave://policy', { timeout: 15000 });
-    await page.waitForTimeout(3000);
-    out.policy = await page.innerText('body');
+    // A fresh tab: the last one may be sitting on an error page.
+    const p = await browser.newPage();
+    await p.goto('brave://policy', { timeout: 15000 });
+    await p.waitForTimeout(3000);
+    out.policy = await p.innerText('body');
   } catch (e) {
     out.policy = 'ERROR ' + String(e.message).split('\n')[0];
   }

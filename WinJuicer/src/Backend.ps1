@@ -416,15 +416,20 @@ function Get-WinDnsRoute {
 }
 
 # The A records a name resolves to, through Windows (as a browser would) or
-# straight from one server. @{ Ips; Error }.
+# straight from one server. @{ Ips; Error; NxDomain }: NxDomain when the answer
+# is that the name does not exist, which is how a filter blocks it and is not
+# a failure.
 function Resolve-WinName {
     param([string]$Name, [string]$Server = '')
     $p = @{ Name = $Name; Type = 'A'; DnsOnly = $true; QuickTimeout = $true; ErrorAction = 'Stop' }
     if ($Server) { $p.Server = $Server }
     try {
-        @{ Ips = @(Resolve-DnsName @p | Where-Object { $_.Type -eq 'A' } | ForEach-Object { [string]$_.IPAddress }); Error = '' }
+        @{ Ips = @(Resolve-DnsName @p | Where-Object { $_.Type -eq 'A' } | ForEach-Object { [string]$_.IPAddress }); Error = ''; NxDomain = $false }
     } catch {
-        @{ Ips = @(); Error = "$($_.Exception.Message)" }
+        # DNS_ERROR_RCODE_NAME_ERROR, in any language.
+        $code = $_.Exception.NativeErrorCode
+        if ($null -eq $code -and $_.Exception.InnerException) { $code = $_.Exception.InnerException.NativeErrorCode }
+        @{ Ips = @(); Error = "$($_.Exception.Message)"; NxDomain = ([int]$code -eq 9003) }
     }
 }
 
@@ -954,7 +959,10 @@ function New-JuicerMemoryBackend {
         ResolveName = {
             param($Name, $Server)
             $k = "$Name|$Server"
-            if ($script:Mem.Resolve.ContainsKey($k)) { @{ Ips = @($script:Mem.Resolve[$k]); Error = '' } } else { @{ Ips = @(); Error = 'sin respuesta' } }
+            if (-not $script:Mem.Resolve.ContainsKey($k)) { return @{ Ips = @(); Error = 'sin respuesta'; NxDomain = $false } }
+            $v = $script:Mem.Resolve[$k]
+            if ($v -eq 'NXDOMAIN') { return @{ Ips = @(); Error = 'no existe'; NxDomain = $true } }
+            @{ Ips = @($v); Error = ''; NxDomain = $false }
         }
         Browsers    = { , @($script:Mem.Browsers) }
         PolicyRefresh = { [void]$script:Mem.Calls.Add('RefreshPolicyEx') }

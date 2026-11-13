@@ -64,7 +64,10 @@ try {
     if ($after.policy -match '(?i)unknown policy|política desconocida') { $fail += 'Brave no reconoce alguna de las reglas.' }
 
     Write-Host 'Comprobación de Win Juicer:'
-    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'WinJuicer.ps1') -ProteccionAdultos Comprobar | Out-Host
+    $check = & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'WinJuicer.ps1') -ProteccionAdultos Comprobar *>&1 | Out-String
+    Write-Host $check
+    if ($LASTEXITCODE -ne 0) { $fail += 'La comprobación de Win Juicer encontró problemas.' }
+    if ($check -notmatch 'está bloqueada en este PC') { $fail += 'La comprobación de Win Juicer no confirmó el bloqueo con su prueba real.' }
 
     if ($fail.Count -gt 0) { $fail | ForEach-Object { Write-Host "FALLO: $_" }; exit 1 }
     Write-Host "Bien: $($baseline -join ' y ') cargaban antes y ya no; Brave Search bloqueado; Brave aplica las reglas."
