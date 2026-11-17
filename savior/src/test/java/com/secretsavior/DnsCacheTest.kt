@@ -182,6 +182,36 @@ class DnsCacheTest {
     }
 
     @Test
+    fun forgetStaleKeepsFreshEntriesServed() {
+        val c = cache()
+        c.store(query("example.com"), response("example.com", listOf(a(60))))
+        now += 10_000
+        c.forgetStale()
+        val hit = c.lookup(query("example.com"))!!
+        assertFalse(hit.stale)
+    }
+
+    @Test
+    fun forgetStaleStopsServingExpiredEntriesStoredBefore() {
+        val c = cache()
+        c.store(query("example.com"), response("example.com", listOf(a(30))))
+        now += 31_000 // caducada: se serviría como caducada
+        c.forgetStale()
+        assertNull(c.lookup(query("example.com")))
+        assertEquals(0, c.size) // y se tira
+    }
+
+    @Test
+    fun entriesStoredAfterForgetStaleAreServedStaleNormally() {
+        val c = cache()
+        c.forgetStale()
+        now += 1_000
+        c.store(query("example.com"), response("example.com", listOf(a(30))))
+        now += 31_000
+        assertTrue(c.lookup(query("example.com"))!!.stale)
+    }
+
+    @Test
     fun staleAnswersExpireAfterMaxStale() {
         val c = cache(maxStaleMs = 60_000)
         c.store(query("example.com"), response("example.com", listOf(a(30))))

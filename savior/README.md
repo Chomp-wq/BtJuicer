@@ -75,8 +75,25 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   y sólo cierra la ficha de desinstalar, parar o borrar datos de Secret Savior; que la
   lista del optimizador nombre la app ya no basta.
 - **El guardián no frena otras apps.** Descarta al instante los eventos de las apps
-  que no vigila, sin pedirles nada. En navegadores pide la barra de direcciones por su
-  id (una consulta) y en Ajustes revisa la pantalla como mucho dos veces por segundo.
+  que no vigila, sin pedirles nada. En navegadores lee la barra de direcciones por su
+  id (una consulta) con un temporizador, no con eventos, y en Ajustes revisa la pantalla
+  como mucho dos veces por segundo.
+- **Caché DNS local.** Lo ya preguntado se contesta al momento, sin ir a CleanBrowsing.
+  Si la respuesta caducó se sirve igualmente (con un TTL corto) y se renueva en segundo
+  plano, y la que está a punto de caducar se renueva antes de hacerlo. Las respuestas
+  negativas no se sirven caducadas, y al cambiar de red se olvidan las caducadas: lo que
+  contestó otra red (un Wi-Fi de hotel que secuestra el DNS) no se reutiliza al salir.
+- **Cambio de red sin esperas.** Al pasar de Wi-Fi a datos (o al revés) las consultas en
+  vuelo se reenvían al instante: las que salieron por la red vieja nunca van a contestar
+  y, sin esto, cada una esperaría a la escalada de 0,8 s.
+- **El guardián sólo pide lo imprescindible.** Cambios de ventana siempre; texto escrito sólo
+  con un navegador, YouTube/Google, Telegram o Reddit delante; cambios de contenido, sólo en
+  las pantallas de Ajustes del sistema.
+  En navegadores relee la barra de direcciones cada 1,5 s, y cada 10 s con la pantalla
+  apagada, cuando no puede haber nada nuevo que ver.
+- **Prioridad de los hilos del DNS.** El lector del túnel y el receptor de respuestas
+  (y los hilos de DNS por TCP) corren con prioridad de primer plano: todas las conexiones
+  del teléfono esperan por ellos y no deben perder la CPU frente a trabajo en segundo plano.
 
 Lo que no depende de la app: la primera visita a cada dominio espera la respuesta de
 CleanBrowsing, que según dónde estés puede estar más lejos que el DNS de tu

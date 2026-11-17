@@ -214,6 +214,19 @@ class DnsForwarder(
         }
     }
 
+    /**
+     * La red cambió (Wi-Fi a datos o al revés). Se olvidan las respuestas caducadas de la red
+     * anterior y se reenvían a los primarios todas las consultas en vuelo: lo que se mandó por la
+     * red vieja no va a contestar, y sin esto cada una esperaría a la escalada de [escalateAfterMs].
+     * Se llama desde el hilo de ConnectivityManager. No toca los temporizadores: la escalada y el
+     * abandono siguen su curso, y reenviar es inofensivo (la primera respuesta gana).
+     */
+    fun onNetworkChanged() {
+        if (closed) return
+        cache?.forgetStale()
+        for (p in pending.values) send(p, primaries)
+    }
+
     /** Tiempo medio de respuesta (media móvil), para verlo en la app y saber si el resolutor va lento. */
     val averageMs: Long get() = averageMicros.get() / 1000
 

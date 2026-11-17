@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
@@ -52,17 +53,23 @@ class GuardService : AccessibilityService() {
     private val urlBarIds = HashMap<String, String>()
     private val urlBarMisses = HashMap<String, Long>()
 
+    /** Se pide una vez; null si el sistema no lo da (se sondea como con pantalla encendida). */
+    private val power by lazy { getSystemService(PowerManager::class.java) }
+
     /**
      * En vez de suscribirse a los cambios de contenido del navegador (la web los emite sin
-     * parar), se relee la barra de direcciones cada [BROWSER_POLL_MS]: es una sola consulta.
+     * parar), se relee la barra de direcciones cada [BROWSER_POLL_MS] (cada [BROWSER_IDLE_POLL_MS] con la pantalla apagada): es una sola consulta.
      * Sigue mientras el modo sea el de navegador, aunque se salte de uno a otro.
      */
     private val browserPoll = object : Runnable {
         override fun run() {
             val pkg = foreground
             if (mode != MODE_BROWSER || pkg == null || pkg !in BROWSERS) return
-            if (Store.isLocked(this@GuardService)) check(pkg)
-            handler.postDelayed(this, BROWSER_POLL_MS)
+            // Con la pantalla apagada no llega ningún cambio de ventana y el navegador sigue
+            // "delante": no vale la pena una consulta cada 1,5 s mientras la CPU esté despierta.
+            val interactive = power?.isInteractive != false
+            if (interactive && Store.isLocked(this@GuardService)) check(pkg)
+            handler.postDelayed(this, if (interactive) BROWSER_POLL_MS else BROWSER_IDLE_POLL_MS)
         }
     }
 
@@ -455,6 +462,9 @@ class GuardService : AccessibilityService() {
         const val MODE_TEXT = 3
         const val MODE_BROWSER = 4
         const val BROWSER_POLL_MS = 1_500L
+
+        /** El mismo sondeo con la pantalla apagada: sólo para enterarse de que se encendió. */
+        const val BROWSER_IDLE_POLL_MS = 10_000L
         const val VENDOR_RETRY_MS = 450L
         const val VENDOR_ATTEMPTS = 6
 

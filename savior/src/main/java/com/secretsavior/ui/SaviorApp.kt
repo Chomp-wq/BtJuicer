@@ -327,8 +327,9 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                                     "Si pasa sólo en una red, esa red bloquea DNS externo (hoteles, trabajo, colegio); " +
                                     "si pasa en todas, comprueba que Secret Savior tenga acceso a datos y Wi-Fi en " +
                                     "Seguridad → Uso de datos."
-                            slow -> "DNS: ${dns.averageMs} ms de media (lento: puede ser la red)"
-                            else -> "DNS: ${dns.averageMs} ms de media"
+                            dns.recentTotal == 0 -> "DNS: todo desde caché"
+                            slow -> "DNS: ${dns.averageMs} ms de media (lento: puede ser la red)" + (dns.cachePercent?.let { " · $it % desde caché" } ?: "")
+                            else -> "DNS: ${dns.averageMs} ms de media" + (dns.cachePercent?.let { " · $it % desde caché" } ?: "")
                         },
                         style = MaterialTheme.typography.bodySmall,
                         color = if (dns.broken || slow) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,

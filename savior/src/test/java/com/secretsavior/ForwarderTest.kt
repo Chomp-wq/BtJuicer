@@ -129,6 +129,39 @@ class ForwarderTest {
     }
 
     @Test
+    fun aNetworkChangeResendsInFlightQueriesAtOnce() {
+        // Ignora el primer paquete (el de la red vieja) y contesta el segundo.
+        val server = DatagramSocket(0, lo).also { closeables += AutoCloseable { it.close() } }
+        val count = AtomicInteger()
+        Thread {
+            val buf = ByteArray(4096)
+            while (!server.isClosed) {
+                val p = DatagramPacket(buf, buf.size)
+                try { server.receive(p) } catch (e: Exception) { break }
+                if (count.incrementAndGet() < 2) continue
+                val reply = buf.copyOf(p.length).also { it[2] = (it[2].toInt() or 0x80).toByte() }
+                server.send(DatagramPacket(reply, reply.size, p.socketAddress))
+            }
+        }.apply { isDaemon = true; start() }
+        val f = DnsForwarder(
+            listOf(InetSocketAddress(lo, server.localPort)), emptyList(),
+            protect = {}, cache = null, escalateAfterMs = 3_000, giveUpAfterMs = 6_000,
+        ).also { closeables += it }
+
+        val latch = CountDownLatch(1)
+        var result: ByteArray? = null
+        val start = System.nanoTime()
+        f.query(q("example.com", 5)) { result = it; latch.countDown() }
+        Thread.sleep(100) // el primer paquete ya salió y se ignoró
+        assertEquals(1, count.get())
+        f.onNetworkChanged()
+        assertTrue("sin respuesta tras el cambio de red", latch.await(1, TimeUnit.SECONDS))
+        val ms = (System.nanoTime() - start) / 1_000_000
+        assertNotNull(result)
+        assertTrue("tardó $ms ms", ms < 1_500)
+    }
+
+    @Test
     fun givesUpWithNullWhenNobodyAnswers() {
         val f = forwarder(listOf(fake(silent = true)), listOf(fake(silent = true)))
         assertNull(ask(f, 2))

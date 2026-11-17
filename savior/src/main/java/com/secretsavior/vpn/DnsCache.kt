@@ -60,10 +60,25 @@ class DnsCache(
     private var staleCount = 0
     private var missCount = 0
 
+    /** Las entradas guardadas antes de este instante no se sirven caducadas (ver [forgetStale]). */
+    private var staleCutoff = Long.MIN_VALUE
+
     /** Contestadas con una respuesta vigente, contestadas con una caducada, y sin respuesta. */
     val hits: Int get() = synchronized(lock) { hitCount }
     val staleHits: Int get() = synchronized(lock) { staleCount }
     val misses: Int get() = synchronized(lock) { missCount }
+
+    /**
+     * Deja de servir caducadas las respuestas guardadas hasta ahora; vigentes (dentro de su TTL)
+     * siguen valiendo. Se llama al cambiar de red: lo que contestó otra red (un Wi-Fi de hotel o
+     * de portal cautivo que secuestra el DNS, por ejemplo) no debe reutilizarse durante horas al
+     * salir de ella. Dentro de su TTL sí es aceptable, y es lo que hace también la caché de
+     * Android. Lo guardado después de esta llamada se sirve caducado con normalidad.
+     */
+    fun forgetStale() {
+        val t = clock()
+        synchronized(lock) { staleCutoff = t }
+    }
 
     /** Entradas guardadas ahora mismo. */
     val size: Int get() = synchronized(lock) { map.size }
@@ -108,7 +123,7 @@ class DnsCache(
                 val refresh = !e.negative && remaining < maxOf(ttlMs / 10, PREFETCH_MIN_MS)
                 return Hit(out, stale = false, needsRefresh = refresh)
             }
-            if (!e.negative && age - ttlMs < maxStaleMs) {
+            if (!e.negative && age - ttlMs < maxStaleMs && e.storedAt >= staleCutoff) {
                 for (o in e.ttlOffsets) put32(out, o, staleTtlSec.toLong())
                 return Hit(out, stale = true, needsRefresh = true)
             }

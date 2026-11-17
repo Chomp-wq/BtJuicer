@@ -4,13 +4,15 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
+import android.net.Network
 import android.net.NetworkCapabilities
+import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
-import android.os.Process
 import android.os.ParcelFileDescriptor
+import android.os.Process
 import android.system.OsConstants
 import android.util.Log
 import com.secretsavior.MainActivity
@@ -40,6 +42,7 @@ class SaviorVpnService : VpnService() {
     @Volatile
     private var forwarder: DnsForwarder? = null
     private val writeLock = Any()
+    private var networkCallback: ConnectivityManager.NetworkCallback? = null
 
     /** Los bytes de la dirección del "servidor DNS" de este túnel (la subred se elige al arrancar). */
     @Volatile
@@ -113,7 +116,13 @@ class SaviorVpnService : VpnService() {
             return
         }
         val fwd = try {
-            DnsForwarder(PRIMARY, FALLBACK, protect = { protect(it) }, protectTcp = { protect(it) })
+            DnsForwarder(
+                PRIMARY, FALLBACK,
+                protect = { protect(it) },
+                protectTcp = { protect(it) },
+                // El receptor es quien entrega cada respuesta: que no pierda la CPU frente a segundo plano.
+                onThreadStart = { try { Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND) } catch (e: Exception) { } },
+            )
         } catch (e: IOException) {
             null
         }
@@ -136,7 +145,36 @@ class SaviorVpnService : VpnService() {
         tun = pfd
         current = this
         running = true
+        watchNetworks()
         reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
+    }
+
+    /**
+     * Avisa al reenviador cuando cambia la red real (Wi-Fi a datos y al revés). Las VPN se
+     * excluyen: la nuestra no cuenta. Al registrarse, onAvailable se llama una vez por cada red que
+     * ya existe; es inofensivo (caché sin nada caducado que olvidar y ninguna consulta en vuelo).
+     */
+    private fun watchNetworks() {
+        try {
+            val cm = getSystemService(ConnectivityManager::class.java) ?: return
+            val cb = object : ConnectivityManager.NetworkCallback() {
+                override fun onAvailable(network: Network) {
+                    forwarder?.onNetworkChanged()
+                }
+
+                override fun onLost(network: Network) {
+                    forwarder?.onNetworkChanged()
+                }
+            }
+            val request = NetworkRequest.Builder()
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
+                .build()
+            cm.registerNetworkCallback(request, cb)
+            networkCallback = cb
+        } catch (e: Exception) {
+            Log.w(TAG, "sin aviso de cambios de red", e)
+        }
     }
 
     /**
@@ -302,6 +340,14 @@ class SaviorVpnService : VpnService() {
         Store.flushNow(this)
         if (current === this) current = null
         reader?.interrupt()
+        networkCallback?.let {
+            try {
+                getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(it)
+            } catch (e: Exception) {
+                // no estaba registrado
+            }
+        }
+        networkCallback = null
         forwarder?.close()
         forwarder = null
         try {
@@ -346,10 +392,21 @@ class SaviorVpnService : VpnService() {
         /** Cómo va el DNS, o null si el filtro no corre o aún no ha contestado nada. */
         val dnsHealth: DnsHealth?
             get() = current?.forwarder?.let {
-                if (it.recentTotal == 0) null else DnsHealth(it.averageMs, it.recentTotal, it.recentFailed)
+                // Con la caché casi todo se contesta sin salir a la red: hay datos aunque recentTotal sea 0.
+                if (it.recentTotal == 0 && it.cacheLookups == 0) null
+                else DnsHealth(it.averageMs, it.recentTotal, it.recentFailed, it.cacheHits, it.cacheLookups)
             }
 
-        data class DnsHealth(val averageMs: Long, val recentTotal: Int, val recentFailed: Int) {
+        data class DnsHealth(
+            val averageMs: Long,
+            val recentTotal: Int,
+            val recentFailed: Int,
+            val cacheHits: Int = 0,
+            val cacheLookups: Int = 0,
+        ) {
+            /** Porcentaje de consultas contestadas desde la caché; null con pocas para que no bailen las cifras. */
+            val cachePercent: Int? get() = if (cacheLookups < 20) null else cacheHits * 100 / cacheLookups
+
             /** Más de la mitad de las últimas consultas sin respuesta: algo impide llegar a los resolutores. */
             val broken get() = recentTotal >= 10 && recentFailed * 2 >= recentTotal
         }
