@@ -42,6 +42,8 @@ class GuardService : AccessibilityService() {
      * Android sólo genera los tipos de evento que algún servicio pide, en todas las apps.
      * Con una app no vigilada delante se piden sólo los cambios de ventana; así WhatsApp, un
      * juego o Instagram no construyen un evento por cada cosa que se mueve en pantalla.
+     * Los cambios de contenido sólo se piden en las pantallas del sistema: en un navegador, un
+     * vídeo o un feed se producen sin parar y cada uno obliga a esa app a trabajar.
      */
     private var mode = -1
     private var foreground: String? = null
@@ -49,6 +51,20 @@ class GuardService : AccessibilityService() {
     /** Qué id tiene la barra de direcciones de cada navegador, una vez averiguado. */
     private val urlBarIds = HashMap<String, String>()
     private val urlBarMisses = HashMap<String, Long>()
+
+    /**
+     * En vez de suscribirse a los cambios de contenido del navegador (la web los emite sin
+     * parar), se relee la barra de direcciones cada [BROWSER_POLL_MS]: es una sola consulta.
+     * Sigue mientras el modo sea el de navegador, aunque se salte de uno a otro.
+     */
+    private val browserPoll = object : Runnable {
+        override fun run() {
+            val pkg = foreground
+            if (mode != MODE_BROWSER || pkg == null || pkg !in BROWSERS) return
+            if (Store.isLocked(this@GuardService)) check(pkg)
+            handler.postDelayed(this, BROWSER_POLL_MS)
+        }
+    }
 
     private val tick = object : Runnable {
         override fun run() {
@@ -69,6 +85,7 @@ class GuardService : AccessibilityService() {
     override fun onDestroy() {
         handler.removeCallbacks(tick)
         handler.removeCallbacks(deferred)
+        handler.removeCallbacks(browserPoll)
         handler.removeCallbacks(vendorRecheck)
         super.onDestroy()
     }
@@ -179,7 +196,9 @@ class GuardService : AccessibilityService() {
 
     private fun modeFor(pkg: String) = when {
         isVendorSurface(pkg) -> MODE_VENDOR
-        pkg in BROWSERS || pkg in SEARCH_APPS || pkg in FEED_APPS || isSystemSurface(pkg) -> MODE_WATCH
+        pkg in BROWSERS -> MODE_BROWSER
+        pkg in SEARCH_APPS || pkg in FEED_APPS -> MODE_TEXT
+        isSystemSurface(pkg) -> MODE_WATCH
         else -> MODE_OFF
     }
 
@@ -191,10 +210,13 @@ class GuardService : AccessibilityService() {
         val info = serviceInfo ?: return
         info.eventTypes = when (newMode) {
             MODE_WATCH -> EVENTS_WATCHING
+            MODE_TEXT, MODE_BROWSER -> EVENTS_TYPING
             else -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         }
         serviceInfo = info
         mode = newMode
+        handler.removeCallbacks(browserPoll)
+        if (newMode == MODE_BROWSER) handler.postDelayed(browserPoll, BROWSER_POLL_MS)
     }
 
     private fun onTyped(event: AccessibilityEvent, pkg: String) {
@@ -430,6 +452,9 @@ class GuardService : AccessibilityService() {
         const val MODE_OFF = 0
         const val MODE_WATCH = 1
         const val MODE_VENDOR = 2
+        const val MODE_TEXT = 3
+        const val MODE_BROWSER = 4
+        const val BROWSER_POLL_MS = 1_500L
         const val VENDOR_RETRY_MS = 450L
         const val VENDOR_ATTEMPTS = 6
 
@@ -440,6 +465,10 @@ class GuardService : AccessibilityService() {
         val SWITCH_CLASSES = listOf("switch", "slidingbutton", "toggle", "checkbox")
         const val EVENTS_WATCHING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+
+        /** Sólo cambios de ventana y lo que se teclea: lo único que se usa en buscadores, feeds y navegadores. */
+        const val EVENTS_TYPING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
         val NEUTRAL_HINTS = listOf("inputmethod", "keyboard", "swiftkey", "com.baidu.input", "honeyboard")
         val NAG_STEPS_MS = longArrayOf(60_000L, 180_000L, 600_000L, 1_800_000L)
         const val TOAST_MS = 3_000L

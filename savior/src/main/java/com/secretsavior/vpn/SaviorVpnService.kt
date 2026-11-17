@@ -9,6 +9,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
 import android.util.Log
@@ -169,6 +170,9 @@ class SaviorVpnService : VpnService() {
     }
 
     private fun loop(pfd: ParcelFileDescriptor) {
+        // Todas las conexiones del teléfono esperan a este hilo para resolver su DNS: no puede
+        // perder la CPU frente a trabajo en segundo plano.
+        try { Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND) } catch (e: Exception) { }
         val input = FileInputStream(pfd.fileDescriptor)
         val output = FileOutputStream(pfd.fileDescriptor)
         val buf = ByteArray(32767)
