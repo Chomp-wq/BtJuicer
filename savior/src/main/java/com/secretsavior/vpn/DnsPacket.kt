@@ -169,8 +169,11 @@ object DnsPacket {
         return out
     }
 
-    /** La posición siguiente a un nombre (con o sin compresión), o -1 si está mal formado. */
-    private fun skipName(msg: ByteArray, start: Int): Int {
+    /**
+     * La posición siguiente a un nombre (con o sin compresión), o -1 si está mal formado.
+     * Interna porque también la usa [DnsCache] para recorrer los registros de una respuesta.
+     */
+    internal fun skipName(msg: ByteArray, start: Int): Int {
         var pos = start
         while (true) {
             if (pos < 0 || pos >= msg.size) return -1

@@ -5,6 +5,7 @@ import java.io.DataInputStream
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet6Address
 import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
@@ -41,6 +42,10 @@ import java.util.concurrent.atomic.AtomicLong
  * - Si la respuesta llega cortada (TC) se repite la consulta por TCP al mismo servidor: el
  *   túnel no sirve DNS por TCP, y sin esto esa búsqueda fallaba en el cliente.
  *
+ * - Con [cache], lo que ya se preguntó se contesta al momento, sin ir a la red; si estaba
+ *   caducada o está a punto de caducar se renueva en segundo plano, una sola vez por pregunta
+ *   (ver [DnsCache]). Es lo que quita la espera de ida y vuelta a casi todas las conexiones.
+ *
  * El socket no se conecta a ninguna dirección a propósito: un socket UDP conectado se
  * queda con la ruta del momento y deja de funcionar al pasar de Wi-Fi a datos.
  */
@@ -51,6 +56,10 @@ class DnsForwarder(
     private val protectTcp: (Socket) -> Unit = {},
     private val escalateAfterMs: Long = 800,
     private val giveUpAfterMs: Long = 4_000,
+    /** null desactiva la caché: cada consulta va a la red. */
+    private val cache: DnsCache? = DnsCache(),
+    /** Se llama al arrancar cada hilo propio (receptor y TCP); en Android sirve para subirles la prioridad. */
+    private val onThreadStart: () -> Unit = {},
 ) : Closeable {
 
     private class Pending(
@@ -78,6 +87,7 @@ class DnsForwarder(
     }
     private val tcpPool = ThreadPoolExecutor(
         TCP_THREADS, TCP_THREADS, 10, TimeUnit.SECONDS, LinkedBlockingQueue(TCP_QUEUE),
+        { r -> Thread({ onThreadStart(); r.run() }, "savior-dns-tcp").apply { isDaemon = true } },
     ).apply { allowCoreThreadTimeOut(true) }
 
     @Volatile
@@ -93,6 +103,13 @@ class DnsForwarder(
     @Volatile
     private var primariesDownUntil = 0L
 
+    /** Preguntas que se están renovando en segundo plano: una sola renovación por pregunta. */
+    private val refreshing = ConcurrentHashMap.newKeySet<String>()
+
+    /** Hasta cuándo no se envía a direcciones IPv6 (porque el último envío falló). */
+    @Volatile
+    private var noIpv6Until = Long.MIN_VALUE
+
     // Antes que el hilo receptor: él los usa en cuanto arranca.
     private val averageMicros = AtomicLong(0)
     private val answeredCount = AtomicInteger()
@@ -101,19 +118,59 @@ class DnsForwarder(
     private var recentPos = 0
     private var recentSeen = 0
 
-    private val receiver = Thread(::receiveLoop, "savior-dns").apply {
+    private val receiver = Thread({ onThreadStart(); receiveLoop() }, "savior-dns").apply {
         isDaemon = true
         start()
     }
 
-    private fun newSocket(): DatagramSocket = DatagramSocket().also(protect)
+    private fun newSocket(): DatagramSocket = DatagramSocket().also {
+        // Una página que resuelve decenas de nombres, cada uno enviado a varios servidores, trae
+        // ráfagas de respuestas; con el búfer por defecto algunas se pierden y cuestan los 800 ms
+        // de la escalada. Si el sistema no deja, se queda con el suyo.
+        try {
+            it.receiveBufferSize = 1 shl 20
+        } catch (e: Exception) {
+        }
+        protect(it)
+    }
 
     /** Para las pruebas: el socket en uso, por si hay que romperlo. */
     internal fun currentSocket(): DatagramSocket = socket
 
-    /** [done] se llama una sola vez, desde otro hilo: con la respuesta o con null. */
+    /**
+     * [done] se llama una sola vez: con la respuesta o con null. Desde otro hilo si va a la red;
+     * si sale de la caché, desde el hilo que llama, que así no espera nada.
+     */
     fun query(query: ByteArray, done: (ByteArray?) -> Unit) {
-        if (closed || query.size < 12 || pending.size >= MAX_PENDING) {
+        if (closed || query.size < 12) {
+            done(null)
+            return
+        }
+        val hit = cache?.lookup(query)
+        if (hit != null) {
+            try {
+                done(hit.response)
+            } catch (e: Exception) {
+                // igual que en finish: un fallo al contestar no debe tumbar al llamador
+            }
+            if (hit.needsRefresh) refresh(query)
+            return
+        }
+        forward(query, done)
+    }
+
+    /**
+     * Renueva en segundo plano la pregunta de [query]: una consulta normal cuya respuesta nadie
+     * espera; [accept] ya la deja en la caché. Si ya hay una renovación en marcha no se repite.
+     */
+    private fun refresh(query: ByteArray) {
+        val key = DnsPacket.questionKey(query) ?: return
+        if (!refreshing.add(key)) return
+        forward(query.copyOf()) { refreshing.remove(key) }
+    }
+
+    private fun forward(query: ByteArray, done: (ByteArray?) -> Unit) {
+        if (pending.size >= MAX_PENDING) {
             done(null)
             return
         }
@@ -160,6 +217,10 @@ class DnsForwarder(
     /** Tiempo medio de respuesta (media móvil), para verlo en la app y saber si el resolutor va lento. */
     val averageMs: Long get() = averageMicros.get() / 1000
 
+    /** Para la interfaz: cuántas consultas se contestaron desde la caché y cuántas pasaron por ella. */
+    val cacheHits: Int get() = cache?.let { it.hits + it.staleHits } ?: 0
+    val cacheLookups: Int get() = cache?.let { it.hits + it.staleHits + it.misses } ?: 0
+
     /** Consultas contestadas y consultas que se quedaron sin respuesta, desde que arrancó. */
     val answered: Int get() = answeredCount.get()
     val unanswered: Int get() = failed.get()
@@ -183,11 +244,18 @@ class DnsForwarder(
     }
 
     private fun send(p: Pending, to: List<InetSocketAddress>) {
+        // Sin IPv6 cada envío a un servidor IPv6 lanza una excepción, y crearlas no sale gratis en
+        // el camino caliente: tras un fallo se dejan de usar un minuto. Si no hubiera otra cosa a
+        // la que enviar se envía igualmente: nunca se deja una consulta sin destino.
+        val skipV6 = now() < noIpv6Until && to.any { it.address !is Inet6Address }
         for (addr in to) {
+            val v6 = addr.address is Inet6Address
+            if (skipV6 && v6) continue
             p.sentTo.add(addr) // antes de enviar: la respuesta puede llegar al instante
             try {
                 socket.send(DatagramPacket(p.query, p.query.size, addr))
             } catch (e: Exception) {
+                if (v6) noIpv6Until = now() + IPV6_BACKOFF_MS
                 // Sin red en este instante (IOException) o sin IPv6 en este sistema
                 // (UnsupportedAddressTypeException, que no es de E/S): el temporizador decidirá.
                 // Dejarla escapar tumbaría al hilo que llama, que puede ser el lector del túnel.
@@ -250,6 +318,7 @@ class DnsForwarder(
         p.timer?.cancel(false)
         noteLatency(now() - p.sentAt)
         val response = buf.copyOf(len)
+        cache?.store(p.query, response) // antes de contestar: la siguiente consulta ya la encuentra
         put16(response, 0, p.originalId)
         if (DnsPacket.isTruncated(response)) tcpFallback(p, from, response) else finish(p, response)
     }
@@ -264,6 +333,7 @@ class DnsForwarder(
                 val usable = full != null && full.size <= limit && !DnsPacket.isTruncated(full) &&
                     u16(full, 0) == u16(p.query, 0) && DnsPacket.questionKey(full) == p.key
                 if (usable) {
+                    cache?.store(p.query, full!!)
                     put16(full!!, 0, p.originalId)
                     finish(p, full)
                 } else {
@@ -321,6 +391,7 @@ class DnsForwarder(
         const val RECENT = 50
         const val REBUILD_AFTER = 5
         const val MAX_BACKOFF_MS = 1_000L
+        const val IPV6_BACKOFF_MS = 60_000L
         const val TCP_THREADS = 4
         const val TCP_QUEUE = 32
         const val TCP_CONNECT_MS = 2_000

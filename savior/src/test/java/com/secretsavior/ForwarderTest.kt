@@ -1,5 +1,6 @@
 package com.secretsavior
 
+import com.secretsavior.vpn.DnsCache
 import com.secretsavior.vpn.DnsForwarder
 import com.secretsavior.vpn.DnsPacket
 import org.junit.After
@@ -71,7 +72,7 @@ class ForwarderTest {
         FakeDns(delayMs, silent, truncate).also { closeables += it }
 
     private fun forwarder(primaries: List<FakeDns>, fallbacks: List<FakeDns>) =
-        DnsForwarder(primaries.map { it.address }, fallbacks.map { it.address }, protect = {}, escalateAfterMs = 150, giveUpAfterMs = 600)
+        DnsForwarder(primaries.map { it.address }, fallbacks.map { it.address }, protect = {}, cache = null, escalateAfterMs = 150, giveUpAfterMs = 600)
             .also { closeables += it }
 
     /** Una consulta A de verdad: cabecera, nombre, tipo e IN. */
@@ -153,7 +154,7 @@ class ForwarderTest {
         // Donde no hay IPv6 el envío falla al instante; la IPv4 contesta igual de rápido.
         val v4 = fake()
         val f = DnsForwarder(
-            listOf(InetSocketAddress("2001:db8::1", 53), v4.address), emptyList(), protect = {},
+            listOf(InetSocketAddress("2001:db8::1", 53), v4.address), emptyList(), protect = {}, cache = null,
             escalateAfterMs = 150, giveUpAfterMs = 600,
         ).also { closeables += it }
         val start = System.nanoTime()
@@ -174,7 +175,7 @@ class ForwarderTest {
                 big.send(DatagramPacket(reply, reply.size, p.socketAddress))
             }
         }.apply { isDaemon = true; start() }
-        val f = DnsForwarder(listOf(InetSocketAddress(lo, big.localPort)), emptyList(), protect = {})
+        val f = DnsForwarder(listOf(InetSocketAddress(lo, big.localPort)), emptyList(), protect = {}, cache = null)
             .also { closeables += it }
         assertEquals(9000, ask(f, 4)!!.size)
     }
@@ -215,7 +216,7 @@ class ForwarderTest {
                 server.send(DatagramPacket(right, right.size, p.socketAddress))
             }
         }.apply { isDaemon = true; start() }
-        val f = DnsForwarder(listOf(InetSocketAddress(lo, server.localPort)), emptyList(), protect = {}, escalateAfterMs = 1_000, giveUpAfterMs = 3_000)
+        val f = DnsForwarder(listOf(InetSocketAddress(lo, server.localPort)), emptyList(), protect = {}, cache = null, escalateAfterMs = 1_000, giveUpAfterMs = 3_000)
             .also { closeables += it }
         val r = ask(f, 6, "example.com")!!
         assertEquals("example.com/1/1", DnsPacket.questionKey(r))
@@ -236,7 +237,7 @@ class ForwarderTest {
                 server.send(DatagramPacket(r, r.size, p.socketAddress))
             }
         }.apply { isDaemon = true; start() }
-        val f = DnsForwarder(listOf(InetSocketAddress(lo, server.localPort)), emptyList(), protect = {})
+        val f = DnsForwarder(listOf(InetSocketAddress(lo, server.localPort)), emptyList(), protect = {}, cache = null)
             .also { closeables += it }
         assertNotNull(ask(f, 8, "example.com"))
     }
@@ -244,7 +245,7 @@ class ForwarderTest {
     @Test
     fun anAnswerFromAServerThatWasNotAskedIsIgnored() {
         val silent = fake(silent = true)
-        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, escalateAfterMs = 150, giveUpAfterMs = 600)
+        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 150, giveUpAfterMs = 600)
             .also { closeables += it }
         val latch = CountDownLatch(1)
         var result: ByteArray? = byteArrayOf()
@@ -261,7 +262,7 @@ class ForwarderTest {
     @Test
     fun aQueryThatBouncesBackIsNotAnAnswer() {
         val silent = fake(silent = true)
-        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, escalateAfterMs = 150, giveUpAfterMs = 600)
+        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 150, giveUpAfterMs = 600)
             .also { closeables += it }
         val latch = CountDownLatch(1)
         var result: ByteArray? = byteArrayOf()
@@ -310,7 +311,7 @@ class ForwarderTest {
     @Test
     fun aTruncatedAnswerIsRetriedOverTcp() {
         val server = udpAndTcpOnTheSamePort(extraBytes = 4)
-        val f = DnsForwarder(listOf(server.address), emptyList(), protect = {}, escalateAfterMs = 1_000, giveUpAfterMs = 3_000)
+        val f = DnsForwarder(listOf(server.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 1_000, giveUpAfterMs = 3_000)
             .also { closeables += it }
         val query = q("example.com", 0x2222)
         val r = ask(f, 0x2222)!!
@@ -323,7 +324,7 @@ class ForwarderTest {
     @Test
     fun aTruncatedAnswerIsDeliveredAsIsWhenTcpFails() {
         val udp = fake(truncate = true) // y nadie escucha por TCP
-        val f = DnsForwarder(listOf(udp.address), emptyList(), protect = {}, escalateAfterMs = 1_000, giveUpAfterMs = 3_000)
+        val f = DnsForwarder(listOf(udp.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 1_000, giveUpAfterMs = 3_000)
             .also { closeables += it }
         val r = ask(f, 11, timeoutMs = 4_000)!!
         assertTrue("sigue cortada", DnsPacket.isTruncated(r))
@@ -334,7 +335,7 @@ class ForwarderTest {
     @Test
     fun aBrokenSocketIsReplacedAndDnsKeepsWorking() {
         val s = fake()
-        val f = DnsForwarder(listOf(s.address), emptyList(), protect = {}, escalateAfterMs = 150, giveUpAfterMs = 400)
+        val f = DnsForwarder(listOf(s.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 150, giveUpAfterMs = 400)
             .also { closeables += it }
         assertNotNull(ask(f, 12))
         f.currentSocket().close() // el sistema lo cierra, p. ej. al cambiar de red
@@ -349,8 +350,116 @@ class ForwarderTest {
     @Test
     fun aClosedForwarderAnswersNullInsteadOfThrowing() {
         val s = fake()
-        val f = DnsForwarder(listOf(s.address), emptyList(), protect = {})
+        val f = DnsForwarder(listOf(s.address), emptyList(), protect = {}, cache = null)
         f.close()
         assertNull(ask(f, 14))
+    }
+
+    // --- Caché -----------------------------------------------------------------------------
+
+    /** Un resolutor que da una dirección A de verdad, con TTL, para que la caché tenga qué guardar. */
+    private class AnswerDns(val ttl: Int, val delayMs: Long = 0) : AutoCloseable {
+        val socket = DatagramSocket(0, InetAddress.getLoopbackAddress())
+        val address = InetSocketAddress(InetAddress.getLoopbackAddress(), socket.localPort)
+        val received = AtomicInteger()
+
+        @Volatile
+        var ip = byteArrayOf(1, 1, 1, 1)
+        private val delayer = Executors.newSingleThreadScheduledExecutor()
+
+        init {
+            Thread {
+                val buf = ByteArray(4096)
+                while (!socket.isClosed) {
+                    val p = DatagramPacket(buf, buf.size)
+                    try {
+                        socket.receive(p)
+                    } catch (e: Exception) {
+                        break
+                    }
+                    received.incrementAndGet()
+                    val query = buf.copyOf(p.length)
+                    val end = DnsPacket.parseQuestion(query)!!.end
+                    val out = ByteArrayOutputStream()
+                    out.write(query, 0, 2)
+                    out.write(byteArrayOf(0x81.toByte(), 0x80.toByte(), 0, 1, 0, 1, 0, 0, 0, 0))
+                    out.write(query, 12, end - 12)
+                    out.write(byteArrayOf(0xC0.toByte(), 0x0C, 0, 1, 0, 1))
+                    out.write(byteArrayOf((ttl shr 24).toByte(), (ttl shr 16).toByte(), (ttl shr 8).toByte(), ttl.toByte(), 0, 4))
+                    out.write(ip)
+                    val reply = out.toByteArray()
+                    val to = p.socketAddress
+                    delayer.schedule({ runCatching { socket.send(DatagramPacket(reply, reply.size, to)) } }, delayMs, TimeUnit.MILLISECONDS)
+                }
+            }.apply { isDaemon = true; start() }
+        }
+
+        override fun close() {
+            socket.close()
+            delayer.shutdownNow()
+        }
+    }
+
+    private fun answerDns(ttl: Int, delayMs: Long = 0) = AnswerDns(ttl, delayMs).also { closeables += it }
+
+    private fun cachedForwarder(server: AnswerDns, cache: DnsCache) =
+        DnsForwarder(listOf(server.address), emptyList(), protect = {}, escalateAfterMs = 1_000, giveUpAfterMs = 3_000, cache = cache)
+            .also { closeables += it }
+
+    private fun ipOf(r: ByteArray) = r.copyOfRange(r.size - 4, r.size).joinToString(".") { (it.toInt() and 0xFF).toString() }
+
+    @Test
+    fun aRepeatedQueryIsAnsweredFromTheCacheWithoutTheNetwork() {
+        val server = answerDns(ttl = 300)
+        val f = cachedForwarder(server, DnsCache())
+        val first = ask(f, 0x0101)!!
+        assertEquals("1.1.1.1", ipOf(first))
+        val second = ask(f, 0x0202, name = "EXAMPLE.com")!!
+        assertEquals("1.1.1.1", ipOf(second))
+        assertEquals(0x02, second[0].toInt())
+        assertEquals(0x02, second[1].toInt())
+        assertEquals(1, server.received.get())
+        assertEquals(1, f.cacheHits)
+        assertEquals(2, f.cacheLookups)
+    }
+
+    @Test
+    fun aStaleHitAnswersAtOnceAndRefreshesExactlyOnce() {
+        val server = answerDns(ttl = 30, delayMs = 150)
+        var clock = 0L
+        val f = cachedForwarder(server, DnsCache(clock = { clock }))
+        assertEquals("1.1.1.1", ipOf(ask(f, 1)!!))
+        clock += 60_000 // caducada hace 30 s
+        server.ip = byteArrayOf(2, 2, 2, 2)
+
+        val n = 6
+        val start = CountDownLatch(1)
+        val done = CountDownLatch(n)
+        val answers = java.util.concurrent.ConcurrentLinkedQueue<ByteArray?>()
+        val pool = Executors.newFixedThreadPool(n)
+        try {
+            repeat(n) { i ->
+                pool.execute {
+                    start.await()
+                    f.query(q("example.com", 100 + i)) { answers += it; done.countDown() }
+                }
+            }
+            val t0 = System.nanoTime()
+            start.countDown()
+            assertTrue(done.await(100, TimeUnit.MILLISECONDS)) // antes de que el servidor (150 ms) pueda contestar
+            assertTrue((System.nanoTime() - t0) / 1_000_000 < 150)
+        } finally {
+            pool.shutdownNow()
+        }
+        assertTrue(answers.all { it != null && ipOf(it) == "1.1.1.1" })
+
+        // la renovación llega y reemplaza a la caducada
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+        while (server.received.get() < 2 && System.nanoTime() < deadline) Thread.sleep(10)
+        Thread.sleep(400) // por si hubiera una segunda renovación
+        assertEquals("una sola renovación", 2, server.received.get())
+        val fresh = ask(f, 50)!!
+        assertEquals("2.2.2.2", ipOf(fresh))
+        assertEquals(2, server.received.get())
     }
 }
