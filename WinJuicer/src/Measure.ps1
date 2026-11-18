@@ -30,6 +30,13 @@ function Get-JuicerMetrics {
         $b = Get-JuicerLastBoot
         if ($b) { $m.BootMs = $b.Total; $m.BootDate = $b.When.ToString('s') }
     } catch { Write-Verbose "Sin tiempo de arranque: $_" }
+    # Event 100 does not say whether the boot was a full one or a Fast Startup (hybrid) one, so
+    # what is kept is whether Fast Startup was on when measuring: it tells which kind of boot
+    # a shutdown-and-start gives, and a change of it between two measurements changes the number.
+    try {
+        $hb = Read-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled'
+        if ($null -ne $hb -and $null -ne $hb.Value) { $m.FastStartup = ([int]$hb.Value -ne 0) }
+    } catch { Write-Verbose "Sin inicio rápido: $_" }
     $m.Processes = @(Get-Process -ErrorAction SilentlyContinue).Count
     $m.Services = @(Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' }).Count
     try { $m.Startup = @(Get-JuicerStartupItems | Where-Object { $_.Enabled }).Count } catch { Write-Verbose "Sin inicio: $_" }
@@ -105,6 +112,10 @@ function Compare-JuicerMetrics {
         if ($r.Key -eq 'BootMs' -and $Before.BootDate -and $After.BootDate -and ([datetime]$After.BootDate) -eq ([datetime]$Before.BootDate)) {
             $out += New-JuicerFinding $area 'Info' ('{0}: {1:N1} s, todavía el mismo arranque' -f $r.Name, ($a / 1000)) 'Reinicia el equipo, espera un par de minutos y vuelve a medir: Windows cronometra cada arranque.'
             continue
+        }
+        if ($r.Key -eq 'BootMs' -and $null -ne $Before.FastStartup -and $null -ne $After.FastStartup -and [bool]$Before.FastStartup -ne [bool]$After.FastStartup) {
+            $kind = { param($on) if ($on) { 'con Inicio rápido (arranque híbrido tras apagar)' } else { 'sin Inicio rápido (arranque completo)' } }
+            $out += New-JuicerFinding $area 'Info' 'Los dos arranques no son del mismo tipo: la comparación del arranque no es justa' "La medida inicial se tomó $(& $kind ([bool]$Before.FastStartup)) y esta $(& $kind ([bool]$After.FastStartup)). Un arranque híbrido es bastante más corto que uno completo. Reiniciar (no apagar) siempre hace un arranque completo: reinicia en las dos medidas para compararlas bien."
         }
         $change = if ($b -ne 0) { ($a - $b) / [Math]::Abs($b) } else { $a - $b }
         $better = if ($r.Higher) { $a -gt $b } else { $a -lt $b }

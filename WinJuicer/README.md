@@ -49,7 +49,13 @@ irm https://github.com/Chomp-wq/BtJuicer/releases/download/winjuicer/winjuicer.p
 Descarga la última versión, comprueba que el zip es exactamente el publicado
 (SHA256) y la abre como administrador. Se descarga y comprueba en cada
 arranque, así que no queda nada guardado que alguien pudiera cambiar para que
-se ejecute como administrador la próxima vez. La release la publica el CI
+se ejecute como administrador la próxima vez. Lo que se ejecuta como
+administrador nunca sale de una carpeta que un usuario normal pueda escribir:
+el zip baja a `%TEMP%`, pero el proceso ya elevado lo copia a una carpeta de
+`Archivos de programa` (`WinJuicer-descarga`), vuelve a calcular su SHA256 sobre
+esa copia y sólo entonces lo descomprime y lo ejecuta; si alguien cambia el zip
+entre medias, no coincide y no se ejecuta nada. Si cancelas la ventana de
+permisos (UAC) lo dice y borra lo descargado, y la descarga tiene tiempo máximo. La release la publica el CI
 desde la rama principal, con todas las pruebas en verde.
 
 **O sin internet**: descarga la carpeta `WinJuicer` (o el `WinJuicer.zip` de la
@@ -92,7 +98,10 @@ optimizaciones. Se recuerda para la próxima vez.
 - En **Perfiles**, a la derecha: **Guardar selección…** guarda lo que has
   marcado como perfil propio; **Cargar selección…** lo vuelve a marcar (aquí o
   en otro PC) sin aplicar nada, para revisarlo antes. **Importar…** te enseña
-  lo que va a aplicar y lo aplica si dices que sí.
+  lo que va a aplicar y lo aplica si dices que sí. Pregunta una a una lo mismo
+  que al aplicar o quitar a mano: cada ajuste Extremo y cada app «con cuidado»
+  se confirman por separado, y las apps que tu equipo usa (Xbox con Game Pass,
+  la Game Bar en un Ryzen X3D de dos CCD…) se saltan y lo dice.
 
 Las pestañas:
 
@@ -650,7 +659,9 @@ gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
   usuario, sin administrador) avisa con una notificación si:
   - una actualización de BIOS lo ha borrado;
   - la RAM ha vuelto a otra velocidad;
-  - hay errores WHEA o cuelgues del driver de la gráfica desde entonces;
+  - hay errores WHEA graves o corregidos (18, 19 y 47: los que delatan un
+    undervolt o una RAM inestables; el resto de eventos de WHEA no cuentan) o
+    cuelgues del driver de la gráfica desde entonces;
   - Afterburner ya no arranca con Windows.
 
 Los valores son puntos de partida: cada chip es distinto. Pruébalos como dice
@@ -914,8 +925,12 @@ tareas y servicios de inicio, procesos y servicios en marcha, memoria en uso y
 espacio libre. «Medir antes y después» (o `-Medir`) mide otra vez y lo compara,
 en verde lo que ha mejorado. El arranque sólo cambia después de reiniciar, y la
 memoria y los procesos dependen de lo que tengas abierto: lo justo es medir las
-dos veces recién reiniciado y con todo cerrado (si no, lo avisa). «Nueva
-medida inicial» empieza la comparación desde ahora.
+dos veces recién reiniciado y con todo cerrado (si no, lo avisa). Windows no
+dice si un arranque fue completo o con Inicio rápido (híbrido, mucho más corto
+tras apagar), así que cada medida guarda si el Inicio rápido estaba activado; si
+la inicial y la actual difieren, el arranque se compara con un aviso de que son
+de distinto tipo (reiniciar siempre hace un arranque completo). «Nueva medida
+inicial» empieza la comparación desde ahora.
 
 ### Exportar e importar
 
@@ -924,6 +939,8 @@ este equipo —ajustes, preferencias, apps quitadas y DNS— y en otro PC
 *Importar* lo aplica, con el mismo motor y el mismo diario, así que también se
 deshace. Lo que sólo tiene sentido aquí (programas de inicio, ajustes de un
 `.exe`) no se exporta, y lo que no aplique en el otro equipo se salta y lo dice.
+Al importar desde la ventana, lo Extremo, las apps «con cuidado» y las que ese
+equipo necesita se tratan como al aplicarlas o quitarlas a mano (ver arriba).
 
 ### Mantenimiento
 

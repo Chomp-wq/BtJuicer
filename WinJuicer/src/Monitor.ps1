@@ -20,6 +20,19 @@ $script:StrobeNames = @{
     AORUS = 'Aim Stabilizer (o Aim Stabilizer Sync)'; AOC = 'MBR (Motion Blur Reduction)'; ViewSonic = 'PureXP'; Dell = 'Motion Blur Reduction'
 }
 
+# The short form for running text («usado con DyAc»). Cutting the long name at its first
+# space left «Motion», «Anti» or «Aim», which mean nothing on their own.
+$script:StrobeShortNames = @{
+    ASUS = 'ELMB'; BenQ = 'DyAc'; LG = 'Motion Blur Reduction'; Acer = 'VRB'; MSI = 'Anti Motion Blur'
+    Gigabyte = 'Aim Stabilizer'; AORUS = 'Aim Stabilizer'; AOC = 'MBR'; ViewSonic = 'PureXP'; Dell = 'Motion Blur Reduction'
+}
+
+function Get-JuicerStrobeShortName {
+    param([string]$Brand)
+    if ($Brand -and $script:StrobeShortNames.Contains($Brand)) { return $script:StrobeShortNames[$Brand] }
+    'estroboscopio'
+}
+
 # Everything worth knowing in one EDID, or null if it is not one.
 function ConvertFrom-JuicerEdidInfo {
     param([byte[]]$Edid)
@@ -200,7 +213,7 @@ function Format-JuicerMonitor {
     }
     if ($i -and $i.Hdr10) { $parts += $(if ($i.MaxNits) { "HDR10 (~$($i.MaxNits) nits)" } else { 'HDR10' }) }
     if ($Monitor.Mode -and $Monitor.Mode -ne 'Automatico') {
-        $strobe = if ($i -and $script:StrobeNames.Contains($i.Brand)) { ($script:StrobeNames[$i.Brand] -split ' ')[0] } else { 'estroboscopio' }
+        $strobe = Get-JuicerStrobeShortName $(if ($i) { $i.Brand })
         $parts += $(switch ($Monitor.Mode) {
                 'VRR' { 'usado con VRR' }
                 'Estrobo' { "usado con $strobe, sin VRR" }
@@ -245,7 +258,7 @@ function Get-JuicerMonitorFindings {
             }
             'Estrobo' {
                 $out += New-JuicerFinding 'Monitor' 'Info' $title ("Lo usas con ${strobe}: el movimiento más nítido posible, a frecuencia fija. Para que cada destello muestre un fotograma nuevo, el límite va exacto a los Hz ($($cap.Fps) FPS) con la sincronización vertical forzada; Win Juicer lo pone así por juego. Si el juego no llega a los Hz, el estrobo enseña cada fotograma repetido como un salto.")
-                $out += New-JuicerFinding 'Monitor' 'Info' "Cómo sacarle partido a $(($strobe -split ' ')[0])" ('El estroboscopio suele funcionar sólo a ciertas frecuencias, y a menudo no a la máxima: si la opción sale gris, baja un escalón los Hz. El overdrive, en el nivel que el monitor asocia al estrobo (normalmente el intermedio): uno alto deja imágenes dobles. Baja el brillo de la habitación, no el del monitor: el estrobo ya le quita bastante.')
+                $out += New-JuicerFinding 'Monitor' 'Info' "Cómo sacarle partido $(if ($script:StrobeShortNames.Contains($i.Brand)) { "a $(Get-JuicerStrobeShortName $i.Brand)" } else { al estroboscopio })" ('El estroboscopio suele funcionar sólo a ciertas frecuencias, y a menudo no a la máxima: si la opción sale gris, baja un escalón los Hz. El overdrive, en el nivel que el monitor asocia al estrobo (normalmente el intermedio): uno alto deja imágenes dobles. Baja el brillo de la habitación, no el del monitor: el estrobo ya le quita bastante.')
                 foreach ($g in $Games) {
                     $c = Get-JuicerFpsCap $hz 'Estrobo' $g 0 $rates
                     if ($c.Warn) { $out += New-JuicerFinding 'Monitor' 'Medio' "$($g.Application) no sostiene $hz FPS con el estroboscopio" $c.Warn }

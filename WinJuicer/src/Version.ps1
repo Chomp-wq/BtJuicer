@@ -42,5 +42,10 @@ function Get-JuicerUpdateNotice {
     if (-not $Local -or $Local -eq 'dev' -or $env:WINJUICER_SIN_COMPROBAR) { return $null }
     $new = & $Latest
     if (-not $new -or $new -eq $Local) { return $null }
+    # Releases are named after a git short SHA, which has no order: «different» is all that can be
+    # said. Only when both are plain numbered versions (1.2.3) can an older published one be told apart.
+    if ($Local -match '^\d+(\.\d+)*$' -and $new -match '^\d+(\.\d+)*$') {
+        try { if ([version]$new -le [version]$Local) { return $null } } catch { Write-Verbose "Versiones no comparables: $_" }
+    }
     @{ Local = $Local; Latest = $new; Command = $script:OneLineCommand }
 }

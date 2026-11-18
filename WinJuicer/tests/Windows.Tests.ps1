@@ -486,8 +486,10 @@ Import-Module '$psm' -Force
         # Everything but the last line, which would download the real one.
         $lines = [IO.File]::ReadAllLines($r.Launcher)
         Invoke-Expression (($lines | Where-Object { $_ -notlike 'Start-WinJuicerOneLine *' }) -join "`n")
-        { Start-WinJuicerOneLine -Source $r.Zip -Sha256 ('0' * 64) -Version 'prueba' -NoLaunch } | Should -Throw '*no coincide*'
-        $main = Start-WinJuicerOneLine -Source $r.Zip -Sha256 $r.Sha256 -Version 'prueba' -NoLaunch
+        # An install folder of its own: the real one is under Program Files and needs administrator.
+        $wjRoot = Join-Path $out 'instalado'
+        { Start-WinJuicerOneLine -Source $r.Zip -Sha256 ('0' * 64) -Version 'prueba' -NoLaunch -InstallRoot $wjRoot } | Should -Throw '*no coincide*'
+        $main = Start-WinJuicerOneLine -Source $r.Zip -Sha256 $r.Sha256 -Version 'prueba' -NoLaunch -InstallRoot $wjRoot
         Test-Path -LiteralPath $main | Should -BeTrue
         Test-Path -LiteralPath (Join-Path (Split-Path -Parent $main) 'src\Gui.ps1') | Should -BeTrue
         $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'

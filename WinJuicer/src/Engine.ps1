@@ -17,9 +17,47 @@ $script:StartLabels = @{
 
 function Get-JuicerHome {
     $h = $env:WINJUICER_HOME
-    if (-not $h) { $h = Join-Path $env:ProgramData 'WinJuicer' }
+    $default = -not $h
+    if ($default) { $h = Join-Path $env:ProgramData 'WinJuicer' }
     if (-not (Test-Path -LiteralPath $h)) { New-Item -ItemType Directory -Path $h -Force | Out-Null }
+    # The journal, the metrics and the scripts the tool later runs as administrator live here, and
+    # ProgramData lets any user create and change files: only the real folder is locked down, once.
+    if ($default -and -not $script:HomeProtected -and (Test-JuicerWindows) -and (Test-JuicerAdmin)) {
+        # Set first: the log below asks for the home again.
+        $script:HomeProtected = $true
+        Protect-JuicerHome $h
+    }
     $h
+}
+
+# Administrators and SYSTEM full control, Users read-only, no inheritance from ProgramData.
+# If the folder belongs to someone who is not an administrator, ownership is taken first: its
+# owner could change the permissions back. Never throws; a failure goes to the log.
+function Protect-JuicerHome {
+    param([Parameter(Mandatory)][string]$Path)
+    try {
+        $sid = [Security.Principal.WellKnownSidType]
+        $admins = New-Object Security.Principal.SecurityIdentifier ($sid::BuiltinAdministratorsSid, $null)
+        $system = New-Object Security.Principal.SecurityIdentifier ($sid::LocalSystemSid, $null)
+        $users = New-Object Security.Principal.SecurityIdentifier ($sid::BuiltinUsersSid, $null)
+        $owner = (Get-Acl -LiteralPath $Path).GetOwner([Security.Principal.SecurityIdentifier])
+        if ($owner -ne $admins -and $owner -ne $system) {
+            # /A hands it to the Administrators group; /R covers what is already inside.
+            [void](Invoke-JuicerNative 'takeown.exe' @('/F', $Path, '/A', '/R', '/D', 'Y'))
+        }
+        $rights = [Security.AccessControl.FileSystemRights]
+        $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
+        $none = [Security.AccessControl.PropagationFlags]::None
+        $allow = [Security.AccessControl.AccessControlType]::Allow
+        $acl = New-Object Security.AccessControl.DirectorySecurity
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.SetOwner($admins)
+        foreach ($full in $admins, $system) { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule ($full, $rights::FullControl, $inherit, $none, $allow))) }
+        $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule ($users, $rights::ReadAndExecute, $inherit, $none, $allow)))
+        Set-Acl -LiteralPath $Path -AclObject $acl -ErrorAction Stop
+    } catch {
+        Write-JuicerLog "No se pudieron fijar los permisos de $Path`: $_"
+    }
 }
 
 function Get-JuicerJournalPath { Join-Path (Get-JuicerHome) 'diario.json' }
