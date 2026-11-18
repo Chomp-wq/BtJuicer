@@ -349,8 +349,8 @@ Describe 'Listo para jugar' {
     It 'sin datos no dice nada: lo desconocido no es ni bueno ni malo' {
         @(Get-JuicerReadyStatus @{}).Count | Should -Be 0
         @(Get-JuicerReadyStatus @{ GameMode = $null; HagsConfigured = $null; Windowed = $null; Rebar = $null; PlanKind = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0 }).Count | Should -Be 0
-        # No Windows here: nothing could be read.
-        @(Get-JuicerReady).Count | Should -Be 0
+        # Off Windows nothing can be read (on Windows, the real PC answers).
+        if (-not (& (Get-Module WinJuicer) { Test-JuicerWindows })) { @(Get-JuicerReady).Count | Should -Be 0 }
     }
 
     It 'un equipo en regla: todo con marca buena' {
