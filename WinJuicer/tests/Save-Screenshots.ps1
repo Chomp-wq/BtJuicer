@@ -34,7 +34,12 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             $script:Gui.Findings = @(Get-JuicerAudit)
             Show-JuicerGuiAudit $script:Gui.Findings
             Show-JuicerGuiDebloat @(Get-JuicerDebloatState $hw)
-            Show-JuicerGuiStartup @(Get-JuicerStartupReview)
+            # What Windows measured for the boot (Diagnostics-Performance), as it looks with data: the runner
+            # has no slow boots to show, so two plausible entries are drawn in addition to what it has.
+            $startup = @(Get-JuicerStartupReview)
+            $startup += @{ Id = 'hkcu-run:Steam'; Name = 'Steam'; Source = 'Registro (usuario)'; Kind = 'Registro'; Command = '"C:\Program Files (x86)\Steam\steam.exe" -silent'; Enabled = $true; Verdict = 'Prescindible'; Why = 'Funciona igual abriéndolo cuando lo necesites.'; BootDelay = 14.2 }
+            $startup += @{ Id = 'servicio:AdobeARMservice'; Name = 'Adobe Acrobat Update Service'; Source = 'Servicio'; Kind = 'Servicio'; Command = 'AdobeARMservice'; Enabled = $true; Verdict = 'Prescindible'; Why = 'Sólo busca actualizaciones.'; BootDelay = 4.6 }
+            Show-JuicerGuiStartup $startup
             Show-JuicerGuiLimiter (Get-JuicerGuiLimiter)
 
             # A sample gallery: drawn covers, an icon and a game with nothing.
@@ -81,6 +86,17 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             $script:Gui.GamesLoaded = $true
             Show-JuicerGuiGallery $games
             Show-JuicerGuiSafety @{ Protected = @(@{ Exe = 'cyberpunk2077.exe'; Name = 'Cyberpunk 2077'; Kind = 'Cierre'; Time = (Get-Date).AddHours(-3).ToString('s'); Module = 'nvwgf2umx.dll' }); Warned = @() }
+            # What Windows undid and how ready the PC is, with plausible data (the runner has neither):
+            # drawn only, nothing is read or applied. And the update notice with its two buttons.
+            $script:Gui.Snapshot.Drift = @(
+                @{ Id = 'juegos.modo'; Title = 'Modo juego'; State = 'Parcial'; Level = 1 }
+                @{ Id = 'juegos.hags'; Title = 'Programación de GPU acelerada por hardware'; State = 'Pendiente'; Level = 1 }
+                @{ Id = 'privacidad.telemetria'; Title = 'Telemetría al mínimo y sin sus tareas programadas'; State = 'Pendiente'; Level = 2 }
+            )
+            $script:Gui.ReadyLines = @(Get-JuicerReadyStatus @{ GameMode = $true; HagsConfigured = $true; HagsRestart = $true; Windowed = $true; Rebar = $true; PlanKind = 'Rendimiento'; CpuMax = 100; OnBattery = $false; MonitorHz = 60; MonitorMaxHz = 165 })
+            $c0 = $script:Gui.C
+            $c0.UpdateNote.Text = 'Hay otra versión publicada (a1b2c3d); tienes la 9f8e7d6.'
+            $c0.UpdatePanel.Visibility = 'Visible'
             Show-JuicerGuiHome
 
             $shot = {

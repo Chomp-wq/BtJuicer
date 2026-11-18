@@ -1,4 +1,4 @@
-# Win Juicer
+﻿# Win Juicer
 
 Exprime Windows 11 para jugar y para cargar rápido, sin humo y con vuelta atrás.
 
@@ -62,8 +62,13 @@ desde la rama principal, con todas las pruebas en verde.
 release) y haz doble clic en **`WinJuicer.cmd`**. Pide permisos de
 administrador y abre la ventana. Una copia descargada de la release sabe qué
 versión es: al abrirse mira si hay otra más nueva (lee la versión del
-arrancador publicado, 3 KB, nada más) y, si la hay, lo dice arriba con un botón
-para copiar la orden de una línea.
+arrancador publicado, 3 KB, nada más) y, si la hay, lo dice arriba con dos
+botones: **Actualizar ahora** y «Copiar la orden». Actualizar ahora **pregunta
+antes**, enseña la orden y, si dices que sí, abre una PowerShell nueva que
+ejecuta exactamente esa orden publicada, la que comprueba el SHA256 (ver arriba),
+y cierra Win Juicer; no actualiza nunca en silencio, y sólo acepta una orden con
+la forma de la publicada. En el menú de la consola es la opción **A**, con la
+misma pregunta.
 
 La ventana empieza **sencilla**, para que cualquiera pueda usarla: la pestaña
 **Empezar** tiene cuatro botones grandes, en palabras normales:
@@ -107,12 +112,12 @@ Las pestañas:
 
 | Pestaña | Qué tiene |
 |---|---|
-| **Empezar** | Los cuatro botones de arriba, con el estado de cada cosa. |
+| **Empezar** | Los cuatro botones de arriba, con el estado de cada cosa; «Listo para jugar» (abajo) y, sólo si Windows ha deshecho algo tuyo, «Qué ha cambiado». |
 | **Equipo** | El hardware detectado y el diagnóstico completo, BIOS y overclock incluidos. Botones «Aplicar lo recomendado para este equipo», «Guardar informe» (un .txt en el escritorio, para guardarlo o pedir ayuda en un foro) y «Medir antes y después». |
 | **Ajustes** | Todos los ajustes en una lista, para elegirlos uno a uno (arriba). Selección rápida: *Para este equipo* · *Seguro* · *Rendimiento* · *Extremo*. A la derecha, los detalles del ajuste; las preferencias (tema oscuro, extensiones…), el plan de máximo rendimiento y el DNS; y los perfiles: guardar y cargar tu selección, y *Exportar lo aplicado…* e *Importar…* para llevar tu configuración a otro PC. |
 | **Debloat** | Las apps que vienen con Windows y siguen instaladas, una a una, con lo que es cada una. |
 | **Instalar** | Programas habituales con winget: lanzadores de juegos, navegadores, herramientas de hardware. |
-| **Arranque** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. |
+| **Arranque** | Lo que arranca solo con Windows, con el mismo interruptor del Administrador de tareas, y qué es cada cosa: prescindible, opcional o necesaria. Botón para desactivar de golpe los prescindibles. Junto a cada uno, los segundos que Windows midió que retrasó el arranque (abajo). |
 | **Juegos** | La galería de tus juegos, con sus portadas, que encuentra solo. «Optimizar todos» en un clic, o pulsa un juego para su página: frame pacer (fluidez o latencia, ritmo automático o el tuyo, calibrar), gráfica potente, prioridad por encima de lo normal, modo prudente, medir FPS y frametimes, y qué poner dentro del juego. En «Mi pantalla y el frame pacer…», cómo usas el monitor, el motor y, con todas las opciones, medir cualquier juego y las exclusiones de Defender. |
 | **Mantenimiento** | Limpieza, TRIM, DISM y SFC, restablecer la red y Windows Update, componentes de Windows. |
 | **Deshacer** | Todo lo que ha cambiado Win Juicer, para devolverlo a como estaba. |
@@ -146,6 +151,11 @@ abre el menú de texto, con lo mismo:
   12  Lo que no hacemos    los «trucos» que circulan, y por qué no
 ```
 
+Debajo salen también **Antes y después**, **Ajuste fino**, **Protección contra
+contenido adulto** y **Listo para jugar** (16), la misma tarjeta de Empezar. Si
+Windows ha deshecho algo tuyo, el menú lo dice y **Deshacer** ofrece volver a
+aplicarlo (V).
+
 No se queda residente ni se conecta a internet salvo para lo que lo necesita
 (winget, reinstalar una app de la Tienda, .NET 3.5). Funciona con Windows
 PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
@@ -159,6 +169,10 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Recomendado -Simular                   # lo recomendado para este equipo, sin cambiar nada
 .\WinJuicer.ps1 -Recomendado
 .\WinJuicer.ps1 -Lista                                  # todos los ajustes y su estado
+.\WinJuicer.ps1 -Revisar                               # qué ha deshecho Windows de lo que aplicaste (no cambia nada)
+.\WinJuicer.ps1 -Revisar -Si                           # y volver a aplicarlo (los Extremo, con -AceptoRiesgos)
+.\WinJuicer.ps1 -Estado                                # «Listo para jugar»: Modo juego, HAGS, Resizable BAR, energía, monitor
+.\WinJuicer.ps1 -RestaurarDiario                       # diario dañado: restaura la copia anterior (diario.1.json)
 .\WinJuicer.ps1 -Medir                                  # antes y después: comparado con la medida inicial
 .\WinJuicer.ps1 -MedirJuego 60                          # FPS y frametimes de lo que juegues (empieza en 10 s)
 .\WinJuicer.ps1 -MedirJuego 60 -Juego cs2.exe           # sólo ese juego
@@ -238,6 +252,10 @@ Windows guarda las pruebas, y Win Juicer las lee:
   `MEMORY_MANAGEMENT`…), apagados inesperados, cuelgues del driver de la
   gráfica, y las veces que el firmware frenó el procesador por temperatura o
   potencia.
+- **La edad del driver de la gráfica**: avisa a los seis meses en una NVIDIA, una
+  AMD dedicada o una Intel Arc (sacan drivers para los juegos nuevos cada pocas
+  semanas) y al año en una integrada, con la web de descarga del fabricante
+  (nvidia.com/drivers, amd.com/support, intel.com/content/www/us/en/support/detect.html).
 - **El plan de energía**: si limita el procesador por debajo del 100 % o tiene
   el turbo desactivado, cosa que algunas guías recomiendan y cuesta mucho.
 - **BIOS y microcódigo**: Core de 13.ª/14.ª generación sin el microcódigo 0x12B
@@ -895,6 +913,47 @@ la revisión de hardware (HWiNFO, CPU-Z, GPU-Z, CrystalDiskInfo, DDU,
 NVCleanstall). Las sugeridas para tu equipo salen marcadas. Los identificadores
 son los mismos que mantiene WinUtil.
 
+### Listo para jugar
+
+Una tarjeta en **Empezar** (y `-Estado`, o la opción 16 de la consola) que dice
+de un vistazo, con ✓ o ⚠ y el motivo, si lo que importa para un juego está bien.
+No cambia nada:
+
+- **Modo juego** (en Windows 11 está activado mientras nadie lo apague).
+- **Programación de GPU acelerada por hardware (HAGS)**: configurada y activa.
+  Windows no la usa hasta reiniciar, así que si Win Juicer la puso después del
+  último arranque lo dice («configurada, pero aún no activa»). Si el driver
+  decide solo, o la gráfica no la admite, no aparece.
+- **Optimizaciones para juegos en ventana** (el modelo de presentación moderno;
+  con él la VRR también funciona en ventana o sin bordes).
+- **Resizable BAR**, si se puede ver: NVIDIA por `nvidia-smi`, el resto por los
+  rangos de memoria que Windows dio a la tarjeta.
+- **Plan de energía** (y si limita el procesador por debajo del 100 %), y si un
+  portátil está **con batería** o enchufado.
+- **El monitor**, a su frecuencia máxima o por debajo.
+
+Lo que no se puede leer **no aparece**: no se da por bueno ni por malo. Se calcula
+en segundo plano al abrir la ventana, y de nuevo al aplicar algo.
+
+### Qué ha cambiado: lo que Windows deshace
+
+Una actualización de funciones de Windows, un instalador de drivers u otro
+programa pueden devolver ajustes a su valor de fábrica sin avisar. Win Juicer
+compara el diario con el estado real: los ajustes que aplicó y que **ya no
+están en su sitio**. En Empezar sale una tarjeta, **sólo si hay algo**: «Windows
+ha deshecho N cambios tuyos», con la lista y el botón **Volver a aplicarlos**.
+
+- Vuelve a aplicarlos por el camino de siempre: los ajustes Extremo se confirman
+  uno a uno, hay una pregunta antes y todo sigue en el diario, así que deshacer sigue devolviendo cada ajuste a como
+  estaba antes de que Win Juicer lo tocara por primera vez.
+- No cuenta lo que el motor se salta a propósito: lo que ya no aplica a este
+  equipo, ni el perfil de un juego que está abierto (no se toca en marcha).
+- En la consola: **Deshacer** lo lista y ofrece V para volver a aplicarlos, y
+  `-Revisar` lo lista sin cambiar nada (código de salida 0); con `-Si` los aplica
+  de nuevo (con `-AceptoRiesgos` para los Extremo, `-Simular` para ver qué haría).
+- El mantenimiento de al iniciar sesión lo **apunta en el registro**
+  (`registro.log`), pero nunca lo vuelve a aplicar por su cuenta.
+
 ### Programas de inicio
 
 Lista lo que arranca con Windows —registro, carpetas de Inicio, tareas
@@ -916,6 +975,14 @@ OneDrive, el software de periféricos y RGB, Afterburner: según para qué los
 uses) o **necesarios** (Seguridad de Windows, el panel de audio, el touchpad).
 Los actualizadores de navegadores y antivirus no se tocan: son por donde llegan
 los parches. El diagnóstico cuenta cuántos prescindibles arrancan.
+
+**Cuánto retrasa cada uno el arranque**, medido por Windows y no estimado: junto
+a cada entrada, «+12 s» son los segundos que Windows anotó en los últimos 30 días
+(Diagnostics-Performance, eventos 101 de aplicaciones, 102 de drivers y 103 de
+servicios; se queda con el más reciente de cada uno). Se enlaza por el nombre del
+archivo (o del servicio). Windows sólo anota lo que va lento: **sin cifra** quiere
+decir que no hay dato, no que valga cero. Los de 2 s o más salen resaltados, y
+dentro de lo activado, los más lentos van primero.
 
 ### Antes y después
 
@@ -989,6 +1056,13 @@ el equipo sin vuelta atrás.
   filtrado como está.
 - Antes de aplicar intenta crear un **punto de restauración**, y dice si
   Windows lo creó o no (sólo permite uno cada 24 horas).
+
+- Cada vez que se guarda, el diario anterior (si se lee bien) queda como
+  `diario.1.json`, escrito de golpe como el resto: un corte de luz no deja medio
+  fichero. Si `diario.json` se daña, el error lo dice y se restaura con
+  `-RestaurarDiario` (o desde **Deshacer** en la consola): aparta el dañado como
+  `diario.dañado.json`, sin borrarlo, y pone la copia. La copia es un paso más
+  antigua: si el diario actual se lee bien, pregunta antes (con `-Si`, no).
 
 La ventana y la consola usan el mismo diario: lo que hagas en una se deshace en
 la otra. El registro de lo que se hizo, con fecha, queda en
@@ -1074,6 +1148,10 @@ mirar en un PC de verdad, empezando por la pestaña Equipo, que no cambia nada.
 ```powershell
 Invoke-Pester ./WinJuicer/tests
 ```
+
+`Features.Tests.ps1` cubre lo que Windows deshace, la copia del diario, los
+tiempos de arranque, «Actualizar ahora» (sólo cómo se construye la orden: no
+arranca nada), «Listo para jugar» y la edad de los drivers.
 
 Las pruebas de `Windows.Tests.ps1` cambian de verdad la configuración del equipo,
 nivel Extremo incluido, y luego la devuelven. Están pensadas para una máquina

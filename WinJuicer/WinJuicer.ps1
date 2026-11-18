@@ -95,6 +95,23 @@
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
 
+.PARAMETER Revisar
+    Lista lo que Windows (una actualización de funciones, otro programa) ha
+    deshecho de lo que Win Juicer aplicó: ajustes del diario cuyo estado real ya
+    no es el aplicado. No cambia nada. Con -Si los vuelve a aplicar, con las
+    mismas confirmaciones de siempre (los ajustes Extremo, con -AceptoRiesgos);
+    con -Simular, dice qué cambiaría.
+
+.PARAMETER RestaurarDiario
+    Si el diario de cambios está dañado, lo aparta como diario.dañado.json y
+    restaura diario.1.json, la copia del diario anterior que deja cada guardado.
+    Si el diario actual se lee bien, pregunta antes (con -Si, no).
+
+.PARAMETER Estado
+    «Listo para jugar»: Modo juego, programación de GPU (HAGS), optimizaciones
+    para juegos en ventana, Resizable BAR, plan de energía, batería y frecuencia
+    del monitor, con una marca y el motivo en cada línea. No cambia nada.
+
 .PARAMETER Recomendado
     Aplica lo recomendado para este equipo según su hardware.
 
@@ -172,6 +189,9 @@
     .\WinJuicer.ps1 -Recomendado -Simular
 
 .EXAMPLE
+    .\WinJuicer.ps1 -Revisar -Si
+
+.EXAMPLE
     .\WinJuicer.ps1 -Aplicar juegos.ventana,ui.menu -Si
 
 .EXAMPLE
@@ -205,6 +225,9 @@ param(
     [int]$Fps,
     [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
     [switch]$Lista,
+    [switch]$Revisar,
+    [switch]$RestaurarDiario,
+    [switch]$Estado,
     [switch]$Recomendado,
     [ValidateSet('Seguro', 'Rendimiento', 'Extremo')][string]$Perfil,
     [string[]]$Aplicar = @(),

@@ -348,6 +348,28 @@ function Get-JuicerHardwareAudit {
     $out
 }
 
+# How old a graphics driver may get before it is worth a warning, and where to get the
+# new one. Dedicated cards (NVIDIA, AMD, Intel Arc) get the new games' fixes in driver
+# releases every few weeks: half a year is already behind. An Intel or AMD integrated
+# GPU changes much less: a year. Null when the driver is recent enough, its age is
+# unknown (Age < 0) or the card is not one of these vendors.
+function Get-JuicerDriverAgeFinding {
+    param([string]$Name, [int]$Age)
+    if ($Age -lt 0 -or -not $Name) { return $null }
+    $t = Get-JuicerGpuTraits $Name
+    $url = switch ($t.Vendor) {
+        'NVIDIA' { 'https://www.nvidia.com/drivers' }
+        'AMD' { 'https://www.amd.com/support' }
+        'Intel' { 'https://www.intel.com/content/www/us/en/support/detect.html' }
+        default { $null }
+    }
+    if (-not $url) { return $null }
+    $limit = if ($t.Discrete) { 180 } else { 365 }
+    if ($Age -le $limit) { return $null }
+    $span = if ($limit -eq 180) { 'más de seis meses' } else { 'más de un año' }
+    New-JuicerFinding 'Gráfica' 'Medio' "El driver de $Name tiene $span ($Age días)" "Los drivers nuevos traen optimizaciones y arreglos para juegos recientes. Descárgalo de la web del fabricante: $url"
+}
+
 function Get-JuicerGraphicsAudit {
     $out = @()
     try {
@@ -360,9 +382,8 @@ function Get-JuicerGraphicsAudit {
             $date = $g.DriverDate
             $age = if ($date) { [int]((Get-Date) - $date).TotalDays } else { -1 }
             $out += New-JuicerFinding 'Gráfica' 'Info' ('{0} — driver {1}{2}' -f $g.Name, $g.DriverVersion, $(if ($date) { ' del ' + $date.ToString('d') } else { '' }))
-            if ($age -gt 365 -and $g.Name -match 'NVIDIA|AMD|Radeon|Arc') {
-                $out += New-JuicerFinding 'Gráfica' 'Medio' "El driver de $($g.Name) tiene más de un año" 'Los drivers nuevos traen optimizaciones para juegos recientes. Descárgalo de la web del fabricante.'
-            }
+            $stale = Get-JuicerDriverAgeFinding $g.Name $age
+            if ($stale) { $out += $stale }
         }
     } catch {
         $out += New-JuicerFinding 'Gráfica' 'Info' 'No se pudo leer la tarjeta gráfica.'
@@ -633,3 +654,139 @@ function Get-JuicerAudit {
     }
     $all
 }
+
+# --- Ready to play ------------------------------------------------------------------
+#
+# What matters for a game, in one glance, read-only. The builder is pure (fake inputs in the
+# tests); Get-JuicerReadyInputs reads this PC. Anything that could not be read is null in the
+# inputs and simply not in the list: «unknown» is never shown as good or as bad.
+
+# The plan by its GUID: Rendimiento (Win Juicer's, Ultimate, High performance), Equilibrado,
+# Economizador, or Otro.
+function Get-JuicerPlanKind {
+    param([string]$Guid)
+    $g = ([string]$Guid).Trim().ToLowerInvariant()
+    if (-not $g) { return $null }
+    if ($g -in $script:JuicerPlan, $script:UltimatePlan, $script:HighPerfPlan) { return 'Rendimiento' }
+    if ($g -eq $script:BalancedPlan) { return 'Equilibrado' }
+    if ($g -eq $script:PowerSaverPlan) { return 'Economizador' }
+    'Otro'
+}
+
+# In: GameMode, HagsConfigured, HagsRestart (configured after the last boot), Windowed, Rebar
+# (booleans or null); PlanKind and CpuMax (the processor's maximum state plugged in, %);
+# OnBattery (null on a desktop); MonitorHz and MonitorMaxHz (0 when unknown).
+# Out: @{ Key; Ok; Title; Reason } per thing known, always in the same order.
+function Get-JuicerReadyStatus {
+    param([hashtable]$In)
+    $out = New-Object System.Collections.ArrayList
+    $add = { param($k, $ok, $t, $r) [void]$out.Add(@{ Key = $k; Ok = [bool]$ok; Title = $t; Reason = $r }) }
+    if ($null -ne $In.GameMode) {
+        if ($In.GameMode) { & $add 'modo' $true 'Modo juego activado' '' }
+        else { & $add 'modo' $false 'Modo juego desactivado' 'Windows no prioriza el juego en primer plano. Actívalo en Configuración > Juegos > Modo de juego, o con el ajuste «juegos.modo».' }
+    }
+    if ($null -ne $In.HagsConfigured) {
+        if (-not $In.HagsConfigured) {
+            & $add 'hags' $false 'Programación de GPU acelerada por hardware desactivada' 'Baja algo la latencia y es obligatoria para la generación de fotogramas de DLSS. Ajuste «juegos.hags» (hace falta reiniciar).'
+        } elseif ($In.HagsRestart) {
+            & $add 'hags' $false 'Programación de GPU acelerada por hardware: configurada, pero aún no activa' 'Está puesta, pero Windows no la usa hasta reiniciar (Reiniciar, no Apagar: con el Inicio rápido apagar no cuenta).'
+        } else {
+            & $add 'hags' $true 'Programación de GPU acelerada por hardware activa' ''
+        }
+    }
+    if ($null -ne $In.Windowed) {
+        if ($In.Windowed) { & $add 'ventana' $true 'Optimizaciones para juegos en ventana activadas' '' }
+        else { & $add 'ventana' $false 'Optimizaciones para juegos en ventana desactivadas' 'Los juegos DirectX 10 y 11 en ventana o sin bordes no usan el modelo de presentación moderno: más latencia, y sin VRR en ventana. Ajuste «juegos.ventana».' }
+    }
+    if ($null -ne $In.Rebar) {
+        if ($In.Rebar) { & $add 'rebar' $true 'Resizable BAR activado' '' }
+        else { & $add 'rebar' $false 'Resizable BAR desactivado' 'Actívalo en la BIOS («Above 4G Decoding» y «Re-Size BAR Support»). Ningún programa puede hacerlo desde Windows.' }
+    }
+    if ($In.PlanKind) {
+        $cap = $null -ne $In.CpuMax -and [int]$In.CpuMax -gt 0 -and [int]$In.CpuMax -lt 100
+        if ($In.PlanKind -eq 'Economizador') {
+            & $add 'energia' $false 'Plan de energía: Economizador' 'Limita el procesador para ahorrar energía, también enchufado. Elige «Equilibrado» o el plan de Win Juicer (ajuste «energia.plan»).'
+        } elseif ($cap) {
+            & $add 'energia' $false ('El plan de energía limita el procesador al {0} %' -f [int]$In.CpuMax) 'Alguien bajó el «Estado máximo del procesador»: nunca llega a su frecuencia máxima. Súbelo a 100 % en Opciones de energía, o aplica el plan de Win Juicer («energia.plan»).'
+        } else {
+            $name = switch ($In.PlanKind) { 'Rendimiento' { 'máximo rendimiento' } 'Equilibrado' { 'Equilibrado' } default { 'personalizado' } }
+            & $add 'energia' $true "Plan de energía: $name" ''
+        }
+    }
+    if ($null -ne $In.OnBattery) {
+        if ($In.OnBattery) { & $add 'bateria' $false 'Funcionando con batería' 'El portátil limita procesador y gráfica aunque elijas el máximo rendimiento. Para jugar, conecta el cargador.' }
+        else { & $add 'bateria' $true 'Enchufado a la corriente' '' }
+    }
+    $hz = [int]$In.MonitorHz
+    $max = [int]$In.MonitorMaxHz
+    if ($hz -gt 0 -and $max -gt 0) {
+        if ($max -gt $hz + 1) { & $add 'monitor' $false "Monitor a $hz Hz, admite $max Hz" 'Cámbialo en Configuración > Sistema > Pantalla > Pantalla avanzada > Frecuencia de actualización. Si no aparece, el cable o el puerto no dan para más.' }
+        else { & $add 'monitor' $true "Monitor a su frecuencia máxima ($hz Hz)" '' }
+    }
+    $out.ToArray()
+}
+
+# Reads this PC for Get-JuicerReadyStatus. Each part on its own: one that fails is unknown.
+function Get-JuicerReadyInputs {
+    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0 }
+    if (-not (Test-JuicerWindows)) { return $in }
+    try {
+        # Windows 11 has it on until someone turns it off: a missing value is «on».
+        $gm = Read-JuicerReg 'HKCU\Software\Microsoft\GameBar' 'AutoGameModeEnabled'
+        $in.GameMode = -not ($gm -and $null -ne $gm.Value -and [int]$gm.Value -eq 0)
+    } catch { Write-Verbose "Sin modo juego: $_" }
+
+    $hw = $null
+    try { $hw = Get-JuicerHardwareProfile } catch { Write-Verbose "Sin hardware: $_" }
+    $main = $null
+    if ($hw) { $main = @(@($hw.Gpus | Where-Object { $_.Discrete }) + @($hw.Gpus)) | Where-Object { $_ } | Select-Object -First 1 }
+    try {
+        # Unset means the driver decides, which this cannot see: unknown. And a card that has no
+        # hardware scheduling has nothing to configure.
+        $h = Read-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' 'HwSchMode'
+        if ($h -and $null -ne $h.Value -and -not ($main -and $main.Hags -eq $false)) {
+            $in.HagsConfigured = ([int]$h.Value -eq 2)
+            if ($in.HagsConfigured) {
+                # What takes effect at the next boot is only «active» once there has been one: if Win Juicer
+                # set it after the last boot, it still waits.
+                $e = Get-JuicerJournalEntry (Read-JuicerJournal) 'juegos.hags'
+                $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
+                if ($e -and $e.AppliedAt -and $boot) { $in.HagsRestart = ([datetime]$e.AppliedAt) -gt $boot }
+            }
+        }
+    } catch { Write-Verbose "Sin HAGS: $_" }
+    try {
+        $w = Find-JuicerTweak 'juegos.ventana'
+        $st = Get-JuicerTweakState $w
+        if ($st.State -eq 'Aplicado') { $in.Windowed = $true } elseif ($st.State -in 'Pendiente', 'Parcial') { $in.Windowed = $false }
+    } catch { Write-Verbose "Sin optimizaciones de ventana: $_" }
+    try {
+        if ($main -and $main.Discrete) {
+            $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
+            if ($main.Vendor -eq 'NVIDIA' -and (Test-Path -LiteralPath $smi)) {
+                $bar = ConvertFrom-JuicerNvidiaSmi (Invoke-JuicerNative $smi @('-q', '-d', 'MEMORY')).Output
+                if ($bar) { $in.Rebar = [bool]$bar.Rebar }
+            } elseif ($main.Vendor -ne 'NVIDIA') {
+                $in.Rebar = Test-JuicerRebarRanges (Get-JuicerGpuMemoryRanges $main.PnpId)
+            }
+        }
+    } catch { Write-Verbose "Sin Resizable BAR: $_" }
+    try {
+        $plan = Get-JuicerActivePlan
+        $in.PlanKind = Get-JuicerPlanKind $plan
+        $max = ConvertFrom-JuicerPowerSetting (Invoke-JuicerNative 'powercfg.exe' @('/qh', 'SCHEME_CURRENT', 'SUB_PROCESSOR', 'PROCTHROTTLEMAX')).Output
+        if ($max) { $in.CpuMax = [int]$max.AC }
+    } catch { Write-Verbose "Sin plan de energía: $_" }
+    if ($hw -and $hw.Laptop) {
+        # Read again: the profile is from when Win Juicer opened, and the charger may have moved since.
+        $in.OnBattery = [bool]$hw.OnBattery
+        try { $in.OnBattery = @(Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Where-Object { $_.PowerOnline -eq $false }).Count -gt 0 } catch { Write-Verbose "Sin batería: $_" }
+    }
+    try {
+        $m = Get-JuicerPrimaryMonitor
+        if ($m) { $in.MonitorHz = [int]$m.Display.Hz; $in.MonitorMaxHz = [int]$m.Display.MaxHz }
+    } catch { Write-Verbose "Sin monitor: $_" }
+    $in
+}
+
+function Get-JuicerReady { Get-JuicerReadyStatus (Get-JuicerReadyInputs) }

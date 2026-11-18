@@ -401,6 +401,7 @@ $script:GuiXaml = @'
       <CheckBox x:Name="ChkAdvanced" Content="Modo avanzado" DockPanel.Dock="Right" VerticalAlignment="Center" Margin="18,0,0,0" FontSize="14" ToolTip="Para quien sabe lo que toca: añade las pestañas de ajustes uno a uno (con lo que cambia exactamente cada uno), debloat, instalar programas, programas de arranque, ajuste fino y mantenimiento. Se recuerda para la próxima vez."/>
       <StackPanel x:Name="UpdatePanel" Orientation="Horizontal" DockPanel.Dock="Right" VerticalAlignment="Center" Visibility="Collapsed" Margin="16,0,0,0">
         <TextBlock x:Name="UpdateNote" Foreground="#F5B400" VerticalAlignment="Center"/>
+        <Button x:Name="BtnUpdateNow" Content="Actualizar ahora" Style="{StaticResource Accent}" ToolTip="Abre PowerShell con la orden publicada (comprueba la huella SHA256 de lo que descarga) y cierra Win Juicer. Pregunta antes."/>
         <Button x:Name="BtnUpdateCopy" Content="Copiar la orden" ToolTip="Cierra Win Juicer y pega la orden en PowerShell"/>
       </StackPanel>
     </DockPanel>
@@ -412,6 +413,15 @@ $script:GuiXaml = @'
           <StackPanel Margin="26,18,26,18">
             <TextBlock Text="¿Qué quieres hacer?" FontSize="24" FontWeight="SemiBold" Foreground="#E8E8E8"/>
             <TextBlock x:Name="HomeHw" Style="{StaticResource Note}" FontSize="14" Text="Leyendo tu equipo…"/>
+            <!-- Only when Windows (a feature update, another tool) has undone something Win Juicer applied. -->
+            <Border x:Name="DriftCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="886" HorizontalAlignment="Left" Visibility="Collapsed" Margin="0,10,14,0" BorderBrush="#F5B400" BorderThickness="1">
+              <StackPanel>
+                <TextBlock x:Name="DriftTitle" Text="Qué ha cambiado" Style="{StaticResource CardTitle}"/>
+                <TextBlock x:Name="DriftNote" Style="{StaticResource Note}" Margin="0,0,0,4"/>
+                <TextBlock x:Name="DriftList" Style="{StaticResource Note}" Foreground="#E8E8E8" Margin="8,0,0,8"/>
+                <Button x:Name="BtnDriftReapply" Content="Volver a aplicarlos" Style="{StaticResource Accent}" HorizontalAlignment="Left" FontSize="14"/>
+              </StackPanel>
+            </Border>
             <!-- Two by two, the same size, each button at the foot of its card. -->
             <UniformGrid Columns="2" Margin="0,12,0,0" MaxWidth="900" HorizontalAlignment="Left">
               <Border Style="{StaticResource Card}" Width="Auto">
@@ -443,6 +453,13 @@ $script:GuiXaml = @'
                 </DockPanel>
               </Border>
             </UniformGrid>
+            <!-- Read only: what matters for a game, in one glance. Unknown things are left out. -->
+            <Border x:Name="ReadyCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="886" HorizontalAlignment="Left" Visibility="Collapsed">
+              <StackPanel>
+                <TextBlock x:Name="ReadyTitle" Text="Listo para jugar" Style="{StaticResource CardTitle}"/>
+                <StackPanel x:Name="ReadyPanel"/>
+              </StackPanel>
+            </Border>
             <!-- Optional and for good: once on, there is no button to turn it off,
                  and its level and its list of blocked sites only grow. -->
             <Border x:Name="ShieldCard" Style="{StaticResource Card}" Width="Auto" MaxWidth="886" HorizontalAlignment="Left">
@@ -958,7 +975,7 @@ $script:GuiWork = @{
         # an empty one draws every tweak as "unknown" and the next action refreshes it.
         $snapshot = $null
         try { $snapshot = Get-JuicerGuiSnapshot } catch { Write-JuicerLog "No se pudo leer el estado de los ajustes: $_" }
-        if (-not $snapshot) { $snapshot = @{ States = @{}; Dns = @(); Changes = @{} } }
+        if (-not $snapshot) { $snapshot = @{ States = @{}; Dns = @(); Changes = @{}; Drift = @() } }
         $Sync.Status = 'Buscando versiones nuevas…'
         $update = $null
         try { $update = Get-JuicerUpdateNotice } catch { Write-JuicerLog "Sin comprobar versiones nuevas: $_" }
@@ -970,7 +987,15 @@ $script:GuiWork = @{
         # Writes to the driver: closing the window waits for them (see Add_Closing).
         $Sync.Mutating = $true
         try { $games = @(Invoke-JuicerPacerPending) + @(Repair-JuicerGameSetups) } catch { Write-JuicerLog "No se pudo poner al día lo de los juegos: $_" } finally { $Sync.Mutating = $false }
-        @{ Hw = $hw; Advice = $advice; Snapshot = $snapshot; Update = $update; GameFixes = @($games | ForEach-Object { @{ Title = $_.Title; Outcome = $_.Outcome } }); Pending = @(Get-JuicerPacerPending); Shield = $shield }
+        $Sync.Status = 'Revisando si todo está listo para jugar…'
+        $ready = @()
+        try { $ready = @(Get-JuicerReady) } catch { Write-JuicerLog "No se pudo revisar si el equipo está listo para jugar: $_" }
+        @{ Hw = $hw; Advice = $advice; Snapshot = $snapshot; Update = $update; GameFixes = @($games | ForEach-Object { @{ Title = $_.Title; Outcome = $_.Outcome } }); Pending = @(Get-JuicerPacerPending); Shield = $shield; Ready = $ready }
+    }
+    # «Listo para jugar» on its own, to redraw it after a change (HAGS waits for a restart).
+    Ready      = {
+        $Sync.Status = 'Revisando si todo está listo para jugar…'
+        @{ Ready = @(Get-JuicerReady) }
     }
     Frames     = {
         @{ Findings = @(Invoke-JuicerFrameCapture -Seconds ([int]$A.Seconds) -Delay 10 -OnStatus { param($t) $Sync.Status = $t }) }
@@ -999,7 +1024,7 @@ $script:GuiWork = @{
     }
     Run        = {
         $tweaks = @()
-        foreach ($id in @($A.Ids)) { $t = Find-JuicerTweak $id; if ($t) { $tweaks += $t } }
+        foreach ($id in @($A.Ids)) { $t = Resolve-JuicerJournalTweak $id; if ($t) { $tweaks += $t } }
         foreach ($n in @($A.Apps)) { $app = Find-JuicerDebloatApp $n; if ($app) { $tweaks += New-JuicerAppxTweak $app } }
         if ($A.Dns) { $tweaks += New-JuicerDnsTweak $A.Dns }
         foreach ($g in @($A.Games)) {
@@ -1199,7 +1224,11 @@ function Get-JuicerGuiSnapshot {
     }
     $dns = @()
     try { $dns = @(Get-JuicerCurrentDns) } catch { Write-JuicerLog "Sin DNS actual: $_" }
-    @{ States = $states; Dns = $dns; Changes = (Get-JuicerTweakChanges) }
+    # What Windows has undone since Win Juicer applied it, for the card on Empezar. Plain data
+    # only: the tweaks themselves carry script blocks that must not cross runspaces.
+    $drift = @()
+    try { $drift = @(Get-JuicerDrift $journal | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; State = $_.State; Level = $_.Level } }) } catch { Write-JuicerLog "No se pudo revisar lo que Windows ha deshecho: $_" }
+    @{ States = $states; Dns = $dns; Changes = (Get-JuicerTweakChanges); Drift = $drift }
 }
 
 # What each tweak changes, line by line, for the details pane: computed in
@@ -1881,14 +1910,20 @@ function Show-JuicerGuiStartup {
     $p = $script:Gui.C.StartupPanel
     $p.Children.Clear()
     if (@($Items).Count -eq 0) { [void]$p.Children.Add((New-JuicerUi TextBlock @{ Text = 'No hay nada configurado para arrancar al iniciar sesión.'; Foreground = '#4CC38A' })); return }
-    foreach ($i in @($Items | Sort-Object { -not $_.Enabled }, { $_.Name })) {
+    # What is on first, and among that the entries Windows measured slowing the boot, slowest first.
+    foreach ($i in @($Items | Sort-Object { -not $_.Enabled }, { -[double]$_.BootDelay }, { $_.Name })) {
         $row = New-JuicerUi StackPanel @{ Orientation = 'Horizontal' }
         [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $i.Name; Width = 280; TextTrimming = 'CharacterEllipsis' }))
         [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $i.Source; Foreground = '#9A9AA5'; Width = 190 }))
         $vc = @{ Prescindible = '#4CC38A'; Opcional = '#F5B400'; Necesario = '#4EA1FF' }
         [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $(if ($i.Verdict) { $i.Verdict.ToLowerInvariant() } else { '' }); Foreground = $(if ($i.Verdict) { $vc[$i.Verdict] } else { '#9A9AA5' }); Width = 100 }))
+        # Seconds Windows itself measured this entry holding the boot back; nothing when it has no data.
+        $delay = Format-JuicerBootDelay $i.BootDelay
+        $slow = Test-JuicerBootDelaySlow $i.BootDelay
+        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $delay; Foreground = $(if ($slow) { '#F5B400' } else { '#9A9AA5' }); FontWeight = $(if ($slow) { 'SemiBold' } else { 'Normal' }); Width = 64 }))
         [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $i.Command; Foreground = '#6E6E78'; TextTrimming = 'CharacterEllipsis'; MaxWidth = 480 }))
-        $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $i; IsChecked = [bool]$i.Enabled; ToolTip = (New-JuicerTip @($i.Why, $i.Command)) }
+        $delayTip = if ($delay) { "Windows midió que $($i.Name) retrasó el arranque unos $delay (últimos 30 días, Diagnostics-Performance)." }
+        $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $i; IsChecked = [bool]$i.Enabled; ToolTip = (New-JuicerTip @($i.Why, $delayTip, $i.Command)) }
         $cb.Add_Click({
                 $item = $this.Tag
                 # If the work fails the box must not keep the state the user clicked: redraw the real one.
@@ -1962,6 +1997,8 @@ function Complete-JuicerGuiRun {
     Show-JuicerGuiUndo
     Show-JuicerGuiHome
     Show-JuicerGuiResults $R.Results $R.Rp
+    # Quiet: it only redraws a card, and must not hold up what the user clicks next.
+    Start-JuicerGuiReady
     if ($script:Gui.DebloatLoaded -and @($R.Results | Where-Object { $_.Id -like 'app*' }).Count -gt 0) { Start-JuicerGuiDebloat }
 }
 
@@ -1997,7 +2034,8 @@ function Select-JuicerGuiCarefulApps {
 function Invoke-JuicerGuiApply {
     param([string[]]$Ids, [switch]$Simulate)
     $catalog = @(Get-JuicerCatalog)
-    $tweaks = @($catalog | Where-Object { $Ids -contains $_.Id })
+    # Plus the «no» side of a preference («id!»), which a re-apply of what Windows undid can name.
+    $tweaks = @($catalog | Where-Object { $Ids -contains $_.Id }) + @($Ids | Where-Object { $_ -like '*!' } | ForEach-Object { Resolve-JuicerJournalTweak $_ } | Where-Object { $_ })
     if ($tweaks.Count -eq 0) { Show-JuicerGuiMessage 'No hay nada seleccionado que aplicar.' | Out-Null; return }
     if (-not $Simulate) {
         $tweaks = @(Select-JuicerGuiExtreme $tweaks)
@@ -2017,6 +2055,14 @@ function Start-JuicerGuiAudit {
         Show-JuicerGuiHome
         Set-JuicerGuiStatus 'Diagnóstico terminado.'
     }
+}
+
+function Start-JuicerGuiReady {
+    Start-JuicerGuiTask 'Revisando si todo está listo para jugar…' 'Ready' @{} {
+        param($r)
+        $script:Gui.ReadyLines = @($r.Ready)
+        Show-JuicerGuiHome
+    } -Quiet
 }
 
 function Start-JuicerGuiMeasure {
@@ -2725,6 +2771,22 @@ function Register-JuicerGuiHandlers {
             if (-not (Confirm-JuicerGui '¿Empezar la comparación desde ahora? La medida inicial anterior se descarta.')) { return }
             Start-JuicerGuiMeasure $true
         }
+        BtnUpdateNow          = {
+            $u = $script:Gui.Update
+            if (-not $u) { return }
+            # Closing is refused while a change is being applied: check first, so nothing is
+            # started that the window then cannot follow up.
+            if ($script:Gui.Busy) { Show-JuicerGuiMessage 'Win Juicer está trabajando. Espera a que termine y vuelve a pulsar «Actualizar ahora».' 'Warning' | Out-Null; return }
+            if (-not (Confirm-JuicerGui "Hay otra versión publicada ($($u.Latest)); tienes la $($u.Local)`n`nSe abrirá una ventana de PowerShell con la orden publicada:`n`n$($u.Command)`n`nDescarga la versión nueva, comprueba que es exactamente la publicada (SHA256) y la abre; antes te pide permisos de administrador. Win Juicer se cerrará ahora. Lo que has cambiado se queda como está, y sigue en Deshacer.`n`n¿Actualizar ahora?")) { return }
+            Start-JuicerUpdate $u
+            $script:Gui.Window.Close()
+        }
+        BtnDriftReapply       = {
+            $ids = @(@($script:Gui.Snapshot.Drift) | Where-Object { $_ } | ForEach-Object { [string]$_.Id })
+            if ($ids.Count -eq 0) { return }
+            # The normal way: Extremo ones are confirmed one by one, then a question for the rest.
+            Invoke-JuicerGuiApply $ids
+        }
         BtnUpdateCopy         = {
             ('System.Windows.Clipboard' -as [type])::SetText($script:OneLineCommand)
             Set-JuicerGuiStatus 'Orden copiada. Cierra Win Juicer, abre PowerShell y pégala.'
@@ -3150,7 +3212,7 @@ function Invoke-JuicerGuiKey {
         elseif ($tab -eq $c.TabDebloat) { Start-JuicerGuiDebloat }
         elseif ($tab -eq $c.TabAjusteFino) { Start-JuicerGuiFineTune }
         elseif ($tab -eq $c.TabDeshacer) { Show-JuicerGuiUndo }
-        elseif ($tab -eq $c.TabHome) { Show-JuicerGuiHome }
+        elseif ($tab -eq $c.TabHome) { Show-JuicerGuiHome; Start-JuicerGuiReady }
         else { return $false }
         return $true
     }
@@ -3201,10 +3263,39 @@ function Show-JuicerGuiHome {
         $bad = @($f | Where-Object { $_.Severity -in 'Alto', 'Medio' })
         $c.HomeAuditNote.Text = if ($bad.Count -gt 0) { $(if ($bad.Count -eq 1) { 'Ha encontrado 1 cosa que conviene arreglar: dice dónde y cómo.' } else { "Ha encontrado $($bad.Count) cosas que conviene arreglar: cada una dice dónde y cómo." }) } else { '✓ No ha encontrado nada importante en tu equipo.' }
     }
+    # What Windows has undone: shown only when something has been.
+    $drift = @($script:Gui.Snapshot.Drift | Where-Object { $_ })
+    $sum = Format-JuicerDriftSummary $drift
+    $c.DriftCard.Visibility = $(if ($drift.Count -gt 0) { 'Visible' } else { 'Collapsed' })
+    if ($drift.Count -gt 0) {
+        $c.DriftTitle.Text = $sum.Title
+        $c.DriftNote.Text = 'Una actualización de Windows u otro programa ha cambiado esto después de que lo aplicaras. Pulsa para aplicarlo otra vez, con las mismas confirmaciones de siempre.'
+        $c.DriftList.Text = $sum.Lines -join "`n"
+    }
+    Set-JuicerGuiButton 'BtnDriftReapply' ($drift.Count -gt 0)
+    Show-JuicerGuiReady
     # Not @(…): the journal comes back as one list, and @() would count it as one.
     $n = (Read-JuicerJournal).Count
     Set-JuicerGuiButton 'BtnHomeUndo' ($n -gt 0)
     $c.HomeUndoNote.Text = if ($n -gt 0) { $(if ($n -eq 1) { 'Win Juicer ha hecho 1 cambio en este equipo. Puedes deshacerlo aquí o en la pestaña Deshacer.' } else { "Win Juicer ha hecho $n cambios en este equipo. Puedes deshacerlos todos, o uno a uno en la pestaña Deshacer." }) } else { 'Todavía no has cambiado nada. Todo lo que haga Win Juicer se podrá deshacer.' }
+}
+
+# «Listo para jugar»: one line per thing, a tick or a warning with its reason. What could not be
+# read is not in the list, so a card with nothing to say stays hidden.
+function Show-JuicerGuiReady {
+    $c = $script:Gui.C
+    $lines = @($script:Gui.ReadyLines | Where-Object { $_ })
+    $c.ReadyCard.Visibility = $(if ($lines.Count -gt 0) { 'Visible' } else { 'Collapsed' })
+    $c.ReadyPanel.Children.Clear()
+    if ($lines.Count -eq 0) { return }
+    $bad = @($lines | Where-Object { -not $_.Ok })
+    $c.ReadyTitle.Text = $(if ($bad.Count -eq 0) { '✓ Listo para jugar' } else { "Listo para jugar: $(Format-JuicerCount $bad.Count 'cosa por mirar' 'cosas por mirar')" })
+    foreach ($l in $lines) {
+        $row = New-JuicerUi StackPanel @{ Margin = '0,2,0,2' }
+        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = ('{0} {1}' -f $(if ($l.Ok) { '✓' } else { '⚠' }), $l.Title); Foreground = $(if ($l.Ok) { '#4CC38A' } else { '#F5B400' }); TextWrapping = 'Wrap' }))
+        if ($l.Reason) { [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $l.Reason; Foreground = '#9A9AA5'; TextWrapping = 'Wrap'; Margin = '18,0,0,0' })) }
+        [void]$c.ReadyPanel.Children.Add($row)
+    }
 }
 
 # Optimizar ahora: what is recommended for this PC, without the Extreme
@@ -3252,6 +3343,8 @@ function Complete-JuicerGuiInit {
     $script:Gui.Advice = $R.Advice
     $script:Gui.Snapshot = $R.Snapshot
     if ($R.Shield) { Show-JuicerGuiShield $R.Shield }
+    $script:Gui.ReadyLines = @($R.Ready)
+    $script:Gui.Update = $R.Update
     if ($R.Update) {
         $script:Gui.C.UpdateNote.Text = "Hay otra versión publicada ($($R.Update.Latest)); tienes la $($R.Update.Local)."
         $script:Gui.C.UpdatePanel.ToolTip = $R.Update.Command
@@ -3282,7 +3375,7 @@ function Show-JuicerGui {
         Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
         Games = @(); Covers = @{}; CoverTried = @{}; Tiles = @{}; Sections = (New-Object System.Collections.ArrayList); Game = $null; Page = $null
-        Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null; Shield = $null; LastError = $null
+        Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null; Shield = $null; LastError = $null; Update = $null; ReadyLines = @()
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
     # An error in a click, a key or a search must not close the window.
