@@ -230,9 +230,21 @@ function Get-JuicerKnownService {
     $null
 }
 
+# A command line without the folders of its program: «"C:\Program Files\Steam\Tools\x.exe" -a»
+# becomes «x.exe -a». The verdict looks at the program, not at where it lives: a tool
+# under a folder called Steam, Discord or Razer is not Steam, Discord or Razer.
+function Get-JuicerCommandProgram {
+    param([string]$Command = '')
+    if ($Command -match '^\s*"?(?<path>[^"]*?\.(?:exe|com|bat|cmd|lnk|msc|scr))"?(?<rest>.*)$') {
+        # A regex, not Split-Path: the paths are Windows ones whatever runs this (the tests).
+        return (($Matches.path -replace '^.*[\\/]', '') + $Matches.rest)
+    }
+    $Command
+}
+
 function Get-JuicerStartupVerdict {
     param([string]$Name = '', [string]$Command = '')
-    $text = "$Name $Command"
+    $text = "$Name $(Get-JuicerCommandProgram $Command)"
     foreach ($k in $script:StartupKnown) {
         if ($text -match $k.P) { return @{ Verdict = $k.V; Why = $k.W } }
     }

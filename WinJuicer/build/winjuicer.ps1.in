@@ -1,44 +1,114 @@
 # Win Juicer in one line, like WinUtil:
 #   irm https://github.com/Chomp-wq/BtJuicer/releases/download/winjuicer/winjuicer.ps1 | iex
 #
-# Downloads WinJuicer.zip from the same release, checks it is the one
-# published with this file (SHA256) and opens it as administrator. It is
-# downloaded and checked on every run: nothing is kept between runs that
+# Downloads WinJuicer.zip from the same release and checks it is the one
+# published with this file (SHA256). What runs as administrator is never
+# taken from a folder that a normal user can write: the zip is first
+# downloaded to %TEMP% (writable by the user), and the ELEVATED process
+# copies it into a folder only administrators can write (under Program
+# Files), hashes that copy again and only then extracts and runs it. Anyone
+# who swaps the zip in %TEMP% after the first check is caught by the second.
+# It is downloaded and checked on every run: nothing is kept between runs that
 # someone could change to have it run as administrator next time.
 #
 # ASCII only and no BOM: Windows PowerShell 5.1 reads what irm downloads as
 # Windows-1252, and a UTF-8 dash contains the byte of a quote.
 
+# Runs as administrator (or from a test). It is also pasted as text into the
+# command of the elevated process, which has a short limit: so no comments or
+# double quotes inside, and every statement ends with a semicolon (the lines
+# are joined with spaces).
+function Install-WinJuicerPackage {
+    param([string]$Zip, [string]$Sha256, [string]$Version, [string]$Root);
+    $ErrorActionPreference = 'Stop';
+    New-Item -ItemType Directory -Path $Root -Force | Out-Null;
+    $dir = Join-Path $Root ($Version + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8));
+    New-Item -ItemType Directory -Path $dir | Out-Null;
+    $own = Join-Path $dir 'WinJuicer.zip';
+    Copy-Item -LiteralPath $Zip -Destination $own;
+    Remove-Item -LiteralPath $Zip -Force -ErrorAction SilentlyContinue;
+    $got = (Get-FileHash -LiteralPath $own -Algorithm SHA256).Hash;
+    if ($got -ne $Sha256) { Remove-Item -LiteralPath $dir -Recurse -Force; throw ('La descarga no coincide con la publicada (SHA256 ' + $got + '). No se ejecuta nada: vuelve a intentarlo en unos minutos.'); };
+    Expand-Archive -LiteralPath $own -DestinationPath $dir -Force;
+    Remove-Item -LiteralPath $own -Force;
+    Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $dir -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue;
+    Join-Path $dir 'WinJuicer.ps1'
+}
+
+# The command line of the elevated process: the function above plus its call.
+function Get-WinJuicerElevatedCommand {
+    param([string]$Zip, [string]$Sha256, [string]$Version, [string]$Root)
+    $q = { param($s) "'" + ([string]$s -replace "'", "''") + "'" }
+    $def = (Get-Command Install-WinJuicerPackage -CommandType Function).Definition
+    $body = (($def -split "`r?`n" | ForEach-Object { $_.Trim() } | Where-Object { $_ }) -join ' ')
+    # Placeholders and -replace, not -f: the call is full of braces.
+    $call = 'try { $m = Install-WinJuicerPackage -Zip @ZIP@ -Sha256 @SHA@ -Version @VER@ -Root @ROOT@; & $m } catch { Write-Host $_.Exception.Message -ForegroundColor Red; Read-Host ''Pulsa Intro para cerrar'' | Out-Null }'
+    $call = $call.Replace('@ZIP@', (& $q $Zip)).Replace('@SHA@', (& $q $Sha256)).Replace('@VER@', (& $q $Version)).Replace('@ROOT@', (& $q $Root))
+    'function Install-WinJuicerPackage { ' + $body + ' }; ' + $call
+}
+
 function Start-WinJuicerOneLine {
-    param([string]$Source, [string]$Sha256, [string]$Version, [switch]$NoLaunch)
+    param([string]$Source, [string]$Sha256, [string]$Version, [switch]$NoLaunch, [string]$InstallRoot)
     if ([Environment]::OSVersion.Platform -ne 'Win32NT') { throw 'Win Juicer solo funciona en Windows.' }
+    if ($Version -notmatch '^[\w\.\-]+$' -or $Sha256 -notmatch '^[0-9A-Fa-f]{64}$') { throw 'El arrancador no es valido.' }
     $temp = [IO.Path]::GetTempPath()
-    $dir = Join-Path $temp ('WinJuicer-' + $Version + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8))
-    $zip = "$dir.zip"
-    if (Test-Path -LiteralPath $Source) {
-        Copy-Item -LiteralPath $Source -Destination $zip
-    } else {
-        Write-Host "Descargando Win Juicer $Version..."
-        [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $progress = $ProgressPreference
-        # The progress bar makes Invoke-WebRequest many times slower in 5.1.
-        $ProgressPreference = 'SilentlyContinue'
-        try { Invoke-WebRequest -Uri $Source -OutFile $zip -UseBasicParsing } finally { $ProgressPreference = $progress }
+    $zip = Join-Path $temp ('WinJuicer-' + $Version + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8) + '.zip')
+    $handedOver = $false
+    try {
+        if (Test-Path -LiteralPath $Source) {
+            Copy-Item -LiteralPath $Source -Destination $zip
+        } else {
+            Write-Host "Descargando Win Juicer $Version..."
+            [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+            $progress = $ProgressPreference
+            # The progress bar makes Invoke-WebRequest many times slower in 5.1.
+            $ProgressPreference = 'SilentlyContinue'
+            try {
+                Invoke-WebRequest -Uri $Source -OutFile $zip -UseBasicParsing -TimeoutSec 120
+            } catch {
+                throw "No se pudo descargar Win Juicer (comprueba tu conexion): $($_.Exception.Message)"
+            } finally {
+                $ProgressPreference = $progress
+            }
+        }
+        # A first check here, to fail before asking for administrator; the one that counts
+        # is the elevated process's, on its own copy.
+        $got = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
+        if ($got -ne $Sha256) { throw "La descarga no coincide con la publicada (SHA256 $got). No se ejecuta nada: vuelve a intentarlo en unos minutos." }
+        $root = if ($InstallRoot) { $InstallRoot } else { Join-Path $env:ProgramFiles 'WinJuicer-descarga' }
+        $isAdmin = (New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+        $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+        if ($NoLaunch -or $isAdmin) {
+            # Already administrator: the same installation, in this process.
+            $handedOver = $true
+            $main = Install-WinJuicerPackage -Zip $zip -Sha256 $Sha256 -Version $Version -Root $root
+            if ($NoLaunch) { return $main }
+            Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', "`"$main`"") | Out-Null
+            return
+        }
+        $cmd = Get-WinJuicerElevatedCommand -Zip $zip -Sha256 $Sha256 -Version $Version -Root $root
+        try {
+            $handedOver = $true
+            Start-Process -FilePath $ps -ArgumentList ('-NoProfile -ExecutionPolicy Bypass -STA -Command "' + $cmd + '"') -Verb RunAs | Out-Null
+        } catch {
+            $handedOver = $false
+            # 1223: the user answered No to the UAC prompt (PowerShell 7 wraps it one level deeper).
+            $e = $_.Exception
+            $cancelled = $false
+            while ($e) {
+                if ($e -is [System.ComponentModel.Win32Exception] -and $e.NativeErrorCode -eq 1223) { $cancelled = $true }
+                $e = $e.InnerException
+            }
+            if (-not $cancelled) { throw }
+            Write-Host 'Has cancelado el permiso de administrador, asi que Win Juicer no se abre. Vuelve a pegar la orden y pulsa Si cuando Windows lo pida.' -ForegroundColor Yellow
+        }
+    } finally {
+        # Once handed over, the installation deletes the zip itself.
+        if (-not $handedOver) { Remove-Item -LiteralPath $zip -Force -ErrorAction SilentlyContinue }
+        Get-ChildItem -LiteralPath $temp -File -Filter 'WinJuicer-*.zip' -ErrorAction SilentlyContinue |
+            Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
+            Remove-Item -Force -ErrorAction SilentlyContinue
     }
-    $got = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash
-    if ($got -ne $Sha256) {
-        Remove-Item -LiteralPath $zip -Force
-        throw "La descarga no coincide con la publicada (SHA256 $got). No se ejecuta nada: vuelve a intentarlo en unos minutos."
-    }
-    Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
-    Remove-Item -LiteralPath $zip -Force
-    Get-ChildItem -LiteralPath $temp -Directory -Filter 'WinJuicer-*' -ErrorAction SilentlyContinue |
-        Where-Object { $_.FullName -ne $dir -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } |
-        Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-    $main = Join-Path $dir 'WinJuicer.ps1'
-    if ($NoLaunch) { return $main }
-    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    Start-Process -FilePath $ps -ArgumentList @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA', '-File', "`"$main`"") -Verb RunAs | Out-Null
 }
 
 Start-WinJuicerOneLine -Source 'https://github.com/Chomp-wq/BtJuicer/releases/download/winjuicer/WinJuicer.zip' -Sha256 '__SHA256__' -Version '__VERSION__'

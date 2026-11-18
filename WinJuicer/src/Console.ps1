@@ -1295,7 +1295,7 @@ function Show-JuicerMainMenu {
             @('0', 'Salir', '')
         )
         if ($script:UpdateNotice) {
-            Write-JuicerWrapped "Hay una versión nueva de Win Juicer ($($script:UpdateNotice.Latest); tienes la $($script:UpdateNotice.Local)). Para usarla, sal y ejecuta en PowerShell: $($script:UpdateNotice.Command)" 2 'Yellow'
+            Write-JuicerWrapped "Hay otra versión publicada de Win Juicer ($($script:UpdateNotice.Latest); tienes la $($script:UpdateNotice.Local)). Para usarla, sal y ejecuta en PowerShell: $($script:UpdateNotice.Command)" 2 'Yellow'
             Write-Host ''
         }
         $c = Read-JuicerChoice

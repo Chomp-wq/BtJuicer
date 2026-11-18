@@ -2235,3 +2235,144 @@ Describe 'Protección y Brave' {
         }
     }
 }
+
+Describe 'Revisión: arrancador, importar, vigilancia, monitor, inicio y medidas' {
+    It 'el arrancador instala una copia propia, la vuelve a comprobar y su orden elevada cabe en una línea' {
+        $wjOut = Join-Path ([IO.Path]::GetTempPath()) ('wj-launch-' + [guid]::NewGuid().ToString('N'))
+        try {
+            $rel = & (Join-Path $Root 'build/Build-Release.ps1') -Out (Join-Path $wjOut 'dist') -Version 'abc1234'
+            $lines = [IO.File]::ReadAllLines($rel.Launcher)
+            Invoke-Expression (($lines | Where-Object { $_ -notlike 'Start-WinJuicerOneLine *' }) -join "`n")
+            $wjRoot = Join-Path $wjOut 'instalado'
+            # A swapped zip (another hash) stops the installation and leaves nothing behind.
+            $wjBad = Join-Path $wjOut 'mala.zip'
+            Copy-Item -LiteralPath $rel.Zip -Destination $wjBad
+            { Install-WinJuicerPackage -Zip $wjBad -Sha256 ('0' * 64) -Version 'abc1234' -Root $wjRoot } | Should -Throw '*no coincide*'
+            @(Get-ChildItem -LiteralPath $wjRoot -Directory).Count | Should -Be 0
+            # The right one is copied into the root, extracted there, and the source zip is gone.
+            $wjGood = Join-Path $wjOut 'buena.zip'
+            Copy-Item -LiteralPath $rel.Zip -Destination $wjGood
+            $main = Install-WinJuicerPackage -Zip $wjGood -Sha256 $rel.Sha256 -Version 'abc1234' -Root $wjRoot
+            $main | Should -BeLike "$wjRoot*WinJuicer.ps1"
+            Test-Path -LiteralPath $main | Should -BeTrue
+            Test-Path -LiteralPath $wjGood | Should -BeFalse
+            # The command of the elevated process: one line, no double quotes, short, valid, with the hash in it.
+            $cmd = Get-WinJuicerElevatedCommand -Zip "C:\Temp\it's.zip" -Sha256 $rel.Sha256 -Version 'abc1234' -Root 'C:\Program Files\WinJuicer-descarga'
+            $cmd | Should -Not -Match "[`r`n`"]"
+            $cmd.Length | Should -BeLessThan 2000
+            $cmd | Should -BeLike "*$($rel.Sha256)*"
+            $cmd | Should -BeLike "*C:\Temp\it''s.zip*"
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseInput($cmd, [ref]$null, [ref]$errors)
+            $errors | Should -BeNullOrEmpty
+        } finally {
+            Remove-Item -LiteralPath $wjOut -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'el arrancador pide el permiso con tiempo máximo de descarga y avisa si se cancela el UAC' {
+        $text = [IO.File]::ReadAllText((Join-Path $Root 'build/winjuicer.ps1.in'))
+        $text | Should -BeLike '*-TimeoutSec*'
+        $text | Should -BeLike '*1223*'
+        $text | Should -BeLike '*-Verb RunAs*'
+    }
+
+    It 'la vigilancia del ajuste fino sólo cuenta los eventos WHEA 18, 19 y 47' {
+        (Get-JuicerTuneWatchScript 'C:\x\ajuste.json') | Should -BeLike '*WHEA-Logger*Id = 18, 19, 47*'
+        Mock -ModuleName WinJuicer Test-JuicerWindows { $true }
+        Mock -ModuleName WinJuicer Read-JuicerTuneRecord { @{ Date = '2026-01-01T00:00:00'; Cpu = 'x'; Gpu = ''; GpuTool = ''; Bios = ''; RamSpeed = 0 } }
+        Mock -ModuleName WinJuicer Get-JuicerBiosVersion { '' }
+        Mock -ModuleName WinJuicer Get-JuicerRamSpeed { 0 }
+        Mock -ModuleName WinJuicer Get-JuicerEventCount { 0 }
+        [void](Get-JuicerTuneCheck)
+        Should -Invoke -ModuleName WinJuicer Get-JuicerEventCount -Times 1 -Exactly -ParameterFilter { $Filter.ProviderName -like '*WHEA*' -and ($Filter.Id -join ',') -eq '18,19,47' }
+    }
+
+    It 'cada marca de monitor tiene un nombre corto entero, no cortado en el primer espacio' {
+        Get-JuicerStrobeShortName 'LG' | Should -Be 'Motion Blur Reduction'
+        Get-JuicerStrobeShortName 'MSI' | Should -Be 'Anti Motion Blur'
+        Get-JuicerStrobeShortName 'Gigabyte' | Should -Be 'Aim Stabilizer'
+        Get-JuicerStrobeShortName 'AOC' | Should -Be 'MBR'
+        Get-JuicerStrobeShortName 'Desconocida' | Should -Be 'estroboscopio'
+        Get-JuicerStrobeShortName $null | Should -Be 'estroboscopio'
+        foreach ($b in $script:StrobeNames.Keys) { $script:StrobeShortNames.Contains($b) | Should -BeTrue -Because $b }
+        $m = @{ Info = @{ Brand = 'MSI'; Name = 'MAG'; Hdr10 = $false }; Display = @{ MaxHz = 240; Hz = 240; ExactHz = 0 }; Vrr = $null; Mode = 'Estrobo' }
+        Format-JuicerMonitor $m | Should -BeLike '*usado con Anti Motion Blur, sin VRR*'
+    }
+
+    It 'el veredicto de inicio mira el programa, no la carpeta donde está' {
+        Get-JuicerCommandProgram '"C:\Program Files (x86)\Steam\tools\mio.exe" -a' | Should -Be 'mio.exe -a'
+        Get-JuicerCommandProgram 'C:\Razer Cosas\x.exe /y' | Should -Be 'x.exe /y'
+        Get-JuicerCommandProgram 'cmd /c algo' | Should -Be 'cmd /c algo'
+        Get-JuicerStartupVerdict 'Mi herramienta' '"C:\Program Files (x86)\Steam\tools\mio.exe"' | Should -BeNullOrEmpty
+        Get-JuicerStartupVerdict 'Mi herramienta' 'C:\Users\x\Discord\mio.exe' | Should -BeNullOrEmpty
+        (Get-JuicerStartupVerdict 'Steam' '"C:\Archivos\Juegos\steam.exe" -silent').Verdict | Should -Be 'Prescindible'
+        (Get-JuicerStartupVerdict 'Cliente' 'C:\Juegos\EpicGamesLauncher.exe').Verdict | Should -Be 'Prescindible'
+    }
+
+    It 'una exportación con Version que no es número se rechaza con un mensaje claro' {
+        $f = Join-Path (Get-JuicerHome) 'config-version.json'
+        foreach ($raw in '{ "Version": "abc", "Tweaks": [] }', '{ "Version": [1], "Tweaks": [] }', '[1,2]') {
+            [IO.File]::WriteAllText($f, $raw)
+            { Read-JuicerConfig $f } | Should -Throw 'Este archivo no es una exportación de Win Juicer válida.'
+        }
+        [IO.File]::WriteAllText($f, '{ "Version": 2, "Tweaks": [] }')
+        { Read-JuicerConfig $f } | Should -Throw '*versión 1*'
+    }
+
+    It 'exportar escribe el archivo entero, sin dejar el temporal' {
+        $f = Join-Path (Get-JuicerHome) 'exportada.json'
+        [void](Export-JuicerConfig $f)
+        Test-Path -LiteralPath "$f.tmp" | Should -BeFalse
+        (Read-JuicerConfig $f) | Should -BeOfType [hashtable]
+    }
+
+    It 'importar salta las apps que este equipo usa, con el mismo texto que Debloat' {
+        $hw = @{ Cpu = @{ DualCcdX3D = $false; Name = 'x' }; GamePass = $true }
+        $s = Split-JuicerImportApps @('Microsoft.GamingApp', 'Microsoft.BingNews', 'Microsoft.NoExiste') $hw
+        @($s.Keep) | Should -Be @('Microsoft.BingNews')
+        @($s.Needed).Count | Should -Be 1
+        $s.Needed[0] | Should -Be "· App Xbox: $(Get-JuicerAppxNeed (Find-JuicerDebloatApp 'Microsoft.GamingApp') $hw)"
+        $s = Split-JuicerImportApps @('Microsoft.GamingApp') @{ Cpu = @{}; GamePass = $false }
+        @($s.Keep) | Should -Be @('Microsoft.GamingApp')
+        @($s.Needed).Count | Should -Be 0
+    }
+
+    It 'importar pregunta una a una por lo Extremo y lo que pide cuidado' {
+        $extreme = @(Get-JuicerCatalog | Where-Object { $_.Level -ge 3 } | Select-Object -First 2)
+        $safe = @(Get-JuicerCatalog | Where-Object { $_.Level -lt 3 } | Select-Object -First 1)
+        $extreme.Count | Should -Be 2
+        # The mock runs in the module's scope: what it must refuse travels in an environment variable.
+        $env:WJ_TEST_REFUSE = $extreme[0].Title
+        try {
+            Mock -ModuleName WinJuicer Confirm-JuicerGui { -not $Text.Contains($env:WJ_TEST_REFUSE) }
+            $kept = @(Select-JuicerGuiExtreme @($extreme + $safe))
+            Should -Invoke -ModuleName WinJuicer Confirm-JuicerGui -Times 2 -Exactly
+            @($kept | ForEach-Object { $_.Id }) | Should -Not -Contain $extreme[0].Id
+            @($kept | ForEach-Object { $_.Id }) | Should -Contain $extreme[1].Id
+            @($kept | ForEach-Object { $_.Id }) | Should -Contain $safe[0].Id
+        } finally {
+            Remove-Item Env:WJ_TEST_REFUSE -ErrorAction SilentlyContinue
+        }
+        Mock -ModuleName WinJuicer Confirm-JuicerGui { $false }
+        @(Select-JuicerGuiCarefulApps @('Microsoft.GamingApp', 'Microsoft.BingNews')) | Should -Be @('Microsoft.BingNews')
+        Mock -ModuleName WinJuicer Confirm-JuicerGui { $true }
+        @(Select-JuicerGuiCarefulApps @('Microsoft.GamingApp', 'Microsoft.BingNews')) | Should -Be @('Microsoft.GamingApp', 'Microsoft.BingNews')
+    }
+
+    It 'el aviso de versión no salta por una publicada más antigua cuando son números' {
+        Get-JuicerUpdateNotice -Local '1.2.0' -Latest { '1.1.0' } | Should -BeNullOrEmpty
+        (Get-JuicerUpdateNotice -Local '1.2.0' -Latest { '1.10.0' }).Latest | Should -Be '1.10.0'
+        (Get-JuicerUpdateNotice -Local 'abc1234' -Latest { 'def5678' }).Latest | Should -Be 'def5678'
+    }
+
+    It 'la medida de arranque avisa si un arranque fue con Inicio rápido y el otro no' {
+        $b = @{ Date = '2026-10-01T10:00:00'; Label = 'Antes'; BootMs = 40000; BootDate = '2026-10-01T09:58:00'; FastStartup = $true }
+        $a = @{ Date = '2026-10-02T10:00:00'; Label = 'Medida'; BootMs = 60000; BootDate = '2026-10-02T09:58:00'; FastStartup = $false }
+        @(Compare-JuicerMetrics $b $a | Where-Object { $_.Title -like '*no son del mismo tipo*' }).Count | Should -Be 1
+        $a.FastStartup = $true
+        @(Compare-JuicerMetrics $b $a | Where-Object { $_.Title -like '*no son del mismo tipo*' }).Count | Should -Be 0
+        $a.Remove('FastStartup')
+        @(Compare-JuicerMetrics $b $a | Where-Object { $_.Title -like '*no son del mismo tipo*' }).Count | Should -Be 0
+    }
+}

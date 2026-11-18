@@ -954,7 +954,11 @@ $script:GuiWork = @{
         $advice = @{}
         try { $advice = Get-JuicerAdvice $hw } catch { Write-JuicerLog "Sin consejos para este equipo: $_" }
         $Sync.Status = 'Comprobando el estado de cada ajuste…'
-        $snapshot = Get-JuicerGuiSnapshot
+        # A snapshot that fails must not leave the window waiting for ever (Ready would never turn on):
+        # an empty one draws every tweak as "unknown" and the next action refreshes it.
+        $snapshot = $null
+        try { $snapshot = Get-JuicerGuiSnapshot } catch { Write-JuicerLog "No se pudo leer el estado de los ajustes: $_" }
+        if (-not $snapshot) { $snapshot = @{ States = @{}; Dns = @(); Changes = @{} } }
         $Sync.Status = 'Buscando versiones nuevas…'
         $update = $null
         try { $update = Get-JuicerUpdateNotice } catch { Write-JuicerLog "Sin comprobar versiones nuevas: $_" }
@@ -1172,6 +1176,11 @@ $script:GuiWork = @{
         $Sync.Status = 'Preguntando a winget qué está instalado…'
         @{ Installed = (Get-JuicerWingetInstalled); Winget = (Test-JuicerWinget) }
     }
+    # Only the state of each tweak: refreshes the lists after a task that failed halfway.
+    Snapshot   = {
+        $Sync.Status = 'Comprobando el estado…'
+        @{ Snapshot = (Get-JuicerGuiSnapshot) }
+    }
     Restore    = {
         $Sync.Status = 'Creando punto de restauración…'
         @{ Rp = (New-JuicerRestorePoint) }
@@ -1214,12 +1223,14 @@ function Get-JuicerTweakChanges {
 # First: ahead of what is queued, for the tab the user is looking at.
 # Quiet: background work the user did not ask for (covers), which leaves the
 # buttons usable; what they click meanwhile waits for it in the queue.
+# Failed: runs when the work failed (no result), to undo what the caller set
+# up front (a "loaded" flag, a checkbox the user had already flipped).
 function Start-JuicerGuiTask {
-    param([string]$Status, [string]$Work, [hashtable]$Arguments = @{}, [scriptblock]$Done, [switch]$First, [switch]$Quiet)
+    param([string]$Status, [string]$Work, [hashtable]$Arguments = @{}, [scriptblock]$Done, [switch]$First, [switch]$Quiet, [scriptblock]$Failed)
     if ($script:Gui.Task) {
         $dup = $Arguments.Count -eq 0 -and @($script:Gui.Queue | Where-Object { $_.Work -eq $Work -and $_.Arguments.Count -eq 0 }).Count -gt 0
         if (-not $dup) {
-            $item = @{ Status = $Status; Work = $Work; Arguments = $Arguments; Done = $Done; Quiet = [bool]$Quiet }
+            $item = @{ Status = $Status; Work = $Work; Arguments = $Arguments; Done = $Done; Quiet = [bool]$Quiet; Failed = $Failed }
             if ($First) { $script:Gui.Queue.Insert(0, $item) } else { [void]$script:Gui.Queue.Add($item) }
         }
         return
@@ -1236,7 +1247,7 @@ function Start-JuicerGuiTask {
     $ps.Runspace = $rs
     [void]$ps.AddScript($code)
     $script:Gui.Sync.Status = ''
-    $script:Gui.Task = @{ PS = $ps; Runspace = $rs; Handle = $ps.BeginInvoke(); Done = $Done; Work = $Work }
+    $script:Gui.Task = @{ PS = $ps; Runspace = $rs; Handle = $ps.BeginInvoke(); Done = $Done; Work = $Work; Failed = $Failed }
     if ($Quiet) { Set-JuicerGuiStatus $Status } else { Set-JuicerGuiBusy $true $Status }
     $script:Gui.Timer.Start()
 }
@@ -1269,6 +1280,13 @@ function Complete-JuicerGuiTask {
         if ($t.Work -eq 'PacerPending') {
             try { Update-JuicerGuiPendingWatch @(Get-JuicerPacerPending) } catch { Write-JuicerLog "No se pudo reanudar la vigilancia de juegos pendientes: $_" }
         }
+        if ($t.Failed) {
+            try { & $t.Failed } catch { Write-JuicerLog "No se pudo deshacer el estado de $($t.Work): $_" }
+        }
+        # A failed Init still opens the window to use (Ready), with what could be read.
+        if ($t.Work -eq 'Init') { $script:Gui.Ready = $true }
+        # A failed Run may have changed some things before failing: read the state again.
+        if ($t.Work -eq 'Run') { Start-JuicerGuiSnapshotRefresh }
     } else {
         if ($err) {
             Write-JuicerLog "Aviso en $($t.Work): $err"
@@ -1873,13 +1891,14 @@ function Show-JuicerGuiStartup {
         $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $i; IsChecked = [bool]$i.Enabled; ToolTip = (New-JuicerTip @($i.Why, $i.Command)) }
         $cb.Add_Click({
                 $item = $this.Tag
+                # If the work fails the box must not keep the state the user clicked: redraw the real one.
                 Start-JuicerGuiTask "Cambiando $($item.Name)…" 'Startup' @{ Item = $item; Enable = [bool]$this.IsChecked } {
                     param($r)
                     Show-JuicerGuiStartup $r.Items
                     $bad = @($r.Results | Where-Object { $_.Outcome -eq 'Error' })
                     if ($bad.Count -gt 0) { Show-JuicerGuiMessage (Format-JuicerResultsText $r.Results) 'Warning' | Out-Null }
                     Show-JuicerGuiUndo
-                }
+                } -Failed { Show-JuicerGuiStartup @($script:Gui.Startup) }
             })
         [void]$p.Children.Add($cb)
     }
@@ -1946,17 +1965,42 @@ function Complete-JuicerGuiRun {
     if ($script:Gui.DebloatLoaded -and @($R.Results | Where-Object { $_.Id -like 'app*' }).Count -gt 0) { Start-JuicerGuiDebloat }
 }
 
+# Each Extremo (level 3) tweak is confirmed on its own, with what it gains and costs;
+# what the user refuses is dropped. Returns what is left.
+function Select-JuicerGuiExtreme {
+    param([object[]]$Tweaks)
+    $tweaks = @($Tweaks)
+    foreach ($t in @($tweaks | Where-Object { $_.Level -ge 3 })) {
+        if (-not (Confirm-JuicerGui "EXTREMO: $($t.Title)`n`nGanas: $($t.Gain)`n`nPierdes: $($t.Cost)`n`n¿Aplicarlo?" 'Warning')) {
+            $tweaks = @($tweaks | Where-Object { $_.Id -ne $t.Id })
+        }
+    }
+    $tweaks
+}
+
+# The same for the apps of class Cuidado: something depends on them.
+# Takes and returns app names.
+function Select-JuicerGuiCarefulApps {
+    param([string[]]$Names)
+    $keep = @($Names)
+    foreach ($n in @($Names)) {
+        $app = Find-JuicerDebloatApp $n
+        if ($app -and $app.Class -eq 'Cuidado') {
+            if (-not (Confirm-JuicerGui "CON CUIDADO: quitar $($app.Title)`n`n$($app.What)`n`n¿Quitarla?" 'Warning')) {
+                $keep = @($keep | Where-Object { $_ -ne $n })
+            }
+        }
+    }
+    $keep
+}
+
 function Invoke-JuicerGuiApply {
     param([string[]]$Ids, [switch]$Simulate)
     $catalog = @(Get-JuicerCatalog)
     $tweaks = @($catalog | Where-Object { $Ids -contains $_.Id })
     if ($tweaks.Count -eq 0) { Show-JuicerGuiMessage 'No hay nada seleccionado que aplicar.' | Out-Null; return }
     if (-not $Simulate) {
-        foreach ($t in @($tweaks | Where-Object { $_.Level -ge 3 })) {
-            if (-not (Confirm-JuicerGui "EXTREMO: $($t.Title)`n`nGanas: $($t.Gain)`n`nPierdes: $($t.Cost)`n`n¿Aplicarlo?" 'Warning')) {
-                $tweaks = @($tweaks | Where-Object { $_.Id -ne $t.Id })
-            }
-        }
+        $tweaks = @(Select-JuicerGuiExtreme $tweaks)
         if ($tweaks.Count -eq 0) { return }
         $list = ($tweaks | ForEach-Object { '· ' + $_.Title }) -join "`n"
         if (-not (Confirm-JuicerGui "Se aplicará:`n`n$list`n`n¿Seguir?")) { return }
@@ -1987,11 +2031,23 @@ function Start-JuicerGuiMeasure {
 
 function Start-JuicerGuiDebloat {
     $script:Gui.DebloatLoaded = $true
+    # On failure the flag goes back, so selecting the tab again retries.
     Start-JuicerGuiTask 'Leyendo las apps instaladas…' 'Debloat' @{} {
         param($r)
         $script:Gui.Snapshot = $r.Snapshot
         Show-JuicerGuiDebloat $r.Apps
-    }
+    } -Failed { $script:Gui.DebloatLoaded = $false }
+}
+
+# After a Run that failed: what it did before failing must show in the lists and in Deshacer.
+function Start-JuicerGuiSnapshotRefresh {
+    Start-JuicerGuiTask 'Comprobando el estado…' 'Snapshot' @{} {
+        param($r)
+        $script:Gui.Snapshot = $r.Snapshot
+        Show-JuicerGuiTweaks
+        Show-JuicerGuiUndo
+        Show-JuicerGuiHome
+    } -First -Quiet
 }
 
 function Start-JuicerGuiInstalled {
@@ -2006,7 +2062,8 @@ function Start-JuicerGuiInstalled {
 
 function Start-JuicerGuiFineTune {
     param([hashtable]$Arguments = @{})
-    Start-JuicerGuiTask 'Leyendo tu ajuste fino…' 'FineTune' $Arguments {
+    $script:Gui.FineLoaded = $true
+    Start-JuicerGuiTask 'Leyendo tu ajuste fino…' 'FineTune' $Arguments -Failed { $script:Gui.FineLoaded = $false } -Done {
         param($r)
         $c = $script:Gui.C
         $c.FineGuidePanel.Children.Clear()
@@ -2025,7 +2082,8 @@ function Start-JuicerGuiFineTune {
 }
 
 function Start-JuicerGuiGames {
-    Start-JuicerGuiTask 'Buscando tus juegos…' 'Games' @{} {
+    $script:Gui.GamesLoaded = $true
+    Start-JuicerGuiTask 'Buscando tus juegos…' 'Games' @{} -Failed { $script:Gui.GamesLoaded = $false } -Done {
         param($r)
         Show-JuicerGuiGames $r.Libraries
         Show-JuicerGuiLimiter $r.Limiter
@@ -2623,7 +2681,8 @@ function Show-JuicerGuiGames {
 }
 
 function Start-JuicerGuiStartupList {
-    Start-JuicerGuiTask 'Leyendo los programas de inicio…' 'Startup' @{} { param($r) Show-JuicerGuiStartup $r.Items }
+    $script:Gui.StartupLoaded = $true
+    Start-JuicerGuiTask 'Leyendo los programas de inicio…' 'Startup' @{} { param($r) Show-JuicerGuiStartup $r.Items } -Failed { $script:Gui.StartupLoaded = $false }
 }
 
 function Get-JuicerCheckedTags {
@@ -2815,12 +2874,20 @@ function Register-JuicerGuiHandlers {
             $cfg = Read-JuicerConfig $d.FileName
             $n = @($cfg.Tweaks).Count + $cfg.Toggles.Count + @($cfg.Apps).Count + $(if ($cfg.Dns) { 1 } else { 0 })
             if ($n -eq 0) { Show-JuicerGuiMessage "No hay nada que aplicar en $($d.FileName)." | Out-Null; return }
-            $risky = @(@($cfg.Tweaks | ForEach-Object { Find-JuicerTweak $_ } | Where-Object { $_.Level -ge 3 } | ForEach-Object { $_.Title }) +
-                @($cfg.Apps | ForEach-Object { Find-JuicerDebloatApp $_ } | Where-Object { $_.Class -eq 'Cuidado' } | ForEach-Object { 'Quitar ' + $_.Title }))
+            # The same per-item questions as applying from Ajustes or removing from Debloat: a file
+            # from another PC must not slip in what would be asked one by one here.
+            $split = Split-JuicerImportApps $cfg.Apps $script:Gui.Hw
+            if ($split.Needed.Count -gt 0) {
+                Show-JuicerGuiMessage ("No se quitarán estas apps: tu equipo las usa.`n`n" + ($split.Needed -join "`n")) 'Warning' | Out-Null
+            }
+            $cfg.Apps = @(Select-JuicerGuiCarefulApps $split.Keep)
+            $keepTweaks = @(Select-JuicerGuiExtreme @($cfg.Tweaks | ForEach-Object { Find-JuicerTweak $_ } | Where-Object { $_ }))
+            $cfg.Tweaks = @($keepTweaks | ForEach-Object { $_.Id })
+            $n = @($cfg.Tweaks).Count + $cfg.Toggles.Count + @($cfg.Apps).Count + $(if ($cfg.Dns) { 1 } else { 0 })
+            if ($n -eq 0) { Show-JuicerGuiMessage 'No queda nada que aplicar de esa configuración.' | Out-Null; return }
             $text = "Se aplicará:`n`n$(Format-JuicerConfigSummary $cfg)"
-            if ($risky.Count -gt 0) { $text += "`n`nIncluye cosas del nivel Extremo o con cuidado: $($risky -join ', '). Lee qué cuestan en Ajustes antes de seguir." }
             $text += "`n`nLo que no aplique en este equipo se saltará solo. ¿Seguir?"
-            if (-not (Confirm-JuicerGui $text $(if ($risky.Count) { 'Warning' } else { 'Question' }))) { return }
+            if (-not (Confirm-JuicerGui $text)) { return }
             $toggles = @($cfg.Toggles.Keys | ForEach-Object { @{ Id = $_; On = [bool]$cfg.Toggles[$_] } })
             Start-JuicerGuiTask 'Aplicando la configuración importada…' 'Run' @{
                 Ids = $cfg.Tweaks; Apps = $cfg.Apps; Dns = $cfg.Dns; Toggles = $toggles; RestorePoint = [bool]$script:Gui.C.ChkRestorePoint.IsChecked
@@ -2977,9 +3044,9 @@ function Register-JuicerGuiHandlers {
             $tab = $script:Gui.C.Tabs.SelectedItem
             if ($tab -eq $script:Gui.C.TabDebloat -and -not $script:Gui.DebloatLoaded) { Start-JuicerGuiDebloat }
             elseif ($tab -eq $script:Gui.C.TabInstalar -and $null -eq $script:Gui.Installed) { Start-JuicerGuiInstalled }
-            elseif ($tab -eq $script:Gui.C.TabInicio -and -not $script:Gui.StartupLoaded) { $script:Gui.StartupLoaded = $true; Start-JuicerGuiStartupList }
-            elseif ($tab -eq $script:Gui.C.TabJuegos -and -not $script:Gui.GamesLoaded) { $script:Gui.GamesLoaded = $true; Start-JuicerGuiGames }
-            elseif ($tab -eq $script:Gui.C.TabAjusteFino -and -not $script:Gui.FineLoaded) { $script:Gui.FineLoaded = $true; Start-JuicerGuiFineTune }
+            elseif ($tab -eq $script:Gui.C.TabInicio -and -not $script:Gui.StartupLoaded) { Start-JuicerGuiStartupList }
+            elseif ($tab -eq $script:Gui.C.TabJuegos -and -not $script:Gui.GamesLoaded) { Start-JuicerGuiGames }
+            elseif ($tab -eq $script:Gui.C.TabAjusteFino -and -not $script:Gui.FineLoaded) { Start-JuicerGuiFineTune }
             elseif ($tab -eq $script:Gui.C.TabDeshacer) { Show-JuicerGuiUndo }
             elseif ($tab -eq $script:Gui.C.TabHome) { Show-JuicerGuiHome }
         })
@@ -3186,7 +3253,7 @@ function Complete-JuicerGuiInit {
     $script:Gui.Snapshot = $R.Snapshot
     if ($R.Shield) { Show-JuicerGuiShield $R.Shield }
     if ($R.Update) {
-        $script:Gui.C.UpdateNote.Text = "Hay una versión nueva ($($R.Update.Latest)); tienes la $($R.Update.Local)."
+        $script:Gui.C.UpdateNote.Text = "Hay otra versión publicada ($($R.Update.Latest)); tienes la $($R.Update.Local)."
         $script:Gui.C.UpdatePanel.ToolTip = $R.Update.Command
         $script:Gui.C.UpdatePanel.Visibility = 'Visible'
     }

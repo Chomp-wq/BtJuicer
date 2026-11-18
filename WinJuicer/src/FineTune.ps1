@@ -211,7 +211,7 @@ function Save-JuicerTuneRecord {
     if (-not $PSBoundParameters.ContainsKey('Bios')) { $Bios = Get-JuicerBiosVersion }
     if ($RamSpeed -lt 0) { $RamSpeed = Get-JuicerRamSpeed }
     $r = @{ Date = (Get-Date).ToString('s'); Cpu = $Cpu; Gpu = $Gpu; GpuTool = $GpuTool; Bios = $Bios; RamSpeed = $RamSpeed }
-    [IO.File]::WriteAllText((Get-JuicerTunePath), (ConvertTo-JuicerJson $r), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerTunePath) (ConvertTo-JuicerJson $r)
     Write-JuicerLog "Ajuste fino apuntado: CPU «$Cpu», GPU «$Gpu» ($GpuTool), BIOS $Bios, RAM $RamSpeed"
     $r
 }
@@ -260,7 +260,9 @@ function Get-JuicerTuneCheck {
     $since = [datetime]$r.Date
     $whea = 0; $tdr = 0; $tool = $null
     if (Test-JuicerWindows) {
-        $whea = Get-JuicerEventCount @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; StartTime = $since }
+        # Only the ones that point at an unstable undervolt or memory (18 fatal, 19 CPU corrected,
+        # 47 memory corrected), as the stability audit does: WHEA also logs harmless informational events.
+        $whea = Get-JuicerEventCount @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; Id = 18, 19, 47; StartTime = $since }
         $tdr = Get-JuicerEventCount @{ LogName = 'System'; ProviderName = 'Display'; Id = 4101; StartTime = $since }
         if ($r.GpuTool -eq 'Afterburner') {
             $tool = @(Get-JuicerStartupItems | Where-Object { $_.Enabled -and "$($_.Name) $($_.Command)" -match 'Afterburner' }).Count -gt 0
@@ -295,7 +297,7 @@ if (`$state -and `$state.Last -and [datetime]`$state.Last -gt `$from) { `$from =
 if (`$r.Bios -and `$bios -ne `$r.Bios -and -not (`$state -and `$state.BiosWarned -eq `$bios)) { `$msgs += 'La BIOS ha cambiado: tu undervolt y el XMP/EXPO pueden haberse borrado.' }
 `$ram = (@(Get-CimInstance Win32_PhysicalMemory | ForEach-Object { `$_.ConfiguredClockSpeed }) | Measure-Object -Minimum).Minimum
 if (`$r.RamSpeed -gt 0 -and `$ram -gt 0 -and [Math]::Abs(`$ram - `$r.RamSpeed) -gt 50 -and -not (`$state -and `$state.RamWarned -eq `$ram)) { `$msgs += "La RAM va a `$ram MT/s y la dejaste a `$(`$r.RamSpeed)." }
-`$whea = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; StartTime = `$from } -MaxEvents 100).Count
+`$whea = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; Id = 18, 19, 47; StartTime = `$from } -MaxEvents 100).Count
 if (`$r.Cpu -and `$whea -gt 0) { `$msgs += "`$whea errores WHEA: tu undervolt puede ser demasiado." }
 `$tdr = @(Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Display'; Id = 4101; StartTime = `$from } -MaxEvents 100).Count
 if (`$r.Gpu -and `$tdr -gt 0) { `$msgs += "El driver de la gráfica se reinició `$tdr veces: tu ajuste de la gráfica puede ser demasiado." }

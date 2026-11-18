@@ -37,7 +37,7 @@ function Get-JuicerConfig {
 function Export-JuicerConfig {
     param([Parameter(Mandatory)][string]$Path)
     $cfg = Get-JuicerConfig
-    [IO.File]::WriteAllText($Path, (ConvertTo-JuicerJson $cfg), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic $Path (ConvertTo-JuicerJson $cfg)
     $cfg
 }
 
@@ -58,7 +58,11 @@ function Read-JuicerConfig {
     } catch {
         throw "No es un archivo de configuración de Win Juicer: $_"
     }
-    if ($raw -isnot [hashtable] -or [int]$raw.Version -ne 1) { throw 'No es un archivo de configuración de Win Juicer (versión 1).' }
+    if ($raw -isnot [hashtable]) { throw 'Este archivo no es una exportación de Win Juicer válida.' }
+    # A Version that is not a number (a hand-edited file) must give this message, not a cast error.
+    $ver = 0
+    if ($raw.Version -is [System.Collections.IList] -or -not [int]::TryParse([string]$raw.Version, [ref]$ver)) { throw 'Este archivo no es una exportación de Win Juicer válida.' }
+    if ($ver -ne 1) { throw 'No es un archivo de configuración de Win Juicer (versión 1).' }
     $cfg = @{ Tweaks = @(); Toggles = @{}; Dns = $null; Apps = @(); Unknown = @() }
     foreach ($id in @($raw.Tweaks | Where-Object { $_ })) {
         $t = Find-JuicerTweak $id
@@ -77,6 +81,22 @@ function Read-JuicerConfig {
         if ((Get-JuicerDnsProviders).Contains([string]$raw.Dns)) { $cfg.Dns = [string]$raw.Dns } else { $cfg.Unknown += "dns:$($raw.Dns)" }
     }
     $cfg
+}
+
+# Apps an imported configuration asks to remove, split into what can go and what
+# this PC relies on (Get-JuicerAppxNeed, the same check Debloat shows). Needed is
+# text ready to show: "· Title: reason".
+function Split-JuicerImportApps {
+    param([string[]]$Apps = @(), [hashtable]$Hw)
+    $keep = @()
+    $needed = @()
+    foreach ($n in @($Apps | Where-Object { $_ })) {
+        $app = Find-JuicerDebloatApp $n
+        if (-not $app) { continue }
+        $need = Get-JuicerAppxNeed $app $Hw
+        if ($need) { $needed += "· $($app.Title): $need" } else { $keep += [string]$n }
+    }
+    @{ Keep = $keep; Needed = $needed }
 }
 
 # The tweaks an imported configuration means, in the order they would run.
