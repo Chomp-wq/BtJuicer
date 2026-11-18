@@ -2424,7 +2424,10 @@ function Start-JuicerGuiGameAction {
     Start-JuicerGuiTask "$say $($g.Name)…" 'GameAction' @{ Game = $g.Clone(); Action = $Action; Value = $Value } {
         param($r)
         Show-JuicerGuiGamePage $r.Page
-        $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica' })
+        # NoSeMantuvo: the driver took the value and did not keep it. A message
+        # on a result that went through (NVIDIA's own cap lowered the rate) is
+        # shown too: what was asked is not what was set.
+        $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica', 'NoSeMantuvo' -or ($_.Outcome -in 'Aplicado', 'YaEstaba' -and $_.Message) })
         if ($bad.Count -gt 0) { Show-JuicerGuiMessage (@($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message } | Select-Object -Unique) -join "`n") 'Warning' | Out-Null }
         Show-JuicerGuiUndo
         Show-JuicerGuiHome

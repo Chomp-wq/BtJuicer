@@ -318,10 +318,12 @@ function Invoke-JuicerGameSetup {
             }
             switch ($What) {
                 'Recomendado' {
-                    Add-JuicerFpsLimit $g.ExeName $Fps $Monitor
+                    # A rate given by hand is kept, so recalculating does not undo it.
+                    if ($Fps -gt 0) { Set-JuicerPacerFps $g.ExeName $Fps $Monitor } else { Add-JuicerFpsLimit $g.ExeName 0 $Monitor }
                     if ($GpuCount -ge 2 -and [IO.Path]::IsPathRooted($g.Exe)) { Invoke-JuicerTweak (New-JuicerGpuTweak $g.Exe) }
                 }
-                'Fps' { Add-JuicerFpsLimit $g.ExeName $Fps $Monitor }
+                # 0 is automatic again.
+                'Fps' { Set-JuicerPacerFps $g.ExeName $Fps $Monitor }
                 # Windows keys the GPU choice by full path: games known only by name have none.
                 'Gpu' { if ([IO.Path]::IsPathRooted($g.Exe)) { Invoke-JuicerTweak (New-JuicerGpuTweak $g.Exe) } }
                 'Prioridad' { Invoke-JuicerTweak (New-JuicerPriorityTweak $g.Exe) }
