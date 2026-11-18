@@ -49,6 +49,9 @@ function Select-JuicerGameExe {
     $loose = ConvertTo-JuicerLooseName $Name
     $best = $null; $bestScore = [double]::MinValue
     $biggest = $null; $biggestSize = -1.0
+    # Unreal's own *-Win64-Shipping.exe, when the tree has one, is the game: a
+    # launcher next to it (MarvelRivals_Launcher.exe) is never the answer.
+    $hasShipping = [bool](@($Files | Where-Object { $_.Path -match '-Win64-Shipping\.exe$' -and (Split-Path -Leaf $_.Path) -notmatch '(?i)launcher' }).Count -gt 0)
     foreach ($f in $Files) {
         $file = Split-Path -Leaf $f.Path
         $base = [IO.Path]::GetFileNameWithoutExtension($file)
@@ -61,7 +64,8 @@ function Select-JuicerGameExe {
         $lb = ConvertTo-JuicerLooseName ($base -replace '-Win64-Shipping$', '')
         if ($lb -and $loose -and ($loose.Contains($lb) -or $lb.Contains($loose))) { $score += 35 }
         if ($f.Path -match '(?i)(^|\\)(Binaries\\Win64|bin\\x64|bin64|x64)\\') { $score += 15 }
-        if ($base -match '(?i)launcher') { $score -= 25 }
+        # A launcher never wins over the game itself: with any other candidate it is out.
+        if ($base -match '(?i)launcher') { if ($hasShipping) { continue }; $score -= 25 }
         $score += [Math]::Min(25, [double]$f.Size / 20MB)
         $score -= 3 * ([regex]::Matches($f.Path, '\\').Count)
         if ($score -gt $bestScore) { $bestScore = $score; $best = $f.Path }
@@ -69,12 +73,14 @@ function Select-JuicerGameExe {
     if ($best) { $best } else { $biggest }
 }
 
-# The executables of a game folder, four levels deep at most.
+# The executables of a game folder, five levels deep at most (-Depth 0 is the
+# folder's own children, so Unreal's Game\Binaries\Win64\x.exe, four levels
+# down, is in range in PowerShell 5.1 and 7 alike, with one level to spare).
 function Find-JuicerGameExe {
     param([string]$Dir, [string]$Name)
     if (-not $Dir -or -not (Test-Path -LiteralPath $Dir)) { return $null }
     $root = (Resolve-Path -LiteralPath $Dir).ProviderPath.TrimEnd('\')
-    $files = @(Get-ChildItem -LiteralPath $root -Filter '*.exe' -File -Recurse -Depth 4 -ErrorAction SilentlyContinue | ForEach-Object {
+    $files = @(Get-ChildItem -LiteralPath $root -Filter '*.exe' -File -Recurse -Depth 5 -ErrorAction SilentlyContinue | ForEach-Object {
             @{ Path = $_.FullName.Substring($root.Length + 1); Size = $_.Length }
         })
     $rel = Select-JuicerGameExe $files $Name
@@ -229,6 +235,55 @@ function Save-JuicerLibraryState {
     Write-JuicerTextAtomic (Get-JuicerLibraryPath) (ConvertTo-JuicerJson $State)
 }
 
+function ConvertTo-JuicerGameFolderKey {
+    param([string]$Path)
+    if (-not $Path) { return '' }
+    ($Path -replace '/', '\').Trim().Trim('"').TrimEnd('\').ToLowerInvariant()
+}
+
+# The same installed game can be listed by its store and again by the
+# uninstall registry (a publisher's own launcher), with the same folder or
+# one inside the other, and each entry then works out a different .exe
+# (the launcher at the root, the Shipping one deeper): three gallery entries
+# for one game. Entries collapse when their folders are the same or nested,
+# the store one (Steam, Epic, GOG, Xbox: it has the name and the id the rest
+# of Win Juicer keys on) winning over the registry one, and then the one
+# already known, so ids and chosen .exe files stay. Two store entries never
+# collapse by folder (the .exe check in Get-JuicerGames still joins them), and
+# nor do two that declare different .exe files. The winner lists the ids it
+# absorbed in Merged, so what was set under them is not lost.
+function Merge-JuicerGameDuplicates {
+    param([object[]]$Games, [hashtable]$State)
+    $rank = { param($g) if ($g.Launcher -eq 'custom') { 2 } elseif ($script:StoreLaunchers -contains $g.Launcher -or $g.Launcher -like 'Xbox*') { 0 } else { 1 } }
+    $knownIds = if ($State) { @($State.Known) + @($State.Exe.Keys) } else { @() }
+    $known = { param($g) if ($knownIds -contains $g.Id) { 0 } else { 1 } }.GetNewClosure()
+    $depth = { param($k) ($k -split '\\').Count }
+    $order = @(
+        @{ Expression = { & $rank $_ } }
+        @{ Expression = { & $known $_ } }
+        @{ Expression = { - (& $depth (ConvertTo-JuicerGameFolderKey $_.Dir)) } }
+        @{ Expression = { $_.Id } }
+    )
+    $kept = New-Object System.Collections.ArrayList
+    foreach ($g in @($Games | Sort-Object -Property $order)) {
+        $k = ConvertTo-JuicerGameFolderKey $g.Dir
+        $rg = & $rank $g
+        $into = $null
+        if ($k -and $rg -eq 1) {
+            foreach ($w in $kept) {
+                $wk = ConvertTo-JuicerGameFolderKey $w.Dir
+                if (-not $wk -or (& $rank $w) -eq 2) { continue }
+                if ($k -ne $wk -and -not $k.StartsWith($wk + '\') -and -not $wk.StartsWith($k + '\')) { continue }
+                if ($g.Exe -and $w.Exe -and $g.Exe -ne $w.Exe) { continue }
+                $into = $w; break
+            }
+        }
+        if ($into) { $into.Merged = @(@($into.Merged) + $g.Id + @($g.Merged) | Where-Object { $_ }) } else { [void]$kept.Add($g) }
+    }
+    $kept.ToArray()
+}
+$script:StoreLaunchers = @('Steam', 'Epic Games', 'GOG', 'Xbox')
+
 # Every game found, with its .exe: the one chosen or remembered, the one the
 # launcher declares, or the best guess from its folder. Collectors can be
 # replaced (the tests); each launcher fails on its own.
@@ -244,6 +299,7 @@ function Get-JuicerGames {
         try { foreach ($g in @(& $c)) { if ($g) { [void]$found.Add($g) } } } catch { $failed = $true; Write-JuicerLog "Una biblioteca de juegos no se pudo leer: $_" }
     }
     foreach ($g in $state.Custom) { [void]$found.Add($g) }
+    $found = New-Object System.Collections.ArrayList (, @(Merge-JuicerGameDuplicates @($found) $state))
     $seen = @{}
     $out = @()
     # By name; for the same game in two launchers, the one already known (so
@@ -257,6 +313,8 @@ function Get-JuicerGames {
     foreach ($g in ($found | Sort-Object -Property $order)) {
         if ($seen.ContainsKey($g.Id)) { continue }
         $chosen = [string]$state.Exe[$g.Id]
+        # What was chosen under an id that collapsed into this one carries over.
+        if (-not $chosen) { foreach ($m in @($g.Merged | Where-Object { $_ })) { if ($state.Exe[$m]) { $chosen = [string]$state.Exe[$m]; break } } }
         if ($chosen -and (Test-JuicerGameFile $chosen)) { $g.Exe = $chosen }
         elseif (-not $g.Exe -or -not (Test-JuicerGameFile $g.Exe)) { $g.Exe = [string](& $FindExe $g.Dir $g.Name) }
         if (-not $g.Exe) { continue }
@@ -266,7 +324,8 @@ function Get-JuicerGames {
         $seen[$g.Id] = 1; $seen[$key] = 1
         $state.Exe[$g.Id] = $g.Exe
         $g.ExeName = (Split-Path -Leaf $g.Exe).ToLowerInvariant()
-        $g.New = $state.Known.Count -gt 0 -and $state.Known -notcontains $g.Id
+        $wasKnown = $state.Known -contains $g.Id -or @($g.Merged | Where-Object { $state.Known -contains $_ }).Count -gt 0
+        $g.New = $state.Known.Count -gt 0 -and -not $wasKnown
         $g.Hidden = [bool]($state.Hidden -contains $g.Id)
         $out += $g
     }

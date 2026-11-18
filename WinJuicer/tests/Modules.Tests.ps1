@@ -2667,3 +2667,109 @@ Describe 'Correcciones: juegos, portadas, monitor y catálogo' {
         }
     }
 }
+
+Describe 'Reflex y tope manual' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        $M.Backend.State.FpsBackend = 'nvidia'
+        Remove-Item -LiteralPath (Get-JuicerMonitorModesPath), (Get-JuicerPacerPath) -ErrorAction SilentlyContinue
+    }
+
+    It 'avisa sólo con NVIDIA, VRR, Reflex conocido y un ritmo entre el tope de Reflex y los Hz' {
+        $n = Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 178 180 'VRR' 'NVIDIA'
+        $n | Should -BeLike '*se queda en 171 FPS*tus 180 Hz*apagar Reflex*'
+        (Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 140 144 'EstroboSync' 'NVIDIA') | Should -BeLike '*138 FPS*144 Hz*'
+        (Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 230 240 'VRR' 'NVIDIA') | Should -BeLike '*224 FPS*'
+        # At or below the cap, above the refresh, another GPU, no VRR or no Reflex in the table: no note.
+        Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 171 180 'VRR' 'NVIDIA' | Should -BeNullOrEmpty
+        Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 181 180 'VRR' 'NVIDIA' | Should -BeNullOrEmpty
+        Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 178 180 'VRR' 'AMD' | Should -BeNullOrEmpty
+        Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 178 180 'Fijo' 'NVIDIA' | Should -BeNullOrEmpty
+        Get-JuicerReflexCapNote 'marvel-win64-shipping.exe' 178 180 'Estrobo' 'NVIDIA' | Should -BeNullOrEmpty
+        Get-JuicerReflexCapNote 'desconocido.exe' 178 180 'VRR' 'NVIDIA' | Should -BeNullOrEmpty
+        Get-JuicerReflexCapNote 'league of legends.exe' 178 180 'VRR' 'NVIDIA' | Should -BeNullOrEmpty
+    }
+
+    It 'el resultado de aplicar 178 FPS lleva la nota y el valor se aplica igualmente' {
+        Mock -ModuleName WinJuicer Get-JuicerMainGpuVendor { 'NVIDIA' }
+        $mon = @{ Display = [pscustomobject]@{ Monitor = 'VG27AQ3A'; Hz = 180; MaxHz = 180; Primary = $true; RefreshRates = @(60, 144, 180) }; Info = @{}; Vrr = @{ Min = 48; Max = 180; Kind = 'FreeSync' } }
+        $r = Set-JuicerPacerFps 'Marvel-Win64-Shipping.exe' 178 $mon
+        $r.Outcome | Should -Be 'Aplicado'
+        $r.Title | Should -BeLike 'Frame pacer a 178 FPS*'
+        $r.Message | Should -BeLike '*se queda en 171 FPS*'
+        (Get-JuicerReflexCapNoteHere 'marvel-win64-shipping.exe' $mon) | Should -BeLike '*171 FPS*'
+        # At the Reflex cap itself, or for a game not in the table, nothing to say.
+        (Set-JuicerPacerFps 'Marvel-Win64-Shipping.exe' 171 $mon).Message | Should -Not -BeLike '*Reflex*'
+        (Get-JuicerReflexCapNoteHere 'marvel-win64-shipping.exe' $mon) | Should -BeNullOrEmpty
+        (Set-JuicerPacerFps 'otrojuego.exe' 178 $mon).Message | Should -Not -BeLike '*Reflex*'
+        (Get-JuicerReflexCapNoteHere 'otrojuego.exe' $mon) | Should -BeNullOrEmpty
+    }
+
+    It 'sin NVIDIA el resultado no lleva la nota' {
+        Mock -ModuleName WinJuicer Get-JuicerMainGpuVendor { 'AMD' }
+        $mon = @{ Display = [pscustomobject]@{ Monitor = 'VG27AQ3A'; Hz = 180; MaxHz = 180; Primary = $true; RefreshRates = @(60, 144, 180) }; Info = @{}; Vrr = @{ Min = 48; Max = 180; Kind = 'FreeSync' } }
+        (Set-JuicerPacerFps 'Marvel-Win64-Shipping.exe' 178 $mon).Message | Should -Not -BeLike '*Reflex*'
+    }
+}
+
+Describe 'Juegos repetidos en la galería' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        Remove-Item -LiteralPath (Get-JuicerLibraryPath) -ErrorAction SilentlyContinue
+        $script:RivDir = Join-Path ([IO.Path]::GetTempPath()) ('wj-dedup-' + [guid]::NewGuid().ToString('N'))
+        $script:RivRoot = Join-Path $RivDir 'MarvelRivals'
+        $script:RivBin = Join-Path $RivRoot 'MarvelGame\Marvel\Binaries\Win64'
+        New-Item -ItemType Directory -Path $RivBin | Out-Null
+        Set-Content -LiteralPath (Join-Path $RivRoot 'MarvelRivals_Launcher.exe') -Value 'x'
+        Set-Content -LiteralPath (Join-Path $RivBin 'Marvel-Win64-Shipping.exe') -Value 'x'
+    }
+    AfterEach {
+        Remove-Item -LiteralPath $RivDir -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Get-JuicerLibraryPath) -ErrorAction SilentlyContinue
+    }
+
+    It 'un lanzador nunca gana al *-Win64-Shipping.exe, y lo encuentra a cuatro niveles' {
+        $files = @(@{ Path = 'MarvelRivals_Launcher.exe'; Size = 90MB }, @{ Path = 'MarvelGame\Marvel\Binaries\Win64\Marvel-Win64-Shipping.exe'; Size = 1MB })
+        Select-JuicerGameExe $files 'Marvel Rivals' | Should -Be 'MarvelGame\Marvel\Binaries\Win64\Marvel-Win64-Shipping.exe'
+        (Find-JuicerGameExe $RivRoot 'Marvel Rivals') | Should -BeLike '*Marvel-Win64-Shipping.exe'
+    }
+
+    It 'tres entradas solapadas (Steam, registro en la misma carpeta y en una subcarpeta) son un juego' {
+        $root = $RivRoot; $bin = $RivBin
+        $col = { @(
+                (New-JuicerGame 'EA' 'marvelrivals' 'Marvel Rivals' $bin),
+                (New-JuicerGame 'Steam' '2767030' 'Marvel Rivals' $root),
+                (New-JuicerGame 'Riot' 'marvelrivals2' 'Marvel Rivals (NetEase)' $root)
+            ) }.GetNewClosure()
+        $g = @(Get-JuicerGames -Collectors @($col))
+        $g.Count | Should -Be 1
+        $g[0].Id | Should -Be 'steam:2767030'
+        $g[0].ExeName | Should -Be 'marvel-win64-shipping.exe'
+        # Same result with the collectors in another order, and a second run changes nothing.
+        $rev = { @((New-JuicerGame 'Riot' 'marvelrivals2' 'Marvel Rivals (NetEase)' $root), (New-JuicerGame 'EA' 'marvelrivals' 'Marvel Rivals' $bin), (New-JuicerGame 'Steam' '2767030' 'Marvel Rivals' $root)) }.GetNewClosure()
+        @(Get-JuicerGames -Collectors @($rev)).Id | Should -Be 'steam:2767030'
+        @(Get-JuicerGames -Collectors @($col)).Count | Should -Be 1
+    }
+
+    It 'si sólo había una entrada de registro con ajustes, la elegida no se pierde y no sale como nueva' {
+        $root = $RivRoot; $bin = $RivBin
+        $only = { @(New-JuicerGame 'EA' 'marvelrivals' 'Marvel Rivals' $root) }.GetNewClosure()
+        $other = Join-Path $RivRoot 'Otro.exe'
+        Set-Content -LiteralPath $other -Value 'x'
+        [void](Get-JuicerGames -Collectors @($only))
+        Set-JuicerGameExe 'ea:marvelrivals' $other
+        $both = { @((New-JuicerGame 'EA' 'marvelrivals' 'Marvel Rivals' $bin), (New-JuicerGame 'Steam' '2767030' 'Marvel Rivals' $root)) }.GetNewClosure()
+        $g = @(Get-JuicerGames -Collectors @($both))
+        $g.Count | Should -Be 1
+        $g[0].Id | Should -Be 'steam:2767030'
+        $g[0].ExeName | Should -Be 'otro.exe' -Because 'el .exe elegido bajo el id absorbido pasa al que queda'
+        $g[0].New | Should -BeFalse
+    }
+
+    It 'juegos distintos de una misma tienda o con carpetas hermanas no se juntan' {
+        $a = Join-Path $RivDir 'A'; $b = Join-Path $RivDir 'A2'
+        foreach ($d in $a, $b) { New-Item -ItemType Directory -Path $d | Out-Null; Set-Content -LiteralPath (Join-Path $d 'g.exe') -Value 'x' }
+        $col = { @((New-JuicerGame 'Steam' '1' 'Uno' $a), (New-JuicerGame 'EA' 'dos' 'Dos' $b)) }.GetNewClosure()
+        @(Get-JuicerGames -Collectors @($col)).Count | Should -Be 2
+    }
+}

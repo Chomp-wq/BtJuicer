@@ -646,7 +646,14 @@ function Show-JuicerGameList {
         )
         $key = (Read-JuicerChoice).ToUpperInvariant()
         if ($key -eq 'C') {
-            foreach ($g in $sel) { Write-Host ''; Write-JuicerFindings @(Get-JuicerGameTipsHere $g) }
+            foreach ($g in $sel) {
+                Write-Host ''
+                Write-JuicerFindings @(Get-JuicerGameTipsHere $g)
+                # A rate stored by hand above what Reflex lets the game reach.
+                $reflex = $null
+                try { $reflex = Get-JuicerReflexCapNoteHere ([string]$g.ExeName) } catch { Write-JuicerLog "Sin nota de Reflex: $_" }
+                if ($reflex) { Write-JuicerWrapped $reflex 2 'Yellow' }
+            }
             Wait-JuicerKey
             continue
         }

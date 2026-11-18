@@ -479,6 +479,14 @@ tienda o, si no lo dice, el `*-Win64-Shipping.exe` de los juegos Unreal o el
 ejecutable principal con su nombre, nunca un desinstalador, un lanzador o un
 informe de errores. Lo recuerda, y con «Cambiar .exe…» eliges otro.
 
+Un mismo juego sale **una sola vez**: si su tienda (Steam, Epic, GOG, Xbox) y el
+registro de desinstalación (EA, Ubisoft, Battle.net, Riot…, o el lanzador del
+propio juego) lo listan con la misma carpeta o una dentro de la otra, se junta
+todo en una entrada, la de la tienda, con el mismo identificador de siempre y
+con el `.exe` que habías elegido. El `.exe` que se elige es el del juego
+(`*-Win64-Shipping.exe` en Unreal, hasta cinco niveles de carpetas), nunca un
+lanzador (`MarvelRivals_Launcher.exe`).
+
 Los muestra como una **galería**, agrupados por tienda (Steam, Epic, GOG,
 Xbox…), con un buscador. Cada juego lleva su portada:
 - **Steam**: la de la caché de su biblioteca, ya en tu PC. Steam guarda ahora
@@ -670,6 +678,15 @@ con Win Juicer cerrado:
   - y fuera del estroboscopio sin VRR, si mediste el juego y sus frametimes
     oscilan, **lo que sostiene el 90 % del tiempo**: un ritmo constante se nota
     más fluido que una media más alta con tirones.
+- **El tope de Reflex.** En un juego con NVIDIA Reflex activado y G-SYNC con
+  la sincronización vertical (la que Win Juicer fuerza en el driver con VRR),
+  el propio juego se limita a Hz − Hz²/3600 (180 Hz a 171, 144 a 138, 240 a
+  224) y manda el límite más bajo, así que un ritmo escrito a mano por encima
+  de esa cifra y sin pasar de los Hz (por ejemplo 178 FPS a 180 Hz) no se
+  alcanza nunca. Win Juicer lo aplica igualmente, pero, en los juegos que sabe
+  que tienen Reflex, lo dice al aplicarlo (ventana y consola), en la página del
+  juego y en los consejos de la consola. Para pasar de ahí habría que apagar
+  Reflex en el juego, y se pierde latencia.
 - **La latencia**: un límite que el juego alcanza deja la gráfica por debajo
   del 100 %, así que no se forma cola de fotogramas, que es de donde sale la
   latencia. Con NVIDIA el perfil del juego recibe además la receta de baja

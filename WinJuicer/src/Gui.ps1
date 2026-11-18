@@ -2486,12 +2486,14 @@ function Get-JuicerGuiGamePage {
     $auto = $null
     try { $auto = Get-JuicerRecommendedFps $exe $m -Automatic } catch { Write-JuicerLog "Sin ritmo recomendado para ${exe}: $_" }
     $last = Get-JuicerPreviousFrameResult $exe
+    $reflex = $null
+    try { $reflex = Get-JuicerReflexCapNoteHere $exe $m } catch { Write-JuicerLog "Sin nota de Reflex para ${exe}: $_" }
     $tips = @()
     try { $tips = @(Get-JuicerGameTipsHere $g) } catch { Write-JuicerLog "Sin consejos para ${exe}: $_" }
     $cover = $null
     try { $cover = Get-JuicerCover $g -NoDownload } catch { Write-JuicerLog "Sin portada de ${exe}: $_" }
     @{
-        Game = $g; Engine = (Get-JuicerFpsBackend); Priority = (Get-JuicerPacerPriority $exe); Manual = (Get-JuicerPacerFps $exe)
+        Game = $g; Engine = (Get-JuicerFpsBackend); Priority = (Get-JuicerPacerPriority $exe); Manual = (Get-JuicerPacerFps $exe); ReflexNote = $reflex
         Auto = $(if ($auto) { @{ Fps = $auto.Fps; Why = $auto.Why; Calibrated = [bool]$auto.Calibrated } } else { $null })
         Competitive = (Test-JuicerCompetitiveGame $exe); TwoGpus = ((Get-JuicerGpuCount) -ge 2)
         Last = $(if ($last) { @{ Date = $last.Date; AvgFps = $last.AvgFps; Low1 = $last.Low1; Steady = $last.Steady; JitterMs = $last.JitterMs; InputLatency = $last.InputLatency; Latency = $last.Latency } } else { $null })
@@ -2572,7 +2574,7 @@ function Show-JuicerGuiGamePage {
         $c.GamePacerNote.Text = if (-not $engine) {
             'Para marcar el ritmo hace falta una gráfica NVIDIA o RivaTuner Statistics Server, que es gratis: instálalo, ábrelo una vez y vuelve aquí.'
         } elseif ($g.Fps) {
-            ('Activo: {0} FPS, un fotograma cada {1:N2} ms. Se aplica solo cada vez que abres el juego, {2}.' -f $g.Fps, (1000 / $g.Fps), $(if ($P.Engine -eq 'rtss') { 'con el enganche de RivaTuner' } else { 'desde el driver, sin inyectar nada en él' })) + $(if ($P.Minimal) { ' Modo prudente: sólo el límite.' } else { '' })
+            ('Activo: {0} FPS, un fotograma cada {1:N2} ms. Se aplica solo cada vez que abres el juego, {2}.' -f $g.Fps, (1000 / $g.Fps), $(if ($P.Engine -eq 'rtss') { 'con el enganche de RivaTuner' } else { 'desde el driver, sin inyectar nada en él' })) + $(if ($P.Minimal) { ' Modo prudente: sólo el límite.' } else { '' }) + $(if ($P.ReflexNote) { " $($P.ReflexNote)" } else { '' })
         } else {
             'Desactivado. Actívalo para tener frametimes estables y menos latencia, a la medida de tu monitor.'
         }
