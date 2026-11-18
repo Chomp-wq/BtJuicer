@@ -290,15 +290,28 @@ function Get-JuicerSystemAudit {
 
     try {
         $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-        $owner = Get-CimInstance Win32_Process -Filter "Name='explorer.exe'" -ErrorAction Stop | Select-Object -First 1 |
+        # The explorer of this session: other sessions (fast user switching, RDP) belong to other people.
+        $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+        $owner = Get-CimInstance Win32_Process -Filter "Name='explorer.exe' AND SessionId=$([int]$session)" -ErrorAction Stop | Select-Object -First 1 |
             Invoke-CimMethod -MethodName GetOwner -ErrorAction Stop
-        if ($owner -and $owner.User -and ($me -notlike "*\$($owner.User)")) {
+        if ($owner -and $owner.User -and -not (Test-JuicerSameUser $me $owner.Domain $owner.User)) {
             $out += New-JuicerFinding 'Sistema' 'Alto' "Win Juicer corre como $me, pero la sesión es de $($owner.Domain)\$($owner.User)" 'Los ajustes de usuario (ratón, animaciones, Game Bar…) se aplicarían a la cuenta de administrador, no a la tuya. Inicia sesión con tu cuenta y dale permisos de administrador.'
         }
     } catch {
         Write-Verbose "No se pudo comparar usuarios: $_"
     }
     $out
+}
+
+# Whether DOMAIN\user (as WindowsIdentity names it) is the account Domain and
+# User name. -eq is case-insensitive and, unlike -like, takes no wildcards, so
+# a user name with [ or * in it cannot match by accident.
+function Test-JuicerSameUser {
+    param([string]$Me, [string]$Domain, [string]$User)
+    $name = ($Me -split '\\', 2)[-1]
+    $dom = if ($Me.Contains('\')) { ($Me -split '\\', 2)[0] } else { '' }
+    if ($name -ne $User) { return $false }
+    -not ($dom -and $Domain -and $dom -ne $Domain)
 }
 
 function Get-JuicerHardwareAudit {

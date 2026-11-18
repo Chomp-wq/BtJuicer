@@ -634,7 +634,12 @@ function New-JuicerCatalog {
         What = 'Apaga Copilot por directiva y quita su botón de la barra de tareas. La app de Copilot, si la tienes, se quita aparte en Debloat.'
         Gain = 'Un panel web menos esperando en memoria y un atajo menos que se abre sin querer.'
         Cost = 'Sin Copilot integrado; sigue disponible en la web.'
-        Skip = { if ((Get-JuicerWindowsBuild) -lt 22621) { 'Copilot sólo existe en Windows 11 22H2 o posterior.' } }
+        # From 24H2 (26100) the policy and the button no longer touch Copilot, which is a Store app there.
+        Skip = {
+            $b = Get-JuicerWindowsBuild
+            if ($b -lt 22621) { 'Copilot sólo existe en Windows 11 22H2 o posterior.' }
+            elseif ($b -ge 26100) { 'En esta versión de Windows, Copilot es una app: quítala en Debloat.' }
+        }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1 }
             @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsCopilot'; Name = 'TurnOffWindowsCopilot'; Value = 1 }

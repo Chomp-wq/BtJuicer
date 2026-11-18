@@ -10,6 +10,11 @@
 $script:CoverHosts = 'steamstatic.com', 'steampowered.com', 'epicgames.com', 'unrealengine.com', 'gog-statics.com', 'gog.com'
 # A miss is not tried again for a week.
 $script:CoverRetryDays = 7
+# How the last web request failed: '' (not at all, or the file was not usable),
+# 'missing' (HTTP 404/410: it does not exist), 'transient' (another HTTP error)
+# or 'offline' (no answer at all). Only 'missing' may be remembered as a miss.
+$script:CoverFailure = ''
+$script:CoverOfflineAt = [datetime]::MinValue
 
 function Get-JuicerCoverDir {
     $d = Join-Path (Get-JuicerHome) 'portadas'
@@ -183,6 +188,14 @@ function Get-JuicerEpicCoverUrl {
 }
 
 # GOG's public store API: the box art of a product id.
+function Get-JuicerWebFailureKind {
+    param($ErrorRecord)
+    $resp = $ErrorRecord.Exception.Response
+    if (-not $resp) { return 'offline' }
+    try { $code = [int]$resp.StatusCode } catch { return 'transient' }
+    if ($code -eq 404 -or $code -eq 410) { 'missing' } else { 'transient' }
+}
+
 function Get-JuicerGogCoverUrl {
     param([string]$ProductId)
     if ($ProductId -notmatch '^\d+$') { return $null }
@@ -192,6 +205,7 @@ function Get-JuicerGogCoverUrl {
         if (Test-JuicerCoverUrl $href) { return $href }
     } catch {
         Write-JuicerLog "Sin portada de GOG para ${ProductId}: $_"
+        $script:CoverFailure = Get-JuicerWebFailureKind $_
     }
     $null
 }
@@ -228,6 +242,7 @@ function Save-JuicerCoverDownload {
     param([string]$Url, [string]$Target)
     if (-not (Test-JuicerCoverUrl $Url)) { return $false }
     $tmp = "$Target.descarga"
+    $script:CoverFailure = ''
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $progress = $ProgressPreference
@@ -239,6 +254,7 @@ function Save-JuicerCoverDownload {
         return $true
     } catch {
         Write-Verbose "Sin portada en ${Url}: $_"
+        $script:CoverFailure = Get-JuicerWebFailureKind $_
         return $false
     } finally {
         Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue
@@ -312,15 +328,20 @@ function Get-JuicerCover {
     if ($local) { return @{ Path = $local; Kind = 'cover' } }
 
     $recent = (Test-Path -LiteralPath $miss) -and ((Get-Date) - (Get-Item -LiteralPath $miss).LastWriteTime).TotalDays -lt $script:CoverRetryDays
-    if ($NoDownload -or $recent) {
+    # Offline a moment ago: do not spend 20 s per URL on every game again.
+    $offline = ((Get-Date) - $script:CoverOfflineAt).TotalMinutes -lt 5
+    if ($NoDownload -or $recent -or $offline) {
         if (Test-Path -LiteralPath $icon) { return @{ Path = $icon; Kind = 'icon' } }
         if ($NoDownload) { return $null }
     } else {
+        $script:CoverFailure = ''
         $urls = @(switch ($store) {
                 'steam' { Get-JuicerSteamCoverUrls $storeKey }
                 'epic games' { Get-JuicerEpicCoverUrl $storeKey }
                 'gog' { Get-JuicerGogCoverUrl $storeKey }
             }) | Where-Object { $_ }
+        $uncertain = $script:CoverFailure -in 'offline', 'transient'
+        if ($script:CoverFailure -eq 'offline') { $script:CoverOfflineAt = Get-Date; $urls = @() }
         foreach ($u in $urls) {
             $ext = if ($u -match '\.png($|\?)') { '.png' } else { '.jpg' }
             $target = Join-Path $dir "$key$ext"
@@ -328,8 +349,12 @@ function Get-JuicerCover {
                 Remove-Item -LiteralPath $icon, $miss -Force -ErrorAction SilentlyContinue
                 return @{ Path = $target; Kind = 'cover' }
             }
+            if ($script:CoverFailure -eq 'offline') { $script:CoverOfflineAt = Get-Date; $uncertain = $true; break }
+            if ($script:CoverFailure -eq 'transient') { $uncertain = $true }
         }
-        Set-Content -LiteralPath $miss -Value (Get-Date).ToString('s')
+        # Only a definite «not there» is remembered; being offline or a flaky
+        # server must not block the next try for a week.
+        if (-not $uncertain) { Set-Content -LiteralPath $miss -Value (Get-Date).ToString('s') }
     }
     if ((Test-Path -LiteralPath $icon) -or (Save-JuicerExeIcon $Game.Exe $icon)) { return @{ Path = $icon; Kind = 'icon' } }
     $null

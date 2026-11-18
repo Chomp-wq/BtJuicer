@@ -115,7 +115,8 @@ function Get-JuicerGpuTraits {
         if ($null -ne $g.Series) { $g.Hags = $g.Series -ge 10 -and $Name -notmatch '\bMX\s*\d'; $g.FrameGen = $g.Rtx -and $g.Series -ge 40 }
     } elseif ($Name -match 'AMD|Radeon|ATI') {
         $g.Vendor = 'AMD'
-        if ($Name -match 'Radeon(?:\(TM\))?\s*(?:RX|Pro|VII)') { $g.Discrete = $true }
+        # «Radeon(TM) RX Vega 11 Graphics» is an APU's integrated GPU despite the RX.
+        if ($Name -match 'Radeon(?:\(TM\))?\s*(?:RX|Pro|VII)' -and $Name -notmatch '\bVega\s*\d+\s*Graphics') { $g.Discrete = $true }
         if ($Name -match '\bRX\s*(\d)(\d{2,3})\b') {
             # RX 5700 is gen 5; RX 580, three digits, is older than all of them.
             $g.Series = if ($Matches[2].Length -eq 3) { [int]$Matches[1] } else { 0 }
@@ -265,10 +266,33 @@ function Get-JuicerGpuVram {
         if (-not $desc -or -not $q) { continue }
         # QWORD on most drivers, eight raw bytes on some.
         $v = ConvertTo-JuicerRegValue $q.Kind $q.Value
-        if ($q.Kind -in 'QWord', 'DWord') { $vram[$desc] = [uint64]$v }
-        elseif ($q.Kind -eq 'Binary' -and $v.Count -ge 8) { $vram[$desc] = [BitConverter]::ToUInt64([byte[]]$v, 0) }
+        $size = $null
+        if ($q.Kind -in 'QWord', 'DWord') { $size = [uint64]$v }
+        elseif ($q.Kind -eq 'Binary' -and $v.Count -ge 8) { $size = [BitConverter]::ToUInt64([byte[]]$v, 0) }
+        if ($null -eq $size) { continue }
+        $vram[$desc] = $size
+        # The description does not always equal the WMI name; the hardware id does.
+        $hw = Get-JuicerRegString (Read-JuicerReg "$class\$k" 'MatchingDeviceId')
+        if ($hw) { $vram['id:' + $hw.ToLowerInvariant()] = $size }
     }
     $vram
+}
+
+# The VRAM of one card: the driver's figure by description or hardware id.
+# Win32_VideoController.AdapterRAM is a uint32 that tops out near 4 GB, so a
+# value that high means «more than that», not a real size: unknown (0).
+function Resolve-JuicerGpuVram {
+    param([hashtable]$Vram = @{}, [string]$Name, [string]$PnpId, $AdapterRam)
+    if ($Name -and $Vram.ContainsKey($Name)) { return [uint64]$Vram[$Name] }
+    if ($PnpId) {
+        $pnp = $PnpId.ToLowerInvariant()
+        foreach ($k in $Vram.Keys) {
+            if ($k.StartsWith('id:') -and $pnp.StartsWith($k.Substring(3))) { return [uint64]$Vram[$k] }
+        }
+    }
+    $a = [uint64]$AdapterRam
+    if ($a -ge 4293918720) { return [uint64]0 }
+    $a
 }
 
 function Get-JuicerGpuInfo {
@@ -279,7 +303,7 @@ function Get-JuicerGpuInfo {
             $g.DriverVersion = [string]$_.DriverVersion
             $g.DriverDate = $_.DriverDate
             $g.PnpId = [string]$_.PNPDeviceID
-            $g.Vram = if ($vram.ContainsKey($_.Name)) { $vram[$_.Name] } else { [uint64]$_.AdapterRAM }
+            $g.Vram = Resolve-JuicerGpuVram $vram $_.Name $g.PnpId $_.AdapterRAM
             $g
         })
 }

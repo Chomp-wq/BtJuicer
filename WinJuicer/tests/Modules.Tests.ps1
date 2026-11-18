@@ -1816,7 +1816,84 @@ Describe 'Tus juegos' {
             @{ Path = 'Engine\Binaries\ThirdParty\CEF3\Win64\UnrealCEFSubProcess.exe'; Size = 1MB }
         )
         Select-JuicerGameExe $unreal 'VALORANT' | Should -Be 'ShooterGame\Binaries\Win64\VALORANT-Win64-Shipping.exe'
-        Select-JuicerGameExe @(@{ Path = 'unins000.exe'; Size = 1MB }, @{ Path = 'vc_redist.x64.exe'; Size = 20MB }) 'Juego' | Should -BeNullOrEmpty
+        Select-JuicerGameExe @() 'Juego' | Should -BeNullOrEmpty
+    }
+
+    It 'no confunde juegos con herramientas por el principio del nombre' {
+        foreach ($n in 'CrashBandicoot', 'ServerSim', 'UpdateQuest', 'ConfigurationQuest', 'EditorsChoice', 'InstallationHorror', 'ReportCard') {
+            Select-JuicerGameExe @(@{ Path = "$n.exe"; Size = 1MB }, @{ Path = 'unins000.exe'; Size = 50MB }) 'Zzz' | Should -Be "$n.exe" -Because $n
+        }
+        foreach ($n in 'UnityCrashHandler64', 'CrashReportClient', 'crashpad_handler', 'Game_uninstall', 'unins000', 'vc_redist.x64', 'dxsetup', 'EasyAntiCheat_Setup', 'UE4PrereqSetup_x64', 'CefSharp.BrowserSubprocess', 'steamwebhelper') {
+            Select-JuicerGameExe @(@{ Path = "$n.exe"; Size = 50MB }, @{ Path = 'Juego.exe'; Size = 1MB }) 'Zzz' | Should -Be 'Juego.exe' -Because $n
+        }
+    }
+
+    It 'si todos los .exe parecen herramientas, elige el mayor en vez de perder el juego' {
+        Select-JuicerGameExe @(@{ Path = 'unins000.exe'; Size = 1MB }, @{ Path = 'vc_redist.x64.exe'; Size = 20MB }) 'Juego' | Should -Be 'vc_redist.x64.exe'
+    }
+
+    It 'la biblioteca de una carpeta de juego nunca es una unidad ni una carpeta del sistema' {
+        $prot = @('C:\Windows', 'C:\Program Files', 'C:\Program Files (x86)', 'C:\ProgramData', 'C:\Users\yo')
+        Get-JuicerGameLibraryFolder 'D:\Cyberpunk' $prot | Should -Be 'D:\Cyberpunk'
+        Get-JuicerGameLibraryFolder 'C:\Program Files (x86)\Foo' $prot | Should -Be 'C:\Program Files (x86)\Foo'
+        Get-JuicerGameLibraryFolder 'D:\Epic\Games\Fortnite' $prot | Should -Be 'D:\Epic\Games'
+        Get-JuicerGameLibraryFolder 'D:\Epic\Games\Fortnite\' $prot | Should -Be 'D:\Epic\Games'
+        Get-JuicerGameLibraryFolder 'C:\Users\yo\Games\Foo' $prot | Should -Be 'C:\Users\yo\Games'
+        Get-JuicerGameLibraryFolder 'C:\Users\yo' $prot | Should -BeNullOrEmpty
+        Test-JuicerBroadFolder 'D:\' $prot | Should -BeTrue
+        Test-JuicerBroadFolder 'D:' $prot | Should -BeTrue
+        Test-JuicerBroadFolder 'c:\users' $prot | Should -BeTrue
+        Test-JuicerBroadFolder 'C:\' $prot | Should -BeTrue
+        Test-JuicerBroadFolder 'C:\windows\system32' $prot | Should -BeFalse
+        Test-JuicerBroadFolder 'D:\SteamLibrary\steamapps' $prot | Should -BeFalse
+    }
+
+    It 'la exclusión de Defender rechaza una unidad entera' {
+        { New-JuicerDefenderTweak 'D:\' 'Epic Games' } | Should -Throw
+        { New-JuicerDefenderTweak 'D:\SteamLibrary\steamapps' 'Steam' } | Should -Not -Throw
+    }
+
+    It 'un manifiesto ilegible no tumba el recolector de Steam' {
+        $lib = Join-Path ([IO.Path]::GetTempPath()) ('wj-steam-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path (Join-Path $lib 'common\Bueno') -Force | Out-Null
+        try {
+            Set-Content -LiteralPath (Join-Path $lib 'appmanifest_1.acf') -Value '"AppState" { "appid" "1" "name" "Bueno" "installdir" "Bueno" }'
+            New-Item -ItemType Directory -Path (Join-Path $lib 'appmanifest_2.acf') | Out-Null
+            $env:WJ_TEST_LIB = $lib
+            Mock -ModuleName WinJuicer Get-JuicerGameLibraries { @(@{ Launcher = 'Steam'; Path = $env:WJ_TEST_LIB }) }
+            $g = @(Get-JuicerSteamGames)
+            $g.Count | Should -Be 1
+            $g[0].Name | Should -Be 'Bueno'
+        } finally {
+            Remove-Item Env:\WJ_TEST_LIB -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $lib -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'un recolector que falla no hace «nuevos» sus juegos la próxima vez' {
+        # A folder of its own, named apart from the Describe's $Dir (variables are
+        # case-insensitive, and AfterEach deletes $Dir recursively).
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('wj-exe-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $root | Out-Null
+        $exe = Join-Path $root 'juego.exe'
+        Set-Content -LiteralPath $exe -Value 'x'
+        try {
+            $gameDir = Split-Path -Parent $exe
+            $ok7 = { New-JuicerGame 'Steam' '7' 'Siete' $gameDir $exe }.GetNewClosure()
+            $ok8 = { New-JuicerGame 'Steam' '8' 'Ocho' $gameDir $exe }.GetNewClosure()
+            $bad = { throw 'roto' }
+            $find = { param($d, $n) $exe }.GetNewClosure()
+            # Both games share the .exe, so only the first listed survives; use two files.
+            $exe2 = $exe -replace '\.exe$', '2.exe'
+            Set-Content -LiteralPath $exe2 -Value 'y'
+            $ok8 = { New-JuicerGame 'GOG' '8' 'Ocho' $gameDir $exe2 }.GetNewClosure()
+            $find = { param($d, $n) '' }
+            @(Get-JuicerGames -Collectors @($ok7, $ok8) -FindExe $find) | Out-Null
+            @(Get-JuicerGames -Collectors @($ok7, $bad) -FindExe $find) | Out-Null
+            @(Get-JuicerGames -Collectors @($ok7, $ok8) -FindExe $find | Where-Object { $_.Id -eq 'gog:8' })[0].New | Should -BeFalse
+        } finally {
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 
     It 'reconoce juegos de EA, Ubisoft, Battle.net y Riot, y no sus lanzadores' {

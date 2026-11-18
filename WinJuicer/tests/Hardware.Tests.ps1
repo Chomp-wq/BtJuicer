@@ -82,6 +82,9 @@ Describe 'Gráfica' {
         @{ N = 'AMD Radeon RX 7800 XT'; V = 'AMD'; D = $true; H = $true; F = $false }
         @{ N = 'AMD Radeon RX 580 Series'; V = 'AMD'; D = $true; H = $false; F = $false }
         @{ N = 'AMD Radeon(TM) Graphics'; V = 'AMD'; D = $false; H = $null; F = $false }
+        @{ N = 'AMD Radeon(TM) RX Vega 11 Graphics'; V = 'AMD'; D = $false; H = $null; F = $false }
+        @{ N = 'AMD Radeon RX Vega 8 Graphics'; V = 'AMD'; D = $false; H = $null; F = $false }
+        @{ N = 'Radeon RX Vega 56'; V = 'AMD'; D = $true; H = $null; F = $false }
         @{ N = 'Intel(R) Arc(TM) B580 Graphics'; V = 'Intel'; D = $true; H = $true; F = $false }
         @{ N = 'Intel(R) Arc(TM) Graphics'; V = 'Intel'; D = $false; H = $null; F = $false }
         @{ N = 'Intel(R) UHD Graphics 770'; V = 'Intel'; D = $false; H = $null; F = $false }
@@ -620,6 +623,19 @@ Describe 'Combinaciones de hardware' {
         @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce GTX 1650' 4GB)) 1920 1080)[0].Title | Should -Be 'Sólo 4 GB de VRAM'
         @(Get-JuicerVramFindings @((New-Gpu 'NVIDIA GeForce RTX 4090' 24GB)) 3840 2160).Count | Should -Be 0
         @(Get-JuicerVramFindings @((New-Gpu 'Intel(R) UHD Graphics 770' 128MB)) 3840 2160).Count | Should -Be 0
+    }
+
+    It 'la VRAM no sale del tope de 4 GB de WMI cuando el registro no la da' {
+        $vram = @{ 'NVIDIA GeForce RTX 4080' = [uint64]16GB; 'id:pci\ven_1002&dev_73bf' = [uint64]16GB }
+        Resolve-JuicerGpuVram $vram 'NVIDIA GeForce RTX 4080' '' 4293918720 | Should -Be 16GB
+        # The name differs from the driver description: the hardware id finds it.
+        Resolve-JuicerGpuVram $vram 'AMD Radeon RX 6900 XT' 'PCI\VEN_1002&DEV_73BF&SUBSYS_1&REV_C1\4&2&0&0008' 4293918720 | Should -Be 16GB
+        # Only the capped WMI figure: unknown, so no «Sólo 4 GB» finding.
+        Resolve-JuicerGpuVram @{} 'Tarjeta' 'PCI\VEN_1&DEV_2' 4293918720 | Should -Be 0
+        # A real small figure is kept.
+        Resolve-JuicerGpuVram @{} 'Intel UHD' '' 1GB | Should -Be 1GB
+        $g = New-Gpu 'NVIDIA GeForce RTX 4080' 0
+        @(Get-JuicerVramFindings @($g) 1920 1080).Count | Should -Be 0
     }
 
     It 'APU sin gráfica dedicada: la memoria reservada en la BIOS' {
