@@ -28,6 +28,8 @@ registro de Windows. Están aquí:
 - **Un solo módulo de RAM, o dos en el mismo canal.** La mitad de ancho de banda.
 - **Un monitor de 144 Hz funcionando a 60.** Pasa muchísimo, y se arregla en
   Configuración en diez segundos. O por debajo de su resolución nativa.
+- **Auriculares Bluetooth para jugar**: el audio llega entre 100 y 300 ms tarde.
+  Cable, USB o receptor de 2,4 GHz (ver **Audio**).
 - **El monitor enchufado a la placa base** en vez de a la tarjeta gráfica.
 - **Windows o la biblioteca de juegos en un disco duro mecánico.** Ningún ajuste
   compensa eso.
@@ -384,6 +386,79 @@ Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
 de alto rendimiento y prioridad por encima de lo normal para un `.exe`, y exclusiones de Microsoft
 Defender para las bibliotecas de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net y Riot
 (Extremo; nunca una unidad entera ni una carpeta del sistema).
+
+### Audio
+
+Lo que de verdad cuenta en la latencia del sonido de un juego, por orden de
+tamaño, y lo que Win Juicer hace con cada cosa:
+
+- **Bluetooth: 100 a 300 ms.** El sonido por Bluetooth tarda entre 100 y 300 ms
+  según el códec (más con el micrófono activo, en modo manos libres): cien veces
+  más que cualquier ajuste de Windows. Para jugar, auriculares con cable, USB o
+  con receptor propio de 2,4 GHz. El diagnóstico lo detecta (por el bus del
+  adaptador, `BTHENUM` o `BTHLEDevice`) y lo marca con ⚠. Ningún programa puede
+  arreglarlo.
+- **Mejoras de audio.** Refuerzo de graves, sonido envolvente virtual,
+  igualación de sonoridad y ecualizadores procesan el sonido antes de sacarlo, y
+  algunos suman latencia y CPU. Si están activadas, el diagnóstico sugiere
+  desactivarlas en Configuración > Sistema > Sonido > tu dispositivo > Mejoras de
+  audio. Win Juicer no las toca: las gestiona el driver de cada fabricante y no
+  hay una forma segura de apagarlas desde fuera. Si Windows no dice cómo están,
+  no aparece nada.
+- **48000 Hz.** Casi todos los juegos, Discord y los navegadores trabajan a
+  48000 Hz; con otra frecuencia (44100 Hz, o 96000 Hz de «alta resolución»)
+  Windows reconvierte el sonido de cada programa, con algo de CPU y de latencia.
+  Sólo informa: si escuchas música en alta resolución, es una razón para dejarlo.
+- **El período del motor de audio.** Windows mezcla el audio de todos los
+  programas en períodos de 10 ms, y la partida entera, de que el juego emite el
+  sonido a que sale por el altavoz, suma unos 20-30 ms. Desde Windows 10 un
+  programa puede pedir un período más corto (128 muestras son 2,7 ms a 48 kHz) si
+  el driver lo admite, y mientras alguno lo mantenga abierto el motor trabaja a
+  ese período **para todos los programas** de esa salida, que siguen mezclados.
+  El diagnóstico lo dice con las cifras de tu equipo («10 ms ahora; tu driver
+  permite 2,7 ms», o «tu driver de audio no admite baja latencia»): el driver
+  genérico de Windows («Dispositivo de audio de alta definición») suele admitirlo;
+  muchos de fabricante informan un mínimo igual al período por defecto.
+
+El ajuste **Audio de baja latencia** (`audio.latencia`) es esa petición, hecha
+una vez por todos: un script pequeño que se queda abierto con un flujo
+compartido y **silencioso** (no reproduce nada y no toma el dispositivo en
+exclusiva) en la salida predeterminada, con el período mínimo del driver, y que
+cambia de flujo si cambias de salida (auriculares que se enchufan, un driver que
+se reinicia). Se ejecuta con tu usuario (las sesiones de audio son de cada
+usuario; si Win Juicer corre como otra cuenta de administrador, ver «Un detalle
+si tu cuenta no es de administrador»), sin ventana, con prioridad baja y de uno en uno, como tarea programada
+al iniciar sesión, y se pone en marcha en cuanto lo aplicas. Deshacer, o
+«Deshacer todo», quita la tarea y el script y cierra el flujo: el audio vuelve a
+10 ms.
+
+- **Qué ahorra:** unos 5-7 ms de los 20-30 ms de latencia de salida. Se nota en
+  juegos de ritmo o con sonido de pasos y disparos, no en los FPS. Medirlo en tu
+  equipo es difícil sin instrumentos; la cifra viene de la diferencia entre los
+  períodos, no de una medición.
+- **Qué cuesta:** un proceso de PowerShell oculto siempre abierto (unas decenas
+  de MB) y unos cientos de despertares de CPU por segundo: poca CPU, pero en un
+  portátil, algo de batería. Es un ajuste **a la carta** (nivel 0, en ningún
+  perfil) y no «Rendimiento» porque deja un proceso residente, depende de que el
+  driver lo haga bien (con alguno, un período muy corto da chasquidos si el
+  equipo va cargado) y sólo se nota en cierto tipo de juegos: lo elige quien lo
+  quiere. Pruébalo con lo que juegas: si oyes chasquidos, deshaz.
+- **Cuándo no se ofrece:** sin salida de audio activa, o si el driver informa un
+  mínimo igual al período por defecto (no hay nada que ganar), con el motivo. Una
+  vez aplicado, nunca se salta, para que siempre se pueda deshacer. En la ventana
+  sale en la pestaña Ajustes (categoría Audio) y como botón «Aplicar» en el
+  diagnóstico y en «Listo para jugar»; en consola,
+  `-Aplicar audio.latencia`.
+
+Lo que **no** hay, y por qué: ni **modo exclusivo** ni **ASIO** para juegos. El
+modo exclusivo (y ASIO, que es lo mismo con otro driver) da la latencia más baja
+que existe, pero sólo funciona si el *propio programa* lo pide, y los juegos no
+lo hacen: hablan con el mezclador de Windows, y Discord, el navegador y el resto
+de sonidos del sistema también. Un programa externo no puede «activarlo» en su
+nombre, y quitar la casilla de exclusivo del dispositivo no gana nada. Es cosa
+de estudios de música y de reproductores para audiófilos. Tampoco tocamos la
+prioridad ni la afinidad de `audiodg.exe` ni desactivamos el HPET: no mueven el
+período de mezcla, que es lo que manda (ver «Lo que no hace»).
 
 ### Tus juegos
 
@@ -986,6 +1061,12 @@ No cambia nada:
 - **Grabación de Game Bar en segundo plano**, con los mismos valores del registro
   que cambia el ajuste «juegos.grabacion»: si está activa, ⚠ «graba en segundo
   plano: cuesta FPS» y apunta a ese ajuste. Sin forma de leerlo, no aparece.
+- **Audio**, de la salida predeterminada: ⚠ si es **Bluetooth** (100-300 ms de
+  retardo) o si las **mejoras de audio** están activadas (con la ruta de
+  Configuración); ℹ si la frecuencia no es 48000 Hz, y una línea con el período
+  del motor («10 ms ahora; tu driver permite 2,7 ms», «baja latencia en marcha» o
+  «tu driver no la admite») que apunta al ajuste `audio.latencia`. Lo que Windows
+  no dice, no aparece. Ver **Audio**, arriba.
 - **Seguridad basada en virtualización (VBS / integridad de memoria)**, si está
   en marcha (la misma clase de Windows que lee el diagnóstico): sólo
   **informativa** (marca ℹ), nunca cuenta entre las cosas «por mirar»; quitarla es
@@ -1097,7 +1178,8 @@ siguiente partida tenga tirones.
 No desactiva SysMain, ni el archivo de paginación, ni la compresión de memoria,
 ni Defender, ni Windows Update, ni las mitigaciones de Spectre. No «libera RAM».
 No borra la caché de shaders. No fuerza el HPET. No toca las claves «Games» de
-MMCSS ni `Win32PrioritySeparation`. No limpia el registro. No quita todas las
+MMCSS ni `Win32PrioritySeparation`. No cambia la prioridad ni la afinidad de `audiodg.exe`, ni desactiva el HPET,
+«para bajar la latencia del audio». No limpia el registro. No quita todas las
 apps de la Tienda de golpe ni desactiva servicios en masa. No desinstala Edge a
 la fuerza. No desactiva IPv6 ni Teredo. No cambia el DNS «para bajar el ping».
 
@@ -1159,6 +1241,7 @@ WinJuicer/
   src/Engine.ps1          estado, aplicar, verificar, deshacer, interruptores y el diario
   src/Catalog.ps1         los ajustes, con su texto, y los mitos
   src/Native.ps1          SystemParametersInfo, modos de pantalla, Modern Standby, núcleos híbridos
+  src/Audio.ps1           la salida de audio (COM: IAudioClient3), su diagnóstico y el audio de baja latencia
   src/Hardware.ps1        de qué está hecho el equipo
   src/Advisor.ps1         qué conviene a este equipo, y por qué
   src/Audit.ps1           el diagnóstico
@@ -1223,7 +1306,12 @@ mirar en un PC de verdad, empezando por la pestaña Equipo, que no cambia nada.
 Invoke-Pester ./WinJuicer/tests
 ```
 
-`Features.Tests.ps1` cubre lo que Windows deshace, la copia del diario, los
+`Audio.Tests.ps1` cubre el diagnóstico y las líneas de «Listo para jugar» con salidas
+simuladas (Bluetooth, mejoras activadas, 44,1 kHz, con y sin baja latencia, sin dato), el
+ajuste «Audio de baja latencia» (cuándo se salta, que aplicar y deshacer anotan y quitan la
+tarea) y que el C# declara cada interfaz COM entera y en orden. `Windows.Tests.ps1` comprueba
+en Windows de verdad que ese C# compila (también en Windows PowerShell 5.1) y que el
+diagnóstico responde sin tarjeta de sonido. `Features.Tests.ps1` cubre lo que Windows deshace, la copia del diario, los
 tiempos de arranque, «Actualizar ahora» (sólo cómo se construye la orden: no
 arranca nada), «Listo para jugar» y la edad de los drivers. `Mejoras.Tests.ps1`,
 las confirmaciones con detalle, las opciones no válidas de los menús (y que sin

@@ -20,6 +20,8 @@ BeforeAll {
     function Initialize-BrokenMachine {
         $m = New-FakeMachine
         Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+        # An output whose driver allows shorter periods, so «Audio de baja latencia» takes part in the round trips.
+        $m.Backend.State.Audio = New-FakeAudioInfo
         $mm = 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management'
         Write-JuicerReg $mm 'PagingFiles' 'MultiString' @('')
         Write-JuicerReg $mm 'LargeSystemCache' 'DWord' 1

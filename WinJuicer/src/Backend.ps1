@@ -891,6 +891,10 @@ function New-JuicerWindowsBackend {
         ProcRunning  = ${function:Test-WinProcessRunning}
         AppIncidents = ${function:Read-WinAppIncidents}
         PacerState   = ${function:Get-WinPacerState}
+        AudioInfo    = ${function:Get-WinAudioInfo}
+        AudioHelperState   = ${function:Get-WinAudioHelperState}
+        AudioHelperInstall = ${function:Install-WinAudioHelper}
+        AudioHelperRemove  = ${function:Remove-WinAudioHelper}
     }
 }
 
@@ -932,6 +936,8 @@ function New-JuicerMemoryBackend {
         FpsExact = @{}    # exe -> fractional cap (RTSS)
         FpsEngines = $null  # engines the PC has; null = just FpsBackend
         Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
+        Audio    = $null   # the default output, as ConvertTo-JuicerAudioInfo gives it; null = no device
+        AudioHelper = @{ Installed = $false; Running = $false }   # the low-latency task and its script
         Calls    = New-Object System.Collections.ArrayList
         Run      = $Run
     }
@@ -1076,6 +1082,18 @@ function New-JuicerMemoryBackend {
         PacerState  = { $script:Mem.Pacer }
         ProcRunning = { param($Exe) $script:Mem.Running -contains (ConvertTo-JuicerExeName $Exe) }
         AppIncidents = { param($Since) , @($script:Mem.Incidents | Where-Object { [datetime]$_.Time -ge $Since }) }
+        AudioInfo   = { $script:Mem.Audio }
+        AudioHelperState = { @{ Installed = [bool]$script:Mem.AudioHelper.Installed; Running = [bool]$script:Mem.AudioHelper.Running } }
+        AudioHelperInstall = {
+            [void]$script:Mem.Calls.Add('audio-helper install')
+            $script:Mem.AudioHelper.Installed = $true
+            $script:Mem.AudioHelper.Running = $true
+        }
+        AudioHelperRemove = {
+            [void]$script:Mem.Calls.Add('audio-helper remove')
+            $script:Mem.AudioHelper.Installed = $false
+            $script:Mem.AudioHelper.Running = $false
+        }
     }
 }
 
