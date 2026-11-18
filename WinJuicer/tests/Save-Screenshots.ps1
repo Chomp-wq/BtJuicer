@@ -83,6 +83,8 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             [void](Save-JuicerExeIcon (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') $icon)
             $games += @{ Id = 'custom:herramienta'; Name = 'Juego añadido a mano'; Launcher = 'custom'; Dir = 'C:\Juegos'; Exe = 'C:\Juegos\juego.exe'; ExeName = 'juego.exe'; Cover = @{ Path = $icon; Kind = 'icon' } }
             $games += @{ Id = 'medido:otro.exe'; Name = 'otro'; Launcher = 'Medido o limitado'; Dir = ''; Exe = 'otro.exe'; ExeName = 'otro.exe' }
+            # One hidden («no es un juego»): the gallery shows «Mostrar ocultos (1)» and leaves it out.
+            $games += @{ Id = 'steam:benchmark'; Name = 'Benchmark de prueba'; Launcher = 'Steam'; Dir = 'C:\Juegos'; Exe = 'C:\Juegos\bench.exe'; ExeName = 'bench.exe'; Hidden = $true }
             $script:Gui.GamesLoaded = $true
             Show-JuicerGuiGallery $games
             Show-JuicerGuiSafety @{ Protected = @(@{ Exe = 'cyberpunk2077.exe'; Name = 'Cyberpunk 2077'; Kind = 'Cierre'; Time = (Get-Date).AddHours(-3).ToString('s'); Module = 'nvwgf2umx.dll' }); Warned = @() }
@@ -93,7 +95,7 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
                 @{ Id = 'juegos.hags'; Title = 'Programación de GPU acelerada por hardware'; State = 'Pendiente'; Level = 1 }
                 @{ Id = 'privacidad.telemetria'; Title = 'Telemetría al mínimo y sin sus tareas programadas'; State = 'Pendiente'; Level = 2 }
             )
-            $script:Gui.ReadyLines = @(Get-JuicerReadyStatus @{ GameMode = $true; HagsConfigured = $true; HagsRestart = $true; Windowed = $true; Rebar = $true; PlanKind = 'Rendimiento'; CpuMax = 100; OnBattery = $false; MonitorHz = 60; MonitorMaxHz = 165 })
+            $script:Gui.ReadyLines = @(Get-JuicerReadyStatus @{ GameMode = $true; HagsConfigured = $true; HagsRestart = $true; Windowed = $true; GameDvr = $true; Rebar = $true; PlanKind = 'Rendimiento'; CpuMax = 100; OnBattery = $false; MonitorHz = 60; MonitorMaxHz = 165; Vbs = $true; Hvci = $true })
             $c0 = $script:Gui.C
             $c0.UpdateNote.Text = 'Hay otra versión publicada (a1b2c3d); tienes la 9f8e7d6.'
             $c0.UpdatePanel.Visibility = 'Visible'
@@ -126,6 +128,7 @@ $psm = Join-Path (Split-Path -Parent $PSScriptRoot) 'WinJuicer.psm1'
             $page = @{
                 Game = $games[0]; Engine = 'nvidia'; Priority = 'Latencia'; Manual = 0; Auto = @{ Fps = 171; Why = 'Pantalla de 180 Hz con frecuencia variable.'; Calibrated = $true }
                 Competitive = $true; TwoGpus = $false; Running = $true
+                CalAge = (Get-JuicerCalibrationAge (Get-Date).AddDays(-41).ToString('s') 171)
                 Last = @{ Date = (Get-Date).ToString('s'); AvgFps = 170.2; Low1 = 151; Steady = 96; JitterMs = 0.21; InputLatency = 12.3 }
                 Chart = @{ Series = [double[]](@(5.85) * 50 + @(9.5) + @(5.85) * 40 + @(7.1) + @(5.85) * 60); TargetMs = 5.85; MaxMs = 9.5 }
                 Tips = @(Get-JuicerGameTips -ExeName 'cs2.exe' -GpuVendor 'NVIDIA' -Use 'VRR' -Hz 180); Cover = $games[0].Cover

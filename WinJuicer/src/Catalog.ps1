@@ -492,10 +492,10 @@ function New-JuicerCatalog {
     # --- Interfaz --------------------------------------------------------
 
     @{
-        Id = 'ui.animaciones'; Category = 'Interfaz'; Level = 2; Impact = 'Medio'; Reboot = 'Sesion'
+        Id = 'ui.animaciones'; Category = 'Interfaz'; Level = 2; Impact = 'Bajo'; Reboot = 'Sesion'
         Title = 'Quitar animaciones'
         What = 'Desactiva los efectos de animación de Windows, la animación al minimizar y maximizar, las de la barra de tareas, y acorta la espera de los submenús.'
-        Gain = 'Ventanas y menús aparecen al instante. No da FPS: hace que Windows se sienta más rápido.'
+        Gain = 'Ventanas y menús aparecen al instante. No da FPS ni acelera nada de verdad: sólo se salta la animación, así que Windows se siente más rápido.'
         Cost = 'Estética.'
         Actions = @(
             @{ Type = 'Spi'; Get = 0x1042; Set = 0x1043; Value = $false; Label = 'Efectos de animación: desactivados' }
@@ -535,10 +535,10 @@ function New-JuicerCatalog {
         )
     }
     @{
-        Id = 'ui.busqueda'; Category = 'Interfaz'; Level = 2; Impact = 'Medio'; Reboot = 'Explorador'
+        Id = 'ui.busqueda'; Category = 'Interfaz'; Level = 2; Impact = 'Bajo'; Reboot = 'Explorador'
         Title = 'Búsqueda de Inicio sin resultados web'
         What = 'Quita las sugerencias de Bing de la búsqueda del menú Inicio.'
-        Gain = 'La búsqueda deja de esperar a internet: resultados locales al instante.'
+        Gain = 'La búsqueda deja de esperar a internet: resultados locales al instante. Sólo se nota si tu conexión tarda; no da FPS.'
         Cost = 'No verás resultados web al buscar desde Inicio.'
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Policies\Microsoft\Windows\Explorer'; Name = 'DisableSearchBoxSuggestions'; Value = 1 }
@@ -669,6 +669,7 @@ function New-JuicerCatalog {
         What = 'Deshabilita «Experiencias del usuario y telemetría asociadas» (DiagTrack).'
         Gain = 'Evita la recogida y el envío periódico de datos de diagnóstico. Poca ganancia, pero sin efectos secundarios en un equipo doméstico.'
         Cost = 'El programa Windows Insider lo necesita.'
+        Skip = { if (Test-JuicerInsider) { 'Estás en Windows Insider, que necesita los datos de diagnóstico.' } }
         Actions = @(
             @{ Type = 'Service'; Name = 'DiagTrack'; Start = 'Disabled' }
         )
@@ -775,8 +776,8 @@ function New-JuicerCatalog {
     @{
         Id = 'red.nagle'; Category = 'Red'; Level = 2; Impact = 'Bajo'; Reboot = 'Reinicio'
         Title = 'Desactivar el algoritmo de Nagle'
-        What = 'En cada adaptador de red con dirección IP, envía al momento los paquetes TCP pequeños en lugar de agruparlos, y confirma cada uno sin esperar.'
-        Gain = 'Menos latencia en juegos que usan TCP, sobre todo MMO como World of Warcraft o Final Fantasy XIV. La mayoría de shooters usa UDP y no notará nada.'
+        What = 'En cada adaptador de red con dirección IP, envía al momento los paquetes TCP pequeños en lugar de agruparlos, y confirma cada uno sin esperar. Sólo cubre los adaptadores que existen cuando lo aplicas: una red nueva (otra tarjeta, una VPN, un USB wifi) no entra; vuelve a aplicarlo para incluirla.'
+        Gain = 'Sólo ayuda a los juegos que usan TCP, sobre todo MMO como World of Warcraft o Final Fantasy XIV, y poco: es un recorte de milisegundos. Los shooters y casi todos los juegos competitivos usan UDP y no notarán nada: en ellos no hace nada.'
         Cost = 'Unos pocos paquetes más por segundo en la red.'
         Actions = {
             foreach ($p in (Get-JuicerNetworkInterfaceKeys)) {

@@ -19,7 +19,7 @@
 
 # --- Processor -----------------------------------------------------------------
 
-$script:CpuTestHowTo = 'Prueba cada paso: OCCT (CPU, conjunto de datos variable) una hora y CoreCycler una noche para ir núcleo a núcleo. Si hay errores, cierres o pantallazos, sube el valor un escalón (menos negativo) en ese núcleo. Después, usa el equipo unos días: el diagnóstico de Win Juicer cuenta los errores WHEA desde que lo apuntaste.'
+$script:CpuTestHowTo = 'Prueba cada paso: OCCT (CPU, conjunto de datos variable) una hora y CoreCycler una noche para ir núcleo a núcleo. Si hay errores, cierres o pantallazos, sube el valor un escalón (menos negativo) en ese núcleo. Después, usa el equipo unos días: el diagnóstico de Win Juicer cuenta los errores WHEA desde que lo apuntaste. Las cifras de ganancia salen de reseñas, no de tu equipo: mídelas con «Antes y después» (o Juegos > Medir) antes de quedarte con el ajuste.'
 
 function Get-JuicerCpuTuneGuide {
     param([hashtable]$Cpu)
@@ -29,7 +29,7 @@ function Get-JuicerCpuTuneGuide {
     if ($n -match 'Ryzen [3579] 5\d{3}X3D') {
         return @{
             Key = 'zen3x3d'; Title = "Undervolt para tu $n"; Where = $co
-            Steps = 'Curve Optimizer «All Cores», signo negativo: empieza en -15 y baja de 5 en 5 hasta -30. Si tu BIOS no lo tiene (AGESA anterior a 1.2.0.8), actualízala; la alternativa es un offset de voltaje negativo de -0,03 a -0,05 V (tus -40 mV están ahí), menos fino que Curve Optimizer.'
+            Steps = 'Curve Optimizer «All Cores», signo negativo: empieza en -15 y baja de 5 en 5 hasta -30. Si tu BIOS no lo tiene (AGESA anterior a 1.2.0.8), actualízala; la alternativa es un offset de voltaje negativo de -0,03 a -0,05 V (-0,04 V es un punto de partida típico), menos fino que Curve Optimizer.'
             Gain = 'No sube la frecuencia máxima (está bloqueada), pero con 5-10 °C menos el procesador la sostiene más tiempo bajo carga: más FPS en juegos largos y menos ruido.'
             Test = $script:CpuTestHowTo
         }
@@ -74,6 +74,16 @@ function Get-JuicerCpuTuneGuide {
             Test = $script:CpuTestHowTo
         }
     }
+    # Arrow Lake (Core Ultra 200S, K parts): no Raptor Lake degradation story, but the BIOS
+    # voltage options are young and vary a lot by board, so small steps and a stability test each.
+    if ($Cpu.Vendor -eq 'Intel' -and $n -match 'Core(?:\(TM\))?\s*Ultra\s*[579]\s*2\d{2}KF?\b') {
+        return @{
+            Key = 'arrowlakek'; Title = "Undervolt prudente para tu $n"; Where = 'BIOS > Overclocking > CPU Voltage (o «AC/DC Load Line» / «Voltage Offset» / «Adaptive Voltage Offset», según la placa)'
+            Steps = 'Primero, la BIOS más reciente de tu placa (las de Arrow Lake han mejorado mucho con las actualizaciones de microcódigo) y el perfil «Intel Default Settings». Luego, sólo si quieres menos calor: «AC Load Line» y «DC Load Line» más bajos en pasos pequeños (de 0,05 mΩ en 0,05 mΩ) o un offset de voltaje de -0,010 a -0,050 V, de 10 mV en 10 mV. Cada placa lo llama distinto; si no ofrece ninguna de las dos, no se puede desde Windows tampoco.'
+            Gain = 'Algunos grados y vatios menos con el mismo rendimiento. Arrow Lake ya consume bastante menos que la 14.ª generación, así que el margen es modesto: no merece la pena arriesgar estabilidad.'
+            Test = $script:CpuTestHowTo
+        }
+    }
     $null
 }
 
@@ -81,6 +91,9 @@ function Get-JuicerCpuTuneGuide {
 
 function Get-JuicerGpuArch {
     param([string]$Name)
+    # Workstation and datacenter cards (RTX 4000 Ada, RTX A4000, RTX PRO 6000, Quadro, Tesla)
+    # share the numbers of the GeForce ones but not their clocks or their drivers' limits.
+    if ($Name -match '\bAda\b|RTX\s*A\d|Quadro|Tesla|RTX\s*PRO') { return $null }
     if ($Name -match 'RTX\s*50\d{2}') { return 'blackwell' }
     if ($Name -match 'RTX\s*40\d{2}') { return 'ada' }
     if ($Name -match 'RTX\s*30\d{2}') { return 'ampere' }
@@ -89,6 +102,7 @@ function Get-JuicerGpuArch {
     if ($Name -match '\bRX\s*9\d{3}') { return 'rdna4' }
     if ($Name -match '\bRX\s*7\d{3}') { return 'rdna3' }
     if ($Name -match '\bRX\s*6\d{3}') { return 'rdna2' }
+    if ($Name -match '\bRX\s*5\d{3}\b') { return 'rdna1' }
     if ($Name -match 'Arc(?:\(TM\))?\s*[AB]\d{3}') { return 'arc' }
     $null
 }
@@ -97,7 +111,7 @@ $script:GpuTuneGuides = @{
     blackwell = @{
         Arch = 'Blackwell (RTX 50)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner: Core Clock +200 a +300 MHz (sube de 50 en 50) y Memory Clock +1000 a +2000 MHz (GDDR7 suele aguantar más, pero cada +1000 da muy poco). Para menos consumo con lo mismo, curva (Ctrl+F) plana a 0,90-0,95 V a la frecuencia que alcances.'
-        Gain = 'Las RTX 50 traen margen: en pruebas de prensa, un 10-13 % más con la frecuencia al máximo estable; la memoria aporta poco porque casi nunca limita.'
+        Gain = 'Las RTX 50 traen margen: según reseñas, un 10-13 % más con la frecuencia al máximo estable; la memoria aporta poco porque casi nunca limita.'
     }
     ada = @{
         Arch = 'Ada Lovelace (RTX 40)'; Tool = 'Afterburner'
@@ -107,37 +121,42 @@ $script:GpuTuneGuides = @{
     ampere = @{
         Arch = 'Ampere (RTX 30)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner, curva (Ctrl+F) plana a 850-900 mV y 1850-1950 MHz. Memoria +250 a +500 MHz: la GDDR6X corrige sus propios errores, así que pasada la frecuencia buena no se cuelga, rinde menos; mide FPS en cada paso.'
-        Gain = 'Es la generación que más gana con undervolt: el mismo rendimiento (o algo más, porque deja de tocar el límite de potencia) con un 20-25 % menos de consumo.'
+        Gain = 'Es la generación que más gana con undervolt: el mismo rendimiento (o algo más, porque deja de tocar el límite de potencia) con un 20-25 % menos de consumo, según reseñas.'
     }
     turing = @{
         Arch = 'Turing (RTX 20 / GTX 16)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner, curva plana a unos 900 mV y 1850-1900 MHz, o +75 a +125 MHz de núcleo. Memoria +500 a +800 MHz.'
-        Gain = 'Un 3-6 % con el núcleo y la memoria, o lo mismo con menos ruido usando la curva.'
+        Gain = 'Según reseñas, un 3-6 % con el núcleo y la memoria, o lo mismo con menos ruido usando la curva.'
     }
     pascal = @{
         Arch = 'Pascal (GTX 10)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner, límite de potencia al máximo, +75 a +150 MHz de núcleo y +300 a +500 MHz de memoria; o curva a unos 900 mV y 1850-1900 MHz para que no baje de frecuencia por temperatura.'
-        Gain = 'Un 4-8 %, sobre todo si la tarjeta bajaba frecuencia por temperatura.'
+        Gain = 'Según reseñas, un 4-8 %, sobre todo si la tarjeta bajaba frecuencia por temperatura.'
     }
     rdna4 = @{
         Arch = 'RDNA 4 (RX 9000)'; Tool = 'Adrenalin'
         Steps = 'En AMD Software > Rendimiento > Ajuste: «Voltage Offset» de -30 a -80 mV (cada chip es distinto: algunos fallan ya a -40) y «Power Limit» +10 %. Memoria a 2700 MHz con «Fast Timing» al final, si sobra.'
-        Gain = 'El límite de potencia es lo que sube la frecuencia; el undervolt la hace alcanzable sin subir consumo ni temperatura. En foros, un 5-10 % con chips buenos.'
+        Gain = 'El límite de potencia es lo que sube la frecuencia; el undervolt la hace alcanzable sin subir consumo ni temperatura. Según reseñas y foros, un 5-10 % con chips buenos.'
     }
     rdna3 = @{
         Arch = 'RDNA 3 (RX 7000)'; Tool = 'Adrenalin'
         Steps = 'En AMD Software > Rendimiento > Ajuste: baja el voltaje máximo de 10 en 10 mV desde los ~1150 de fábrica (muchas se quedan en 1050-1080), y luego «Power Limit» +15 %. La memoria déjala para el final: suele tope en 2500-2600 MHz y «Fast Timing» da un par de FPS.'
         Gain = 'Menos consumo y temperatura con el mismo rendimiento, o algo más con el límite de potencia subido.'
     }
+    rdna1 = @{
+        Arch = 'RDNA 1 (RX 5000)'; Tool = 'Adrenalin'
+        Steps = 'En AMD Software > Rendimiento > Ajuste: baja el voltaje del núcleo de unos 1200 mV a 1100-1150 mV, deja la frecuencia como está y «Power Limit» +20 %. Memoria +20 a +40 MHz sobre la de fábrica como mucho: en estas tarjetas se pasa de estable sin avisar.'
+        Gain = 'Sobre todo menos temperatura y ruido con el mismo rendimiento; el overclock da poco (según reseñas, un 2-4 %).'
+    }
     rdna2 = @{
         Arch = 'RDNA 2 (RX 6000)'; Tool = 'Adrenalin'
         Steps = 'En AMD Software > Rendimiento > Ajuste: voltaje de 1150-1200 a 1075-1100 mV, «Power Limit» +15 % y memoria a 2100-2150 MHz con «Fast Timing».'
-        Gain = 'Un 3-6 % con el límite de potencia y la memoria, con menos temperatura gracias al undervolt.'
+        Gain = 'Según reseñas, un 3-6 % con el límite de potencia y la memoria, con menos temperatura gracias al undervolt.'
     }
     arc = @{
         Arch = 'Intel Arc'; Tool = 'Intel'
         Steps = 'En Intel Graphics Software > Rendimiento: «Power Limit» al máximo y «GPU Performance Boost» de 10 en 10 hasta que falle, y vuelve dos pasos atrás. Comprueba antes que Resizable BAR está activo: en Arc es lo que más cuenta.'
-        Gain = 'Un 5-10 % con el límite de potencia y la frecuencia; sin Resizable BAR, nada compensa.'
+        Gain = 'Según reseñas, un 5-10 % con el límite de potencia y la frecuencia; sin Resizable BAR, nada compensa.'
     }
 }
 
@@ -157,22 +176,35 @@ function Get-JuicerGpuTuneGuide {
     $g
 }
 
-$script:GpuTestHowTo = 'Prueba con lo que juegas, no sólo con un benchmark: 3DMark Time Spy o Steel Nomad en bucle 20 minutos y una hora de tu juego más exigente. Mide FPS antes y después con Juegos > Medir. Si el driver se reinicia o el juego se cierra, vuelve un paso atrás: el diagnóstico cuenta esos cuelgues desde que apuntaste el ajuste.'
+$script:GpuTestHowTo = 'Prueba con lo que juegas, no sólo con un benchmark: 3DMark Time Spy o Steel Nomad en bucle 20 minutos y una hora de tu juego más exigente. Mide FPS antes y después con Juegos > Medir (las cifras de ganancia salen de reseñas, no de tu equipo: lo que cuenta es lo que midas). Si el driver se reinicia o el juego se cierra, vuelve un paso atrás: el diagnóstico cuenta esos cuelgues desde que apuntaste el ajuste.'
 
 function Get-JuicerTuneGuideFindings {
     param([hashtable]$Cpu, [object[]]$Gpus = @(), [bool]$Laptop)
     $area = 'Ajuste fino'
     $out = @()
+    $guided = $false
     $c = if (-not $Laptop) { Get-JuicerCpuTuneGuide $Cpu }
     if ($c) {
+        $guided = $true
         $out += New-JuicerFinding $area 'Info' $c.Title ("Dónde: $($c.Where). $($c.Steps) $($c.Gain) La BIOS lo guarda y lo aplica en cada arranque sin ningún programa. $($c.Test)")
     }
+    $laptopNoted = $false
     foreach ($g in @($Gpus | Where-Object { $_.Discrete })) {
         $guide = Get-JuicerGpuTuneGuide $g.Name
         if (-not $guide) { continue }
+        # The desktop numbers are for desktop cards: a laptop's share a tight power and thermal
+        # budget set by the maker, so the recipe would do harm there.
+        if ($Laptop -or $g.Name -match 'Laptop|Max-Q|Mobile') {
+            if (-not $laptopNoted) {
+                $laptopNoted = $true
+                $out += New-JuicerFinding $area 'Info' "Ajuste de la gráfica de tu portátil ($($g.Name))" 'En un portátil no se tocan los límites de potencia: los fija el fabricante para lo que aguanta la refrigeración. Si quieres probar, sólo una curva pequeña (bajar algo el voltaje a la misma frecuencia, o +50 a +100 MHz de núcleo) y que decida la temperatura, no los MHz: si pasa de lo que ya alcanzaba, retrocede. Usa la herramienta del fabricante (Armoury Crate, Legion Space, MSI Center, Alienware Command Center…) o la de la gráfica, no una receta de sobremesa. Prueba con lo que juegas, no sólo con un benchmark.'
+            }
+            continue
+        }
+        $guided = $true
         $out += New-JuicerFinding $area 'Info' "Undervolt y overclock para tu $($g.Name) ($($guide.Arch))" ("$($guide.Steps) $($guide.Gain) $($guide.Persist) $script:GpuTestHowTo")
     }
-    if ($out.Count -gt 0 -and -not (Read-JuicerTuneRecord)) {
+    if ($guided -and -not (Read-JuicerTuneRecord)) {
         $out += New-JuicerFinding $area 'Info' 'Apunta en Win Juicer lo que apliques' 'En la pestaña Ajuste fino (o con -ApuntarAjuste): Win Juicer recordará tus valores y en cada inicio de sesión avisará si una actualización de BIOS los ha borrado, si la RAM ha vuelto a su velocidad de fábrica o si hay errores desde entonces.'
     }
     $out

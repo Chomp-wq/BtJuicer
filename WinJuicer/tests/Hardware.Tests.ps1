@@ -682,7 +682,7 @@ Describe 'Ajuste fino' {
         $x3d = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD'
         $g = Get-JuicerCpuTuneGuide $x3d
         $g.Key | Should -Be 'zen3x3d'
-        $g.Steps | Should -BeLike '*-15*-30*-40 mV*'
+        $g.Steps | Should -BeLike '*-15*-30*-0,04 V*'
         (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen4x3d'
         (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 9800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen5x3d'
         (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 7600X 6-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen3plus'
@@ -727,6 +727,40 @@ Describe 'Ajuste fino' {
         @(Get-JuicerTuneCheckFindings $null '' 0 0 0 $null).Count | Should -Be 0
         # Once recorded, the guide stops asking to record it.
         @(Get-JuicerTuneGuideFindings (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD') @() $false | Where-Object { $_.Title -like 'Apunta*' }).Count | Should -Be 0
+    }
+
+    It 'las tarjetas de estación de trabajo no reciben la receta de las GeForce, y las RX 5000 tienen la suya' {
+        foreach ($n in 'NVIDIA RTX 4000 Ada Generation', 'NVIDIA RTX A4000', 'NVIDIA Quadro RTX 4000', 'NVIDIA Tesla T4', 'NVIDIA RTX PRO 6000 Blackwell') {
+            Get-JuicerGpuArch $n | Should -BeNullOrEmpty -Because $n
+        }
+        Get-JuicerGpuArch 'NVIDIA GeForce RTX 4070' | Should -Be 'ada'
+        Get-JuicerGpuArch 'AMD Radeon RX 5700 XT' | Should -Be 'rdna1'
+        Get-JuicerGpuArch 'AMD Radeon RX 580 Series' | Should -BeNullOrEmpty
+        (Get-JuicerGpuTuneGuide 'AMD Radeon RX 5600 XT').Persist | Should -BeLike '*AMD Software*'
+    }
+
+    It 'en un portátil, una nota prudente en vez de la receta de sobremesa' {
+        $cpu = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7840HS w/ Radeon 780M Graphics' -Vendor 'AuthenticAMD'
+        $lap = Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070 Laptop GPU'
+        $f = @(Get-JuicerTuneGuideFindings $cpu @($lap) $true)
+        $f.Count | Should -Be 1
+        $f[0].Title | Should -BeLike '*portátil*'
+        $f[0].Detail | Should -BeLike '*límites de potencia*'
+        $f[0].Detail | Should -Not -BeLike '*Ctrl+F*'
+        # The name alone is enough, even if the machine was not detected as a laptop.
+        @(Get-JuicerTuneGuideFindings $cpu @((Get-JuicerGpuTraits 'NVIDIA GeForce RTX 3060 Max-Q')) $false)[0].Title | Should -BeLike '*portátil*'
+        # A desktop card keeps its recipe.
+        @(Get-JuicerTuneGuideFindings $cpu @((Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070')) $false)[0].Title | Should -BeLike '*(Ada Lovelace*'
+    }
+
+    It 'los Core Ultra 200 K tienen una guía prudente; los de portátil, ninguna' {
+        $k = Get-JuicerCpuTraits -Name 'Intel(R) Core(TM) Ultra 7 265K' -Vendor 'GenuineIntel'
+        $g = Get-JuicerCpuTuneGuide $k
+        $g.Key | Should -Be 'arrowlakek'
+        $g.Steps | Should -BeLike '*AC Load Line*'
+        @(Get-JuicerTuneGuideFindings $k @() $false | Where-Object { $_.Title -like 'Apunta*' }).Count | Should -Be 1
+        Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'Intel(R) Core(TM) Ultra 7 155H' -Vendor 'GenuineIntel') | Should -BeNullOrEmpty
+        Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'Intel(R) Core(TM) Ultra 5 245' -Vendor 'GenuineIntel') | Should -BeNullOrEmpty
     }
 
     It 'el script que vigila al iniciar sesión es PowerShell válido' {

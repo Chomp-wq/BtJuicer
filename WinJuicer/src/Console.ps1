@@ -56,19 +56,39 @@ function Write-JuicerHeader {
     Write-Host '  WIN JUICER' -ForegroundColor Yellow -NoNewline
     Write-Host '  exprime Windows 11, sin humo' -ForegroundColor DarkGray
     Write-Host ('  ' + ('─' * 46)) -ForegroundColor DarkGray
+    if ($script:MenuNotice) {
+        Write-Host "  $($script:MenuNotice)" -ForegroundColor Yellow
+        $script:MenuNotice = ''
+    }
     if ($Section) {
         Write-Host "  $Section" -ForegroundColor White
         Write-Host ''
     }
 }
 
+# Set when Read-Host returned $null: standard input is closed (a pipe that ended, Ctrl+Z), so
+# nobody can answer any more. Menus that would loop on an empty answer leave instead.
+$script:InputClosed = $false
+# What the last wrong choice said: the next screen prints it under its header (a menu clears
+# the screen, so saying it right away would be erased before it could be read).
+$script:MenuNotice = ''
+
 function Read-JuicerChoice {
     param([string]$Prompt = 'Elige')
     Write-Host ''
     Write-Host "  $Prompt" -ForegroundColor Cyan -NoNewline
     $answer = Read-Host ' '
-    if ($null -eq $answer) { return '' }
+    if ($null -eq $answer) { $script:InputClosed = $true; return '' }
     $answer.Trim()
+}
+
+# For the default branch of a menu: brief, and nothing for an empty answer (Intro just redraws).
+function Write-JuicerInvalidChoice {
+    param([string]$Choice)
+    $c = ([string]$Choice).Trim()
+    if (-not $c) { return }
+    if ($c.Length -gt 20) { $c = $c.Substring(0, 19) + '…' }
+    $script:MenuNotice = "Opción no válida: $c"
 }
 
 function Confirm-JuicerAction {
@@ -358,6 +378,7 @@ function Show-JuicerFineTune {
             }
             'O' { Remove-JuicerTuneRecord; Unregister-JuicerTuneWatch }
             '' { return }
+            default { Write-JuicerInvalidChoice $_ }
         }
     }
 }
@@ -380,6 +401,8 @@ function Show-JuicerMeasure {
                 }
             }
             '0' { return }
+            # Intro alone just redraws, but a closed input can never answer: leave.
+            default { if ($script:InputClosed) { return }; Write-JuicerInvalidChoice $_ }
         }
     }
 }
@@ -551,7 +574,7 @@ function Show-JuicerGames {
         Write-JuicerMenu @(
             @('0', 'Tus juegos', 'los encuentra solos: frame pacer y GPU en un paso'),
             @('1', 'Exclusiones de Defender', 'cargas más rápidas en tus bibliotecas (Extremo)'),
-            @('2', 'Configurar un juego', 'GPU potente y prioridad alta para un .exe'),
+            @('2', 'Configurar un juego', 'GPU potente y prioridad por encima de lo normal para un .exe'),
             @('3', 'Juegos configurados', 'ver y deshacer'),
             @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon'),
             @('5', 'Frame pacer', 'un ritmo por juego que se aplica solo, según tu monitor, y se calibra')
@@ -565,6 +588,7 @@ function Show-JuicerGames {
             '4' { Show-JuicerFrameMeasure }
             '5' { Show-JuicerLimiter }
             '' { return }
+            default { Write-JuicerInvalidChoice $_ }
         }
     }
 }
@@ -580,26 +604,40 @@ function Write-JuicerGameList {
         $st = Format-JuicerGameStatus $g
         Write-Host $st -ForegroundColor $(if ($st -eq 'sin configurar') { 'DarkGray' } else { 'Green' }) -NoNewline
         if ($g.New) { Write-Host '  nuevo' -ForegroundColor Yellow -NoNewline }
+        if ($g.Hidden) { Write-Host '  oculto' -ForegroundColor DarkGray -NoNewline }
         Write-Host ''
     }
 }
 
 function Show-JuicerGameList {
+    $showHidden = $false
     while ($true) {
         Write-JuicerHeader 'Tus juegos'
         Write-Host '  Buscando juegos…' -ForegroundColor DarkGray
-        $games = @(Get-JuicerGameStatus @(Get-JuicerGames))
+        $all = @(Get-JuicerGameStatus @(Get-JuicerGames -IncludeHidden))
+        $hiddenCount = @($all | Where-Object { $_.Hidden }).Count
+        if ($hiddenCount -eq 0) { $showHidden = $false }
+        # Hidden ones («no es un juego») only show when asked, so the numbers are of what is listed.
+        $games = @($all | Where-Object { $showHidden -or -not $_.Hidden })
         Write-JuicerHeader 'Tus juegos'
-        if ($games.Count -eq 0) { Write-JuicerWrapped 'No he encontrado juegos de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net ni Riot.' 2 'Yellow'; Wait-JuicerKey; return }
+        if ($games.Count -eq 0 -and $hiddenCount -eq 0) { Write-JuicerWrapped 'No he encontrado juegos de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net ni Riot.' 2 'Yellow'; Wait-JuicerKey; return }
+        if ($games.Count -eq 0) { Write-JuicerWrapped 'Todos tus juegos están ocultos.' 2 'Yellow' }
         Write-JuicerGameList $games
         Write-Host ''
         Write-JuicerWrapped 'Elige juegos por número (1,3,5-8, o «t» para todos) y luego qué hacer. «Optimizar» pone el límite de FPS para tu monitor y, con dos gráficas, la dedicada; se aplica solo cada vez que los abras.' 2 'Gray'
+        if ($hiddenCount -gt 0) { Write-JuicerWrapped $(if ($showHidden) { 'O: volver a ocultar los ocultos.' } else { "O: mostrar los $hiddenCount ocultos." }) 2 'DarkGray' }
         $pick = Read-JuicerChoice 'Juegos (Intro para volver)'
         if (-not $pick) { return }
+        if ($pick -match '^[oO]$' -and $hiddenCount -gt 0) { $showHidden = -not $showHidden; continue }
+        if ($games.Count -eq 0) { continue }
         $nums = if ($pick -match '^[tT]') { 1..$games.Count } else { Get-JuicerNumbers $pick $games.Count }
         if (@($nums).Count -eq 0) { continue }
-        $sel = @($nums | ForEach-Object { $games[$_ - 1] })
+        # «t» is every game that counts: the hidden ones stay out even when they are shown.
+        $sel = if ($pick -match '^[tT]') { @($games | Where-Object { -not $_.Hidden }) } else { @($nums | ForEach-Object { $games[$_ - 1] }) }
+        if ($sel.Count -eq 0) { continue }
         Write-JuicerMenu @(
+            @('H', 'No es un juego: ocultar', 'lo saca de esta lista y de «Optimizar todos»; no borra nada'),
+            @('M', 'Volver a mostrar', 'los que ocultaste'),
             @('O', 'Optimizar', 'límite de FPS recomendado y GPU dedicada si hay dos'),
             @('F', 'Sólo límite de FPS', 'el recomendado o el que digas'),
             @('P', 'Prioridad por encima de lo normal', 'no «alta»: con alta, el equipo se puede congelar'),
@@ -612,8 +650,14 @@ function Show-JuicerGameList {
             Wait-JuicerKey
             continue
         }
+        if ($key -in 'H', 'M') {
+            foreach ($g in $sel) { Set-JuicerGameHidden $g.Id ($key -eq 'H') }
+            Write-JuicerWrapped $(if ($key -eq 'H') { "Oculto$(if ($sel.Count -ne 1) { 's' }): $(($sel | ForEach-Object { $_.Name }) -join ', '). Ya no salen en la lista ni en «Optimizar todos»." } else { "Vuelve$(if ($sel.Count -ne 1) { 'n' }) a mostrarse: $(($sel | ForEach-Object { $_.Name }) -join ', ')." }) 2 'Green'
+            Wait-JuicerKey
+            continue
+        }
         $what = @{ O = 'Recomendado'; F = 'Fps'; P = 'Prioridad'; Q = 'Quitar' }[$key]
-        if (-not $what) { continue }
+        if (-not $what) { Write-JuicerInvalidChoice $key; continue }
         $fps = 0
         if ($what -eq 'Fps') { $fps = Read-JuicerFpsInput }
         # Games picked one by one are what the user asked for, even one Win
@@ -649,7 +693,10 @@ function Show-JuicerLimiter {
         foreach ($g in $limits) {
             $n++
             $fps = if ($g.Exact -gt 0 -and $g.Backend -eq 'rtss') { '{0:N2} FPS' -f $g.Exact } elseif ($g.Fps) { "$($g.Fps) FPS" } else { 'sin ritmo ahora' }
-            Write-Host ('  {0,2}. {1}: {2}{3}{4}' -f $n, $g.Exe, $fps, $(if ($pacer.Calibrated.ContainsKey($g.Exe)) { ' (calibrado)' } else { '' }), $(if ((Get-JuicerPacerPriority $g.Exe) -eq 'Latencia') { ' [latencia]' } else { '' }))
+            $cal = $pacer.Calibrated[$g.Exe]
+            $age = $(if ($cal -is [hashtable]) { Get-JuicerCalibrationAge ([string]$cal.Date) ([int]$cal.Fps) } else { $null })
+            Write-Host ('  {0,2}. {1}: {2}{3}{4}' -f $n, $g.Exe, $fps, $(if ($age) { " ($($age.Text))" } elseif ($cal) { ' (calibrado)' } else { '' }), $(if ((Get-JuicerPacerPriority $g.Exe) -eq 'Latencia') { ' [latencia]' } else { '' }))
+            if ($age -and $age.Stale) { Write-JuicerWrapped $age.Hint 6 'DarkGray' }
         }
         if ($n -eq 0) { Write-Host '  Ningún juego con frame pacer todavía.' -ForegroundColor DarkGray }
         $conflicts = @(Get-JuicerPacerConflicts (& (Get-JuicerBackend).PacerState) (Get-JuicerFpsBackend) $limits $m)
@@ -662,6 +709,7 @@ function Show-JuicerLimiter {
             @('P', 'Prioridad de un juego', 'fluidez, o latencia mínima (por encima de los Hz al calibrar)'),
             @('Q', 'Quitar el frame pacer a un juego', 'por número'),
             @('U', 'Cómo usas tu monitor', 'VRR, ELMB/DyAc u otro estroboscopio, o frecuencia fija'),
+            @('D', 'Tu monitor es OLED', $(if ($m) { $o = Get-JuicerMonitorOledOverride $m; 'ahora: ' + $(if ($null -eq $o) { 'según su nombre (' + $(if (Test-JuicerMonitorOled $m) { 'OLED' } else { 'no OLED' }) + ')' } elseif ($o) { 'sí, lo dices tú' } else { 'no, lo dices tú' }) } else { 'si el nombre no lo delata' })),
             @('E', 'Motor', "ahora: $($pacer.Engine); con estrobo, RivaTuner admite décimas"),
             @('O', 'Olvidar las calibraciones', 'volver al ritmo recomendado'),
             @('R', 'Recalcular los ritmos', 'con el modo y la frecuencia de ahora')
@@ -711,6 +759,15 @@ function Show-JuicerLimiter {
                     if ($limits.Count -gt 0 -and (Confirm-JuicerAction '¿Recalcular con este modo el ritmo de los juegos que ya lo tienen?')) { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
                 }
             }
+            'D' {
+                if (-not $m) { Write-JuicerWrapped 'No se pudo leer el monitor.' 2 'Yellow'; Wait-JuicerKey; continue }
+                Write-Host ''
+                Write-Host '  1. Según su nombre (automático)'
+                Write-Host '  2. Sí, es OLED'
+                Write-Host '  3. No, no es OLED'
+                $q = Read-JuicerChoice 'Número'
+                if ($q -in '1', '2', '3') { [void](Set-JuicerMonitorOled $m $(switch ($q) { '2' { $true } '3' { $false } default { $null } })) }
+            }
             'E' {
                 $engines = @(Get-JuicerPacerEngines)
                 Write-Host ''
@@ -725,6 +782,7 @@ function Show-JuicerLimiter {
             'O' { Clear-JuicerPacerCalibration; Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             'R' { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             '' { return }
+            default { Write-JuicerInvalidChoice $_ }
         }
     }
 }
@@ -757,7 +815,7 @@ function Show-JuicerDefenderLibraries {
     Write-JuicerHeader 'Exclusiones de Defender'
     $libs = @(Get-JuicerGameLibraries)
     if ($libs.Count -eq 0) {
-        Write-JuicerWrapped 'No he encontrado bibliotecas de Steam, Epic, GOG ni Xbox. Puedes excluir otra carpeta escribiendo su ruta.' 2
+        Write-JuicerWrapped 'No he encontrado bibliotecas de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net ni Riot. Puedes excluir otra carpeta escribiendo su ruta.' 2
     }
     $tweaks = @($libs | ForEach-Object { New-JuicerDefenderTweak $_.Path $_.Launcher })
     $journal = Read-JuicerJournal
@@ -822,7 +880,13 @@ function Show-JuicerConfiguredGames {
     foreach ($e in $entries) { $n++; Write-Host ('  {0,3}  {1}' -f $n, $e.Title) }
     $c = Read-JuicerChoice 'Números a deshacer, Intro para volver'
     if ($c -eq '') { return }
-    Show-JuicerResults @(Get-JuicerNumbers $c $entries.Count | ForEach-Object { Undo-JuicerTweak $entries[$_ - 1].Id })
+    # A frame pacer goes through Remove-JuicerFpsLimit (as in the window): it also clears its
+    # pending state and waits for the game to close if it is open; a plain Undo would not.
+    $results = @(Get-JuicerNumbers $c $entries.Count | ForEach-Object {
+            $id = [string]$entries[$_ - 1].Id
+            if ($id -like 'fps:*') { Remove-JuicerFpsLimit $id.Substring(4) } else { Undo-JuicerTweak $id }
+        })
+    Show-JuicerResults $results
     Wait-JuicerKey
 }
 
@@ -843,9 +907,14 @@ function Show-JuicerMaintenance {
         switch ($c) {
             '1' {
                 Write-JuicerHeader 'Limpieza'
+                Write-Host '  Calculando cuánto se liberaría (no borra nada todavía)…' -ForegroundColor DarkGray
+                $preview = Get-JuicerCleanupPreview
+                foreach ($l in (Format-JuicerCleanupPreview $preview)) { Write-JuicerWrapped $l 2 'Gray' }
+                if (-not (Confirm-JuicerAction '¿Limpiar esto? No se puede deshacer')) { continue }
+                Write-Host ''
                 $total = [int64]0
                 foreach ($r in (Invoke-JuicerCleanup)) {
-                    $what = if ($r.Freed -lt 0) { 'vaciada' } else { Format-JuicerBytes $r.Freed }
+                    $what = if ($r.Note) { $r.Note } elseif ($r.Freed -lt 0) { 'vaciada' } else { Format-JuicerBytes $r.Freed }
                     if ($r.Freed -gt 0) { $total += $r.Freed }
                     Write-Host ('  {0,-40} {1}' -f $r.Name, $what)
                     if ($r.Skipped -gt 0) { Write-Host "      $($r.Skipped) archivos en uso o recientes, sin tocar" -ForegroundColor DarkGray }
@@ -881,6 +950,7 @@ function Show-JuicerMaintenance {
                 Wait-JuicerKey
             }
             '' { return }
+            default { Write-JuicerInvalidChoice $_ }
         }
     }
 }
@@ -988,6 +1058,8 @@ function Show-JuicerUndo {
             continue
         }
         if ($c -match '^[tT]$') {
+            Write-Host ''
+            Write-JuicerWrapped (Format-JuicerUndoAllConfirm $journal -NoQuestion) 2 'Gray'
             if (Confirm-JuicerAction $(if ($journal.Count -eq 1) { '¿Deshacer el cambio?' } else { "¿Deshacer los $($journal.Count) cambios?" })) { Show-JuicerResults @(Undo-JuicerAll); Wait-JuicerKey }
             continue
         }
@@ -1351,7 +1423,9 @@ function Show-JuicerShield {
                 Wait-JuicerKey
             }
             '3' { [void](Write-JuicerShieldCheck); Wait-JuicerKey }
-            default { return }
+            '0' { return }
+            '' { return }
+            default { Write-JuicerInvalidChoice $_ }
         }
     }
 }
@@ -1366,7 +1440,8 @@ function Show-JuicerReady {
         Write-Host '  No se ha podido leer nada de este equipo.' -ForegroundColor Yellow
     }
     foreach ($l in $lines) {
-        Write-Host ('  {0} ' -f $(if ($l.Ok) { '[ok]' } else { '[ !]' })) -ForegroundColor $(if ($l.Ok) { 'Green' } else { 'Yellow' }) -NoNewline
+        $mark = $(if ($l.Info) { '[ i]' } elseif ($l.Ok) { '[ok]' } else { '[ !]' })
+        Write-Host ('  {0} ' -f $mark) -ForegroundColor $(if ($l.Info) { 'DarkGray' } elseif ($l.Ok) { 'Green' } else { 'Yellow' }) -NoNewline
         Write-Host $l.Title
         if ($l.Reason) { Write-JuicerWrapped $l.Reason 7 'DarkGray' }
     }
@@ -1446,6 +1521,7 @@ function Show-JuicerMainMenu {
                 }
             }
             '0' { return }
+            default { if ($script:InputClosed) { return }; Write-JuicerInvalidChoice $c }
         }
     }
 }
@@ -1537,6 +1613,7 @@ function Start-Juicer {
         [string[]]$BloquearWeb = @(),
         [int]$Fps,
         [string]$ModoMonitor,
+        [ValidateSet('', 'Auto', 'Si', 'No')][string]$PantallaOled = '',
         [switch]$Lista,
         [switch]$Revisar,
         [switch]$RestaurarDiario,
@@ -1566,7 +1643,7 @@ function Start-Juicer {
     $LimitarFps = & $split $LimitarFps
     $BloquearWeb = & $split $BloquearWeb
     if ($BloquearWeb.Count -gt 0 -and -not $ProteccionAdultos) { $ProteccionAdultos = 'Bloquear' }
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $PantallaOled -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     # The protected copy the sign-in task runs follows this version.
@@ -1602,6 +1679,13 @@ function Start-Juicer {
     }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
     $monitor = $null
+    if ($PantallaOled) {
+        try { $monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+        if (-not $monitor) { Write-Host '  No se pudo leer el monitor para guardar si es OLED.' -ForegroundColor Yellow; return 1 }
+        $now = Set-JuicerMonitorOled $monitor $(switch ($PantallaOled) { 'Si' { $true } 'No' { $false } default { $null } })
+        Write-Host ('  ' + (Format-JuicerMonitor $monitor) + ': ' + $(if ($now) { 'OLED' } else { 'no OLED' }) + $(if ($PantallaOled -eq 'Auto') { ' (según su nombre)' } else { ' (lo dices tú)' }))
+        if (-not $ModoMonitor -and $LimitarFps.Count -eq 0 -and -not $CalibrarJuego -and -not $MotorPacer) { return 0 }
+    }
     if ($ModoMonitor) {
         $mode = @((Get-JuicerMonitorModes).Keys | Where-Object { $_ -eq $ModoMonitor })
         if ($mode.Count -eq 0) { Write-Host ('  -ModoMonitor admite: ' + (@((Get-JuicerMonitorModes).Keys) -join ', ') + '.') -ForegroundColor Yellow; return 2 }

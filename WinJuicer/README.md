@@ -73,10 +73,17 @@ misma pregunta.
 La ventana empieza **sencilla**, para que cualquiera pueda usarla: la pestaña
 **Empezar** tiene cuatro botones grandes, en palabras normales:
 - **Optimizar Windows**: aplica sólo lo que conviene a tu equipo (nada del
-  nivel Extremo), con un punto de restauración antes. Una pregunta y listo.
+  nivel Extremo), con un punto de restauración antes. Una pregunta y listo: la
+  pregunta lista los ajustes (los ocho primeros y «y N más»), marca los que
+  necesitan reiniciar o volver a entrar y lo dice una vez al final.
 - **Mis juegos**: la galería de tus juegos (abajo).
 - **Revisar mi PC**: el diagnóstico, con cuántas cosas conviene arreglar.
-- **Deshacer**: todo lo que ha hecho Win Juicer, de golpe.
+- **Deshacer**: todo lo que ha hecho Win Juicer, de golpe. Antes enseña qué
+  se va a revertir (los ocho primeros y «y N más») y lo que no puede deshacer
+  y se queda: la protección contra contenido adulto, la limpieza y el resto de
+  Mantenimiento, los programas instalados con winget y los puntos de
+  restauración. Las apps quitadas se reinstalan desde Microsoft Store (con
+  internet).
 
 Con eso, más **Equipo**, **Juegos** y **Deshacer**, no hace falta nada más.
 
@@ -151,6 +158,9 @@ abre el menú de texto, con lo mismo:
   12  Lo que no hacemos    los «trucos» que circulan, y por qué no
 ```
 
+Una opción que no existe se dice («Opción no válida: x») y vuelve a pedir; si la
+entrada se cierra (una tubería que acaba), los menús salen en vez de repetirse.
+
 Debajo salen también **Antes y después**, **Ajuste fino**, **Protección contra
 contenido adulto** y **Listo para jugar** (16), la misma tarjeta de Empezar. Si
 Windows ha deshecho algo tuyo, el menú lo dice y **Deshacer** ofrece volver a
@@ -187,6 +197,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
 .\WinJuicer.ps1 -OlvidarAjuste
 .\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el ritmo va exacto a los Hz
+.\WinJuicer.ps1 -PantallaOled Si                         # tu monitor es OLED aunque su nombre no lo diga (No; Auto: por el nombre)
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
@@ -324,6 +335,8 @@ OneDrive) no está en ningún perfil: sólo se aplica si lo eliges.
 **Impacto** mide sólo rendimiento y peca de prudente: «bajo» quiere decir
 pequeño, no cero. Si un ajuste está aquí con impacto bajo es porque no cuesta
 nada, no porque vaya a hacer milagros.
+Un ajuste que sólo hace que Windows *se sienta* más rápido sin dar FPS ni acelerar
+nada de verdad (las animaciones) es «bajo», no «medio».
 
 ### Reparación — deshacer lo que otros «optimizadores» rompieron
 
@@ -369,18 +382,22 @@ planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar»
 
 Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
 de alto rendimiento y prioridad por encima de lo normal para un `.exe`, y exclusiones de Microsoft
-Defender para las bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
+Defender para las bibliotecas de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net y Riot
+(Extremo; nunca una unidad entera ni una carpeta del sistema).
 
 ### Tus juegos
 
 La pestaña **Juegos** empieza por la lista de los juegos instalados, que Win
 Juicer encuentra solo:
 - Steam, por sus manifiestos.
-- Epic, por los suyos.
+- Epic, por los suyos (una instalación a medias no cuenta).
 - GOG, por el registro.
-- Xbox/Game Pass, por su `MicrosoftGame.config`.
+- Xbox/Game Pass, por su `MicrosoftGame.config` (el ejecutable `Game`, no un
+  ayudante de arranque).
 - EA, Ubisoft, Battle.net, Riot, Rockstar, HoYoverse, Bethesda y Wargaming,
-  por sus desinstaladores. Los lanzadores no cuentan como juegos.
+  por sus desinstaladores. Los lanzadores no cuentan como juegos, ni tampoco los
+  anti-trampas (Vanguard, Easy Anti-Cheat, BattlEye) ni los agentes de
+  actualización o de informe de errores.
 
 Para cada uno busca el `.exe` que se ejecuta de verdad: el que declara la
 tienda o, si no lo dice, el `*-Win64-Shipping.exe` de los juegos Unreal o el
@@ -391,13 +408,17 @@ Los muestra como una **galería**, agrupados por tienda (Steam, Epic, GOG,
 Xbox…), con un buscador. Cada juego lleva su portada:
 - **Steam**: la de la caché de su biblioteca, ya en tu PC. Steam guarda ahora
   cada juego en su carpeta con nombres que cambian, así que Win Juicer elige la
-  vertical por su tamaño, leyendo sólo la cabecera de cada imagen.
+  vertical por su tamaño, leyendo sólo la cabecera de cada imagen. Si Steam no
+  tiene vertical, se descarga la apaisada como recurso (`*.wide.jpg`), y en
+  cuanto aparezca una vertical en tu PC la sustituye.
 - **Xbox**: el logo que trae el propio juego en su carpeta.
 - Si no está en tu PC, se descarga una vez de la tienda: Steam, Epic (la URL
   sale de la caché del catálogo de su lanzador) o GOG (su API pública). Sólo
-  por HTTPS, sólo de sus servidores, y sólo si lo que llega empieza como un JPEG
+  por HTTPS, sólo de sus servidores (también cada redirección, hasta tres), y
+  sólo si lo que llega empieza como un JPEG
   o un PNG de tamaño normal. Lo que no existe (404) no se vuelve a buscar en
-  una semana; si no hay conexión, no se apunta nada y se reintenta enseguida.
+  una semana; si no hay conexión, o Epic todavía no tiene su catálogo o no lista
+  el juego, no se apunta nada y se reintenta.
 - Si no hay portada, el icono del propio `.exe` sobre un color.
 
 Todo queda en `ProgramData\WinJuicer\portadas`. Los juegos ya optimizados
@@ -424,6 +445,16 @@ si tienes dos. Se aplica solo cada vez que abras el juego.
   equipo se puede congelar).
 - **Medir**: tu última medida con su gráfica de frametimes, y un botón para
   medir este juego en concreto.
+- **Calibración**: cuántos días hace y a cuántos FPS («calibrado hace 12 días a
+  141 FPS»); pasados 30 días, una pista apagada: «puede haber cambiado (parche,
+  ajustes): vuelve a calibrar». También en la lista de juegos y en el menú del
+  frame pacer de la consola.
+- **No es un juego: ocultar**, para una herramienta o un benchmark que Win Juicer
+  ha tomado por juego. Lo saca de la galería y de «Optimizar todos» (y de la
+  optimización automática); no borra nada ni toca lo que ya tuviera puesto. En
+  la galería, «Mostrar ocultos (N)» los vuelve a enseñar y, en su página,
+  «Volver a mostrar». Se recuerda en `juegos.json`. En la consola, **H** (ocultar),
+  **M** (mostrar) y **O** (ver los ocultos) en la lista de juegos.
 - **Dentro del juego**: los consejos de abajo.
 
 Cada cambio en la página se aplica al momento y se deshace como todo lo demás.
@@ -543,7 +574,11 @@ con Win Juicer cerrado:
   tu monitor» (o con `-ModoMonitor`): Automático, Frecuencia variable,
   Estroboscopio sin VRR, Estroboscopio con VRR (ELMB Sync, Aim Stabilizer
   Sync) o Frecuencia fija. «Recalcular los ritmos» los vuelve a poner con el
-  modo nuevo.
+  modo nuevo. Si tu monitor es OLED y su nombre no lo delata (se reconocen
+  muchas familias: PG32UCDM, AW3225QF, 27GR95QE, G80SD, MAG 271QPX…), dilo con
+  `-PantallaOled Si|No|Auto` o en el menú del frame pacer de la consola («Tu
+  monitor es OLED»): se guarda en `monitores.json` y manda sobre el nombre. En
+  la ventana no hay interruptor todavía.
 - **Cuánto**, como objetivo de frametime:
   - con frecuencia variable (con o sin estroboscopio), **Hz − Hz²/3600**, la
     cifra que usa NVIDIA Reflex (138 a 144 Hz, 157 a 165 Hz, 171 a 180 Hz, 224
@@ -594,7 +629,8 @@ con Win Juicer cerrado:
   identificador público.
 - **Calibrar** (un juego de la lista, o `-CalibrarJuego`): lo mide 60 segundos
   con su ritmo y lo ajusta a lo que sostiene de verdad. Si el 5 % más lento de
-  los fotogramas no llega, lo baja a ese ritmo, sin salir nunca del rango VRR.
+  los fotogramas no llega, lo baja a ese ritmo menos un 3 % de margen, sin salir
+  nunca del rango VRR.
   Si lo sostiene pero con cola delante de la gráfica, lo baja **por latencia**
   hasta dejarle a la gráfica un 12 % de cada fotograma: menos fotogramas,
   pero cada uno llega antes a la pantalla. A frecuencia fija sin VRR ni
@@ -659,6 +695,9 @@ gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
   - Ryzen 5000/7000/9000: Curve Optimizer por núcleo y PBO.
   - Intel K de 12.ª a 14.ª: AC Load Line u offset, tras el microcódigo 0x12B
     en 13.ª y 14.ª.
+  - Intel Core Ultra 200 K (Arrow Lake): guía prudente, con la BIOS al día y
+    pasos pequeños de AC/DC Load Line u offset (10 mV) y prueba de estabilidad
+    en cada uno.
   - La placa lo guarda y lo aplica en cada arranque, antes de Windows, sin
     ningún programa. Win Juicer no lo aplica desde Windows: las herramientas que
     lo hacen necesitan un driver de núcleo (WinRing0 y similares) que Microsoft
@@ -668,8 +707,12 @@ gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
   - RTX 40: curva a 0,95-1,00 V.
   - RTX 30: curva a 850-900 mV; la GDDR6X rinde menos, sin colgarse, si te
     pasas de memoria.
-  - RTX 20/GTX 16, GTX 10, RX 9000/7000/6000 e Intel Arc: cada una con su
-    receta.
+  - RTX 20/GTX 16, GTX 10, RX 9000/7000/6000/5000 e Intel Arc: cada una con
+    su receta. Las tarjetas de estación de trabajo (RTX A, RTX Ada, RTX PRO,
+    Quadro, Tesla) no tienen receta.
+  - En un portátil (o una gráfica «Laptop», «Max-Q» o «Mobile») no se da la
+    receta de sobremesa, sino una nota: sin tocar los límites de potencia,
+    curva pequeña, que decida la temperatura y con la herramienta del fabricante.
   - Cómo hacer que se aplique en cada inicio: el perfil de Afterburner con
     «Aplicar overclock al iniciar el sistema», o AMD Software, que lo conserva
     salvo tras un cuelgue. La API pública de NVIDIA permite leer frecuencias y
@@ -686,7 +729,10 @@ gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
   - Afterburner ya no arranca con Windows.
 
 Los valores son puntos de partida: cada chip es distinto. Pruébalos como dice
-cada receta y mide FPS antes y después con Juegos > Medir.
+cada receta y mide FPS antes y después con «Antes y después» o Juegos > Medir.
+Las cifras de ganancia de las recetas («un 5-10 %») salen de reseñas y foros,
+no de tu equipo, y así se dice («según reseñas»): lo que cuenta es lo que midas.
+El «-0,04 V» de los Ryzen 5000X3D es un punto de partida típico, no tu valor.
 
 ### El monitor
 
@@ -716,11 +762,11 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
 | Ajuste | Nivel | Impacto |
 |---|---|---|
 | Sin apps promocionadas que Windows instala solo | Seguro | Bajo |
-| Sin animaciones | Rendimiento | Medio |
+| Sin animaciones | Rendimiento | Bajo |
 | Sin transparencias | Rendimiento | Bajo |
 | Menú contextual clásico | Rendimiento | Bajo |
 | Carpetas grandes al instante: sin detectar el tipo de cada carpeta | Rendimiento | Medio |
-| Búsqueda de Inicio sin resultados de Bing | Rendimiento | Medio |
+| Búsqueda de Inicio sin resultados de Bing | Rendimiento | Bajo |
 | Sin Widgets | Rendimiento | Bajo |
 
 ### Privacidad
@@ -749,7 +795,7 @@ llamando a casa por su cuenta.
 | Edge sin procesos de fondo ni promociones | Rendimiento | Bajo |
 | Sin nombres cortos 8.3 en NTFS | Rendimiento | Bajo |
 | Sin fecha de último acceso en NTFS | Rendimiento | Bajo |
-| Sin algoritmo de Nagle (sólo juegos TCP, como los MMO) | Rendimiento | Bajo |
+| Sin algoritmo de Nagle (sólo juegos TCP, como los MMO; sólo los adaptadores que hay al aplicarlo) | Rendimiento | Bajo |
 | Sin indexado de búsqueda | Extremo | Bajo |
 
 ### Actualizaciones
@@ -937,6 +983,14 @@ No cambia nada:
   portátil está **con batería** o enchufado.
 - **El monitor**, a su frecuencia máxima o por debajo.
 
+- **Grabación de Game Bar en segundo plano**, con los mismos valores del registro
+  que cambia el ajuste «juegos.grabacion»: si está activa, ⚠ «graba en segundo
+  plano: cuesta FPS» y apunta a ese ajuste. Sin forma de leerlo, no aparece.
+- **Seguridad basada en virtualización (VBS / integridad de memoria)**, si está
+  en marcha (la misma clase de Windows que lee el diagnóstico): sólo
+  **informativa** (marca ℹ), nunca cuenta entre las cosas «por mirar»; quitarla es
+  del nivel Extremo y decides tú.
+
 Lo que no se puede leer **no aparece**: no se da por bueno ni por malo. Se calcula
 en segundo plano al abrir la ventana, y de nuevo al aplicar algo.
 
@@ -1025,7 +1079,11 @@ equipo necesita se tratan como al aplicarlas o quitarlas a mano (ver arriba).
 
 ### Mantenimiento
 
-Limpieza de temporales, informes de errores y descargas de Windows Update;
+Limpieza de temporales, informes de errores y descargas de Windows Update (antes
+de limpiar calcula, sin borrar, cuánto libera cada carpeta y el total, y lo
+enseña en la pregunta, en la ventana y en la consola; la carpeta de descargas de
+Windows Update se deja si Windows espera un reinicio para terminar de instalar, y
+lo dice);
 TRIM o desfragmentado según la unidad (en un disco duro puede tardar horas, y
 lo avisa antes); limpieza de componentes; DISM + SFC;
 restablecer la red (Winsock y TCP/IP) y Windows Update (su caché se renombra, no
@@ -1167,7 +1225,10 @@ Invoke-Pester ./WinJuicer/tests
 
 `Features.Tests.ps1` cubre lo que Windows deshace, la copia del diario, los
 tiempos de arranque, «Actualizar ahora» (sólo cómo se construye la orden: no
-arranca nada), «Listo para jugar» y la edad de los drivers.
+arranca nada), «Listo para jugar» y la edad de los drivers. `Mejoras.Tests.ps1`,
+las confirmaciones con detalle, las opciones no válidas de los menús (y que sin
+entrada salen), la grabación y VBS de «Listo para jugar», los juegos ocultos, la
+edad de la calibración y la vista previa de la limpieza sobre carpetas temporales.
 
 Las pruebas de `Windows.Tests.ps1` cambian de verdad la configuración del equipo,
 nivel Extremo incluido, y luego la devuelven. Están pensadas para una máquina

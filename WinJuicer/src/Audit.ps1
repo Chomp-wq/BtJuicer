@@ -721,9 +721,12 @@ function Get-JuicerPlanKind {
 }
 
 # In: GameMode, HagsConfigured, HagsRestart (configured after the last boot), Windowed, Rebar
-# (booleans or null); PlanKind and CpuMax (the processor's maximum state plugged in, %);
-# OnBattery (null on a desktop); MonitorHz and MonitorMaxHz (0 when unknown).
-# Out: @{ Key; Ok; Title; Reason } per thing known, always in the same order.
+# (booleans or null); GameDvr (Game Bar records in the background: true, false or null);
+# PlanKind and CpuMax (the processor's maximum state plugged in, %);
+# OnBattery (null on a desktop); MonitorHz and MonitorMaxHz (0 when unknown);
+# Vbs and Hvci (virtualization-based security / memory integrity running, null unknown).
+# Out: @{ Key; Ok; Info; Title; Reason } per thing known, always in the same order. Info lines
+# are context, not a verdict: they carry Ok = true so nothing counts them as «por mirar».
 function Get-JuicerReadyStatus {
     param([hashtable]$In)
     $out = New-Object System.Collections.ArrayList
@@ -744,6 +747,10 @@ function Get-JuicerReadyStatus {
     if ($null -ne $In.Windowed) {
         if ($In.Windowed) { & $add 'ventana' $true 'Optimizaciones para juegos en ventana activadas' '' }
         else { & $add 'ventana' $false 'Optimizaciones para juegos en ventana desactivadas' 'Los juegos DirectX 10 y 11 en ventana o sin bordes no usan el modelo de presentación moderno: más latencia, y sin VRR en ventana. Ajuste «juegos.ventana».' }
+    }
+    if ($null -ne $In.GameDvr) {
+        if ($In.GameDvr) { & $add 'grabacion' $false 'Game Bar graba en segundo plano' 'Graba en segundo plano: cuesta FPS aunque nunca guardes un clip. Ajuste «juegos.grabacion» (no afecta a NVIDIA, AMD ni OBS).' }
+        else { & $add 'grabacion' $true 'Sin grabación de Game Bar en segundo plano' '' }
     }
     if ($null -ne $In.Rebar) {
         if ($In.Rebar) { & $add 'rebar' $true 'Resizable BAR activado' '' }
@@ -769,6 +776,13 @@ function Get-JuicerReadyStatus {
     if ($hz -gt 0 -and $max -gt 0) {
         if ($max -gt $hz + 1) { & $add 'monitor' $false "Monitor a $hz Hz, admite $max Hz" 'Cámbialo en Configuración > Sistema > Pantalla > Pantalla avanzada > Frecuencia de actualización. Si no aparece, el cable o el puerto no dan para más.' }
         else { & $add 'monitor' $true "Monitor a su frecuencia máxima ($hz Hz)" '' }
+    }
+    # Information only, never a warning: it protects the kernel and costs some FPS, and what to do
+    # about it is a decision about security (disabling it is Extremo). Not running: nothing to say.
+    if ($In.Vbs -eq $true) {
+        $what = if ($In.Hvci -eq $true) { 'con integridad de memoria (HVCI)' } else { 'sin integridad de memoria' }
+        [void]$out.Add(@{ Key = 'vbs'; Ok = $true; Info = $true; Title = "Seguridad basada en virtualización activa, $what"
+                Reason = 'Protege el núcleo de Windows a cambio de algo de rendimiento en juegos. Sólo informativo: quitarla es del nivel Extremo («seguridad.integridad») y decides tú, sabiendo qué pierdes.' })
     }
     $out.ToArray()
 }
@@ -796,9 +810,29 @@ function Get-JuicerWindowedState {
     [string]$v -eq '1'
 }
 
+# Whether Game Bar records in the background, by the values the juegos.grabacion tweak writes:
+# true only when background capture is switched on and nothing switches the capture off; false
+# when one of the three says off; null when none can be read (an absent value is Windows's own
+# default, which this cannot see).
+function Get-JuicerGameDvrState {
+    $vals = @{}
+    foreach ($spec in @(
+            @('HKCU\System\GameConfigStore', 'GameDVR_Enabled'),
+            @('HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR', 'AppCaptureEnabled'),
+            @('HKCU\Software\Microsoft\Windows\CurrentVersion\GameDVR', 'HistoricalCaptureEnabled'))) {
+        $v = Read-JuicerReg $spec[0] $spec[1]
+        if ($v -and $null -ne $v.Value) { $vals[$spec[1]] = [int]$v.Value }
+    }
+    if ($vals.Count -eq 0) { return $null }
+    foreach ($k in $vals.Keys) { if ($vals[$k] -eq 0) { return $false } }
+    # Everything readable says on, but background recording itself must be said: otherwise unknown.
+    if ($vals.ContainsKey('HistoricalCaptureEnabled')) { return $true }
+    $null
+}
+
 # Reads this PC for Get-JuicerReadyStatus. Each part on its own: one that fails is unknown.
 function Get-JuicerReadyInputs {
-    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0 }
+    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; GameDvr = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0; Vbs = $null; Hvci = $null }
     if (-not (Test-JuicerWindows)) { return $in }
     try {
         # Windows 11 has it on until someone turns it off: a missing value is «on».
@@ -826,6 +860,13 @@ function Get-JuicerReadyInputs {
         }
     } catch { Write-Verbose "Sin HAGS: $_" }
     try { $in.Windowed = Get-JuicerWindowedState } catch { Write-Verbose "Sin optimizaciones de ventana: $_" }
+    try { $in.GameDvr = Get-JuicerGameDvrState } catch { Write-Verbose "Sin grabación de Game Bar: $_" }
+    try {
+        # The same class the security audit reads: 2 is «running».
+        $dg = Get-CimInstance -Namespace root/Microsoft/Windows/DeviceGuard -ClassName Win32_DeviceGuard -ErrorAction Stop
+        $in.Vbs = ([int]$dg.VirtualizationBasedSecurityStatus -eq 2)
+        $in.Hvci = $in.Vbs -and (@($dg.SecurityServicesRunning) -contains 2)
+    } catch { Write-Verbose "Sin estado de VBS: $_" }
     try {
         # Only cards that support Resizable BAR are judged; on the rest it stays unknown.
         if ($main -and $main.Discrete -and (Test-JuicerRebarCapable $main)) {

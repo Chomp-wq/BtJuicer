@@ -637,10 +637,12 @@ function Get-JuicerPacerCalibration {
     }
     $floor = [Math]::Max(30, $(if ($Use -in 'VRR', 'EstroboSync' -and $VrrMin -gt 0) { $VrrMin + 3 } else { 0 }))
     if ($misses) {
-        $new = [int][Math]::Floor($Result.Fps95)
+        # Fps95 is what the game just managed on 95 % of its frames: a cap right at it would miss
+        # again half the time, so 3 % under it, and never under the floor.
+        $new = [int][Math]::Floor($Result.Fps95 * 0.97)
         if ($new -lt $floor) { $new = $floor }
         if ($new -lt $Cap) {
-            return @{ Fps = $new; Action = 'Bajar'; Why = ('Calibrado: con {0} FPS el 5 % de los fotogramas llegaba tarde; a {1} FPS ({2:N2} ms) los sostiene, y un ritmo que se cumple siempre se nota más fluido que uno más alto que se rompe.' -f $Cap, $new, (1000 / $new)) }
+            return @{ Fps = $new; Action = 'Bajar'; Why = ('Calibrado: con {0} FPS el 5 % de los fotogramas llegaba tarde; a {1} FPS ({2:N2} ms), un 3 % por debajo de lo que alcanzaba, debería sostenerlos, y un ritmo que se cumple siempre se nota más fluido que uno más alto que se rompe.' -f $Cap, $new, (1000 / $new)) }
         }
         return @{ Fps = $Cap; Action = 'Mantener'; Why = "No sostiene $Cap FPS, pero bajar más saldría del rango de frecuencia variable: mejor bajar la calidad gráfica." }
     }
@@ -709,6 +711,27 @@ function Invoke-JuicerPacerCalibration {
     }
     Write-JuicerLog "Calibración de ${exe}: $($c.Action) $cap -> $($c.Fps)"
     $out
+}
+
+# How old a calibration is, in words: «calibrado hace 12 días a 141 FPS», and after 30 days
+# a hint that it may no longer hold (a patch, other settings). Null when there is no date to
+# count from. -Now only for the tests.
+function Get-JuicerCalibrationAge {
+    param([string]$Date, [int]$Fps, [datetime]$Now = (Get-Date))
+    if (-not $Date -or $Fps -le 0) { return $null }
+    $when = [datetime]::MinValue
+    if (-not [datetime]::TryParse($Date, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$when)) { return $null }
+    $days = [Math]::Max(0, [int][Math]::Floor(($Now - $when).TotalDays))
+    $ago = if ($days -eq 0) { 'hoy' } elseif ($days -eq 1) { 'hace 1 día' } else { "hace $days días" }
+    $stale = $days -ge 30
+    $a = @{
+        Days = $days; Stale = $stale
+        Text = "calibrado $ago a $Fps FPS"
+        Hint = $(if ($stale) { 'puede haber cambiado (parche, ajustes): vuelve a calibrar' } else { '' })
+    }
+    # The same, as a sentence for the game page.
+    $a.Sentence = $a.Text.Substring(0, 1).ToUpperInvariant() + $a.Text.Substring(1) + '.' + $(if ($stale) { ' ' + $a.Hint.Substring(0, 1).ToUpperInvariant() + $a.Hint.Substring(1) + '.' } else { '' })
+    $a
 }
 
 # Forgets what calibrating found, for one game or all.

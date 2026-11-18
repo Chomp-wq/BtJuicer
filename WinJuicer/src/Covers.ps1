@@ -180,9 +180,10 @@ $script:EpicCovers = $null
 function Get-JuicerEpicCoverUrl {
     param([string]$AppName)
     if ($null -eq $script:EpicCovers) {
-        $script:EpicCovers = @{}
         $f = if ($env:ProgramData) { Join-Path $env:ProgramData 'Epic\EpicGamesLauncher\Data\Catalog\catcache.bin' }
-        if ($f -and (Test-Path -LiteralPath $f)) { $script:EpicCovers = ConvertFrom-JuicerEpicCatalog ([IO.File]::ReadAllText($f)) }
+        # No catalog yet: do not remember that, Epic may write it later in this same session.
+        if (-not $f -or -not (Test-Path -LiteralPath $f)) { return $null }
+        $script:EpicCovers = ConvertFrom-JuicerEpicCatalog ([IO.File]::ReadAllText($f))
     }
     $script:EpicCovers[$AppName.ToLowerInvariant()]
 }
@@ -236,8 +237,42 @@ function Find-JuicerXboxCover {
 
 # --- Getting one -----------------------------------------------------------------
 
+# Where a 3xx response points, as text. Windows PowerShell gives a WebHeaderCollection
+# (strings), PowerShell 7 an HttpResponseMessage whose Location is a Uri.
+function Get-JuicerRedirectLocation {
+    param($Response)
+    if (-not $Response -or -not $Response.Headers) { return '' }
+    if ($Response.Headers -is [Net.WebHeaderCollection]) { return [string]$Response.Headers['Location'] }
+    [string]$Response.Headers.Location
+}
+
+# One request, redirects NOT followed (they are checked against the allowlist by the caller).
+# Returns @{ Status; Location }; a 3xx is not an error. Anything else that fails throws.
+# Windows PowerShell throws a WebException for the 3xx when it may not follow it, PowerShell 7
+# an HttpResponseException (and may also just return it): both are handled.
+function Invoke-JuicerCoverRequest {
+    param([string]$Url, [string]$OutFile)
+    $progress = $ProgressPreference
+    $ProgressPreference = 'SilentlyContinue'
+    try {
+        $r = Invoke-WebRequest -Uri $Url -OutFile $OutFile -PassThru -UseBasicParsing -TimeoutSec 20 -MaximumRedirection 0 -ErrorAction Stop
+        $resp = if ($r.BaseResponse) { $r.BaseResponse } else { $r }
+        return @{ Status = [int]$r.StatusCode; Location = (Get-JuicerRedirectLocation $resp) }
+    } catch {
+        $resp = $_.Exception.Response
+        $code = 0
+        if ($resp) { try { $code = [int]$resp.StatusCode } catch { $code = 0 } }
+        if ($code -ge 300 -and $code -lt 400) { return @{ Status = $code; Location = (Get-JuicerRedirectLocation $resp) } }
+        throw
+    } finally {
+        $ProgressPreference = $progress
+    }
+}
+
 # Downloads one image into the cache; false if it is not a JPEG or PNG of a
-# sensible size, or does not arrive.
+# sensible size, or does not arrive. Redirects are followed by hand, up to 3,
+# and every hop must still be an allowed store host: an allowed host could
+# otherwise bounce the download to any server.
 function Save-JuicerCoverDownload {
     param([string]$Url, [string]$Target)
     if (-not (Test-JuicerCoverUrl $Url)) { return $false }
@@ -245,9 +280,21 @@ function Save-JuicerCoverDownload {
     $script:CoverFailure = ''
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-        $progress = $ProgressPreference
-        $ProgressPreference = 'SilentlyContinue'
-        try { Invoke-WebRequest -Uri $Url -OutFile $tmp -UseBasicParsing -TimeoutSec 20 -ErrorAction Stop } finally { $ProgressPreference = $progress }
+        $cur = $Url
+        $hop = 0
+        while ($true) {
+            if (-not (Test-JuicerCoverUrl $cur)) { Write-JuicerLog "Portada descartada: redirige fuera de las tiendas ($cur)"; return $false }
+            $r = Invoke-JuicerCoverRequest $cur $tmp
+            if ($r.Status -ge 300 -and $r.Status -lt 400) {
+                $next = $null
+                if ($hop -ge 3 -or -not $r.Location -or -not [Uri]::TryCreate([Uri]$cur, [string]$r.Location, [ref]$next)) { return $false }
+                $cur = $next.AbsoluteUri
+                $hop++
+                continue
+            }
+            break
+        }
+        if (-not (Test-Path -LiteralPath $tmp)) { return $false }
         $len = (Get-Item -LiteralPath $tmp).Length
         if ($len -lt 1024 -or $len -gt 8MB -or -not (Read-JuicerImageSize $tmp)) { return $false }
         Move-Item -LiteralPath $tmp -Destination $Target -Force
@@ -311,21 +358,35 @@ function Get-JuicerCover {
     param([Parameter(Mandatory)][hashtable]$Game, [switch]$NoDownload)
     $dir = Get-JuicerCoverDir
     $key = Get-JuicerCoverKey $Game.Id
+    $parts = ([string]$Game.Id) -split ':', 2
+    $store = $parts[0]; $storeKey = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+    # Steam's landscape header.jpg is only a fallback, kept as «<key>.wide.jpg» so a portrait
+    # found later (Steam's own library cache fills in as the game is used) is never shadowed by it.
+    $wide = Join-Path $dir "$key.wide.jpg"
+
     foreach ($ext in '.jpg', '.png') {
         $p = Join-Path $dir "$key$ext"
-        if (Test-Path -LiteralPath $p) { return @{ Path = $p; Kind = 'cover' } }
+        if (-not (Test-Path -LiteralPath $p)) { continue }
+        # A landscape cover cached as the main one by an older version: demote it to the fallback.
+        $size = if ($store -eq 'steam') { Read-JuicerImageSize $p }
+        if ($size -and $size.Width -gt $size.Height * 1.2 -and -not (Test-Path -LiteralPath $wide)) {
+            try { Move-Item -LiteralPath $p -Destination $wide -Force; continue } catch { Write-Verbose "Portada ancha sin mover: $p" }
+        }
+        return @{ Path = $p; Kind = 'cover' }
     }
     $icon = Join-Path $dir "$key.icon.png"
     $miss = Join-Path $dir "$key.none"
-    $parts = ([string]$Game.Id) -split ':', 2
-    $store = $parts[0]; $storeKey = if ($parts.Count -gt 1) { $parts[1] } else { '' }
 
-    # On this PC already.
+    # On this PC already: it wins over any downloaded fallback.
     $local = switch ($store) {
         'steam' { Find-JuicerSteamCover (Get-JuicerSteamDir) $storeKey }
         'xbox' { Find-JuicerXboxCover $Game.Dir }
     }
-    if ($local) { return @{ Path = $local; Kind = 'cover' } }
+    if ($local) {
+        Remove-Item -LiteralPath $wide -Force -ErrorAction SilentlyContinue
+        return @{ Path = $local; Kind = 'cover' }
+    }
+    if (Test-Path -LiteralPath $wide) { return @{ Path = $wide; Kind = 'cover' } }
 
     $recent = (Test-Path -LiteralPath $miss) -and ((Get-Date) - (Get-Item -LiteralPath $miss).LastWriteTime).TotalDays -lt $script:CoverRetryDays
     # Offline a moment ago: do not spend 20 s per URL on every game again.
@@ -341,10 +402,13 @@ function Get-JuicerCover {
                 'gog' { Get-JuicerGogCoverUrl $storeKey }
             }) | Where-Object { $_ }
         $uncertain = $script:CoverFailure -in 'offline', 'transient'
+        # Epic without a URL means «no catalog yet» or «not listed there», not «no cover exists»:
+        # a week-long miss would hide the cover once the launcher has written its catalog.
+        if ($store -eq 'epic games' -and @($urls).Count -eq 0) { $uncertain = $true }
         if ($script:CoverFailure -eq 'offline') { $script:CoverOfflineAt = Get-Date; $urls = @() }
         foreach ($u in $urls) {
             $ext = if ($u -match '\.png($|\?)') { '.png' } else { '.jpg' }
-            $target = Join-Path $dir "$key$ext"
+            $target = if ($u -like '*/header.jpg') { $wide } else { Join-Path $dir "$key$ext" }
             if (Save-JuicerCoverDownload $u $target) {
                 Remove-Item -LiteralPath $icon, $miss -Force -ErrorAction SilentlyContinue
                 return @{ Path = $target; Kind = 'cover' }

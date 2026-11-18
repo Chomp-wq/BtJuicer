@@ -7,7 +7,10 @@
 # executable named like the game, never an uninstaller or a crash reporter)
 # and remembered; the user can always pick another.
 
-$script:NotGameNames = 'Redistributable|Redistributables|Soundtrack|\bOST\b|\bSDK\b|Dedicated Server|Proton|Steam Linux Runtime|SteamVR|Wallpaper Engine|Steamworks Common|DirectX|Visual C\+\+|\.NET|PhysX|Benchmark Tool|Demo$'
+$script:NotGameNames = 'Redistributable|Redistributables|Soundtrack|\bOST\b|\bSDK\b|Dedicated Server|Proton|Steam Linux Runtime|SteamVR|Wallpaper Engine|Steamworks Common|DirectX|Visual C\+\+|\.NET|PhysX|Benchmark Tool|Demo$|Riot Vanguard|Anti-?Cheat|Easy ?Anti|BattlEye|Update Agent|Crash ?(Reporter|Handler)'
+# Anti-cheat and updater agents register like games (Riot Vanguard, Battle.net Update Agent,
+# EA helpers). «Vanguard» alone is not listed on purpose (Call of Duty: Vanguard is a game),
+# and neither is a name merely ending in «Launcher»: a real game can be called that.
 # Whole executable names (without .exe), never prefixes: a game called
 # CrashBandicoot, ServerSim or ConfigurationQuest must not be taken for a tool.
 $script:NotGameExe = '^(' + (@(
@@ -15,7 +18,7 @@ $script:NotGameExe = '^(' + (@(
         'vc_?redist.*', 'vcredist.*', 'redist', 'dxsetup', 'dxwebsetup', 'dotnet[_-].*', 'dotnetfx.*', 'physx(setup|legacy|_?installer).*',
         '(ue4?|ue5)?prereq.*', 'ue4prereqsetup.*',
         '.*crash(handler|report(er|client)?|pad_handler|sender|_?dump)\d*', 'bugsplat.*', 'errorreport.*', 'report(er)?', 'dump(er)?', 'minidump.*', 'crs-.+',
-        'easyanticheat.*', 'eac_?(launcher|setup|server|bootstrapper)', 'beservice.*', 'battleye.*', 'start_protected_game',
+        'gamelaunchhelper', 'easyanticheat.*', 'eac_?(launcher|setup|server|bootstrapper)', 'beservice.*', 'battleye.*', 'start_protected_game',
         'cefprocess', 'cef_?subprocess', 'cefsharp.*', 'unrealcefsubprocess', 'epicwebhelper', '.*webhelper(_.*)?', 'qtwebengineprocess',
         '(game)?overlay(ui|renderer|helper|process)?(_?(x64|x86|64|32))?', 'notification(helper|service)?', 'socialclub(helper)?',
         'launcherpatcher', '.*updater', 'update(r)?', '.+[_ -]update', '.*patcher', 'repair', 'cleanup', 'config(tool|urator)?', 'configure', '.+[_ -]config(tool)?', 'settings',
@@ -108,6 +111,8 @@ function Get-JuicerEpicGames {
             continue
         }
         if ($m.AppCategories -and @($m.AppCategories) -notcontains 'games') { continue }
+        # A half-finished install (or a pending update that left the manifest) is not a playable game yet.
+        if ($m.bIsIncompleteInstall -eq $true) { continue }
         if (-not $m.InstallLocation -or (Test-JuicerNotAGame ([string]$m.DisplayName))) { continue }
         $exe = if ($m.LaunchExecutable) { Join-Path $m.InstallLocation $m.LaunchExecutable } else { '' }
         New-JuicerGame 'Epic Games' ([string]$m.AppName) ([string]$m.DisplayName) ([string]$m.InstallLocation) $exe
@@ -130,9 +135,19 @@ function ConvertFrom-JuicerXboxConfig {
     param([string]$Text)
     try { $x = [xml]$Text } catch { return $null }
     $exe = @($x.SelectNodes('//*[local-name()="Executable"]'))
+    # The first one is not always the game: some packages list a launch helper first.
+    $pick = $null
+    foreach ($e in $exe) { if ([string]$e.GetAttribute('Id') -eq 'Game') { $pick = $e; break } }
+    if (-not $pick) {
+        foreach ($e in $exe) {
+            $base = [IO.Path]::GetFileNameWithoutExtension(([string]$e.GetAttribute('Name') -split '[\\/]')[-1])
+            if ($base -and $base -notmatch $script:NotGameExe) { $pick = $e; break }
+        }
+    }
+    if (-not $pick -and $exe.Count -gt 0) { $pick = $exe[0] }
     $name = $x.SelectSingleNode('//*[local-name()="ShellVisuals"]')
     @{
-        Exe = $(if ($exe.Count -gt 0) { [string]$exe[0].GetAttribute('Name') } else { '' })
+        Exe = $(if ($pick) { [string]$pick.GetAttribute('Name') } else { '' })
         Name = $(if ($name) { [string]$name.GetAttribute('DefaultDisplayName') } else { '' })
     }
 }
@@ -189,9 +204,11 @@ function Get-JuicerPublisherGames {
 function Get-JuicerLibraryPath { Join-Path (Get-JuicerHome) 'juegos.json' }
 
 # Exe: the .exe worked out or chosen for each game id; Custom: games added by
-# hand; Known: ids already seen, to mark the new ones.
+# hand; Known: ids already seen, to mark the new ones; Hidden: ids the person
+# said are not games (a tool, a benchmark), kept out of the gallery and of the
+# automatic optimizing but still known, so showing them again is not «new».
 function Read-JuicerLibraryState {
-    $s = @{ Exe = @{}; Custom = @(); Known = @() }
+    $s = @{ Exe = @{}; Custom = @(); Known = @(); Hidden = @() }
     $p = Get-JuicerLibraryPath
     if (Test-Path -LiteralPath $p) {
         try {
@@ -199,6 +216,7 @@ function Read-JuicerLibraryState {
             if ($d.Exe -is [hashtable]) { $s.Exe = $d.Exe }
             $s.Custom = @($d.Custom | Where-Object { $_ -is [hashtable] })
             $s.Known = @($d.Known | Where-Object { $_ })
+            $s.Hidden = @($d.Hidden | Where-Object { $_ })
         } catch {
             Write-JuicerLog "juegos.json dañado, se ignora: $_"
         }
@@ -215,7 +233,7 @@ function Save-JuicerLibraryState {
 # launcher declares, or the best guess from its folder. Collectors can be
 # replaced (the tests); each launcher fails on its own.
 function Get-JuicerGames {
-    param([scriptblock[]]$Collectors, [scriptblock]$FindExe = ${function:Find-JuicerGameExe}, [switch]$KeepNew)
+    param([scriptblock[]]$Collectors, [scriptblock]$FindExe = ${function:Find-JuicerGameExe}, [switch]$KeepNew, [switch]$IncludeHidden)
     if (-not $Collectors) {
         $Collectors = @(${function:Get-JuicerSteamGames}, ${function:Get-JuicerEpicGames}, ${function:Get-JuicerGogGames}, ${function:Get-JuicerXboxGames}, ${function:Get-JuicerPublisherGames})
     }
@@ -249,6 +267,7 @@ function Get-JuicerGames {
         $state.Exe[$g.Id] = $g.Exe
         $g.ExeName = (Split-Path -Leaf $g.Exe).ToLowerInvariant()
         $g.New = $state.Known.Count -gt 0 -and $state.Known -notcontains $g.Id
+        $g.Hidden = [bool]($state.Hidden -contains $g.Id)
         $out += $g
     }
     # A collector that threw found nothing this run; forgetting its ids would
@@ -259,7 +278,22 @@ function Get-JuicerGames {
         $state.Known = $ids
     }
     Save-JuicerLibraryState $state
+    # Hidden after the ids are remembered: what is hidden is not new when it comes back.
+    if (-not $IncludeHidden) { $out = @($out | Where-Object { -not $_.Hidden }) }
     $out
+}
+
+# The ids hidden from the gallery (they stay on disk in juegos.json).
+function Get-JuicerHiddenGameIds { @((Read-JuicerLibraryState).Hidden) }
+
+# «No es un juego»: out of the gallery and of the automatic optimizing, or back in.
+# Nothing is deleted and nothing Win Juicer set on the game is touched.
+function Set-JuicerGameHidden {
+    param([Parameter(Mandatory)][string]$Id, [bool]$Hidden = $true)
+    $s = Read-JuicerLibraryState
+    $rest = @($s.Hidden | Where-Object { $_ -ne $Id })
+    $s.Hidden = $(if ($Hidden) { @($rest) + $Id } else { $rest })
+    Save-JuicerLibraryState $s
 }
 
 function Test-JuicerGameFile { param([string]$Path) [bool]($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) }
@@ -304,6 +338,9 @@ function Get-JuicerGameStatus {
         $g.Safe = [bool]($p -is [hashtable] -and $p.Safe)
         $g.Minimal = [bool]($p -is [hashtable] -and $p.Minimal)
         $g.Waiting = $pacer.Pending.ContainsKey([string]$g.ExeName)
+        $cal = $pacer.Calibrated[[string]$g.ExeName]
+        $g.CalFps = $(if ($cal -is [hashtable] -and [int]$cal.Fps -gt 0) { [int]$cal.Fps } else { 0 })
+        $g.CalDate = $(if ($cal -is [hashtable]) { [string]$cal.Date } else { '' })
         $g
     }
 }
@@ -312,6 +349,7 @@ function Format-JuicerGameStatus {
     param([hashtable]$Game)
     $p = @()
     if ($Game.Fps) { $p += '{0} FPS ({1:N2} ms)' -f $Game.Fps, (1000 / $Game.Fps) } elseif ($Game.Limited) { $p += 'frame pacer quitado fuera de Win Juicer' }
+    if ($Game.Fps -and $Game.CalFps) { $age = Get-JuicerCalibrationAge $Game.CalDate $Game.CalFps; if ($age) { $p += $age.Text } }
     if ($Game.Gpu) { $p += 'GPU dedicada' }
     if ($Game.Priority) { $p += 'prioridad por encima de lo normal' }
     if ($Game.Minimal -and $Game.Fps) { $p += 'modo prudente' }

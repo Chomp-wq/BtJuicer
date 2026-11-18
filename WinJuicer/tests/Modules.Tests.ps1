@@ -1336,7 +1336,10 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
         $slow = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 360 + @(7.6) * 40)) 7.0)
         $c = Get-JuicerPacerCalibration $slow 171 171 'VRR' 48
         $c.Action | Should -Be 'Bajar'
-        $c.Fps | Should -Be 131
+        $c.Fps | Should -Be 127
+        # A margin under what it managed, not right at it, and the text does not promise more than that.
+        $c.Fps | Should -BeLessThan $slow.Fps95
+        $c.Why | Should -BeLike '*3 % por debajo*debería sostenerlos*'
         # Never under the bottom of the VRR range.
         $awful = Measure-JuicerFrames @(New-PacedRows ([double[]](@(5.85) * 360 + @(25.0) * 40)) 20.0)
         (Get-JuicerPacerCalibration $awful 171 171 'VRR' 48).Fps | Should -Be 51
@@ -1481,12 +1484,12 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
         Mock -ModuleName WinJuicer Invoke-JuicerFrameCapture { New-JuicerFinding 'Juego: cs2.exe' 'Info' 'medida' }
         Mock -ModuleName WinJuicer Get-JuicerPreviousFrameResult { $slow }.GetNewClosure()
         $f = @(Invoke-JuicerPacerCalibration 'cs2.exe' -Monitor $Mon)
-        $f[-1].Title | Should -Be 'Calibrado: de 171 a 131 FPS'
-        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 131
-        (Read-JuicerPacer).Calibrated['cs2.exe'].Fps | Should -Be 131
+        $f[-1].Title | Should -Be 'Calibrado: de 171 a 127 FPS'
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 127
+        (Read-JuicerPacer).Calibrated['cs2.exe'].Fps | Should -Be 127
         # Recalculating keeps it while the monitor is the same...
         @(Update-JuicerFpsLimits $Mon) | Out-Null
-        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 131
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 127
         # ...but not on another refresh rate.
         $other = @{ Display = [pscustomobject]@{ Monitor = 'VG27AQ3A'; MonitorId = $Mon.Display.MonitorId; Hz = 144; MaxHz = 180; Primary = $true }; Info = $Mon.Info; Vrr = $Mon.Vrr }
         (Get-JuicerRecommendedFps 'cs2.exe' $other).Fps | Should -Be 138
@@ -2374,5 +2377,293 @@ Describe 'Revisión: arrancador, importar, vigilancia, monitor, inicio y medidas
         @(Compare-JuicerMetrics $b $a | Where-Object { $_.Title -like '*no son del mismo tipo*' }).Count | Should -Be 0
         $a.Remove('FastStartup')
         @(Compare-JuicerMetrics $b $a | Where-Object { $_.Title -like '*no son del mismo tipo*' }).Count | Should -Be 0
+    }
+}
+
+Describe 'Correcciones: juegos, portadas, monitor y catálogo' {
+    BeforeAll {
+        function New-TestJpgFile {
+            param([string]$Path, [int]$W, [int]$H)
+            # SOI, APP0, frame header, padded past the 1 KB the downloader asks for.
+            $b = [byte[]](@(0xFF, 0xD8, 0xFF, 0xE0, 0, 16) + @(0) * 14 + @(0xFF, 0xC0, 0, 17, 8, (($H -shr 8) -band 255), ($H -band 255), (($W -shr 8) -band 255), ($W -band 255), 3) + @(0) * 1100)
+            [IO.File]::WriteAllBytes($Path, $b)
+        }
+        $script:TestMon = {
+            param([string]$Name)
+            @{ Display = [pscustomobject]@{ Monitor = $Name; MonitorId = "\\?\DISPLAY#TST1234#5&abc&0&UID1"; Hz = 240; MaxHz = 240; Primary = $true }; Info = @{ Name = $Name; Brand = 'Marca' }; Vrr = $null }
+        }
+    }
+    BeforeEach {
+        $script:M = New-FakeMachine
+        $script:Tmp = Join-Path ([IO.Path]::GetTempPath()) ('wj-corr-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $Tmp | Out-Null
+        Remove-Item -LiteralPath (Get-JuicerCoverDir) -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Get-JuicerMonitorModesPath) -ErrorAction SilentlyContinue
+    }
+    AfterEach {
+        Remove-Item -LiteralPath $Tmp -Recurse -Force -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath (Get-JuicerMonitorModesPath) -ErrorAction SilentlyContinue
+    }
+
+    It 'la telemetría del servicio también se salta en Windows Insider' {
+        $t = @(Get-JuicerCatalog | Where-Object { $_.Id -eq 'fondo.telemetria' })[0]
+        $t.Skip | Should -Not -BeNullOrEmpty
+        Mock -ModuleName WinJuicer Test-JuicerInsider { $true }
+        (& $t.Skip) | Should -BeLike '*Insider*'
+        Mock -ModuleName WinJuicer Test-JuicerInsider { $false }
+        (& $t.Skip) | Should -BeNullOrEmpty
+    }
+
+    It 'los juegos configurados incluyen los frame pacers, y la consola los quita por Remove-JuicerFpsLimit' {
+        Mock -ModuleName WinJuicer Read-JuicerJournal { @(@{ Id = 'fps:cs2.exe'; Title = 'Frame pacer' }, @{ Id = 'juego:gpu:a.exe'; Title = 'GPU' }, @{ Id = 'privacidad.x'; Title = 'Otro' }) }
+        @(Get-JuicerConfiguredGames | ForEach-Object { $_.Id }) | Should -Be @('fps:cs2.exe', 'juego:gpu:a.exe')
+        Mock -ModuleName WinJuicer Write-JuicerHeader {}
+        Mock -ModuleName WinJuicer Wait-JuicerKey {}
+        Mock -ModuleName WinJuicer Show-JuicerResults {}
+        Mock -ModuleName WinJuicer Read-JuicerChoice { '1,2' }
+        Mock -ModuleName WinJuicer Remove-JuicerFpsLimit { $null }
+        Mock -ModuleName WinJuicer Undo-JuicerTweak { $null }
+        Show-JuicerConfiguredGames 6>$null
+        Should -Invoke -ModuleName WinJuicer Remove-JuicerFpsLimit -Times 1 -Exactly -ParameterFilter { $Exe -eq 'cs2.exe' }
+        Should -Invoke -ModuleName WinJuicer Undo-JuicerTweak -Times 1 -Exactly -ParameterFilter { $Id -eq 'juego:gpu:a.exe' }
+    }
+
+    It 'las bibliotecas incluyen las carpetas de los juegos de EA, Ubisoft, Battle.net y Riot, sin repetir' {
+        $games = Join-Path $Tmp 'EA Games'
+        foreach ($n in 'Uno', 'Dos') { New-Item -ItemType Directory -Path (Join-Path $games $n) -Force | Out-Null }
+        $one = @{ Launcher = 'EA'; Dir = (Join-Path $games 'Uno') }
+        $two = @{ Launcher = 'EA'; Dir = (Join-Path $games 'Dos') }
+        $env:WJ_TEST_PUB = ($one.Dir, $two.Dir) -join '|'
+        try {
+            Mock -ModuleName WinJuicer Get-JuicerPublisherGames { foreach ($d in ($env:WJ_TEST_PUB -split '\|')) { @{ Launcher = 'EA'; Dir = $d } } }
+            $libs = @(Get-JuicerGameLibraries | Where-Object { $_.Launcher -eq 'EA' })
+            $libs.Count | Should -Be 1
+            $libs[0].Path | Should -Be $games
+        } finally {
+            Remove-Item Env:\WJ_TEST_PUB -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'los agentes de anti-trampas y actualización no son juegos, pero un juego llamado «Launcher» sí' {
+        foreach ($n in 'Riot Vanguard', 'Battle.net Update Agent', 'Easy Anti-Cheat', 'EasyAntiCheat', 'BattlEye Service', 'Anti-Cheat Client', 'Crash Reporter', 'Crash Handler') {
+            Test-JuicerNotAGame $n | Should -BeTrue -Because $n
+        }
+        foreach ($n in 'Call of Duty: Vanguard', 'Rocket Launcher Simulator', 'Space Launcher', 'The Cheat') {
+            Test-JuicerNotAGame $n | Should -BeFalse -Because $n
+        }
+        Select-JuicerGameExe @(@{ Path = 'GameLaunchHelper.exe'; Size = 50MB }, @{ Path = 'Juego.exe'; Size = 1MB }) 'Zzz' | Should -Be 'Juego.exe'
+    }
+
+    It 'en Xbox no toma a ciegas el primer ejecutable' {
+        $cfg = '<Game><Executables><Executable Name="GameLaunchHelper.exe" Id="Helper"/><Executable Name="Juego.exe" Id="Game"/></Executables></Game>'
+        (ConvertFrom-JuicerXboxConfig $cfg).Exe | Should -Be 'Juego.exe'
+        $noId = '<Game><Executables><Executable Name="GameLaunchHelper.exe"/><Executable Name="Real.exe"/></Executables></Game>'
+        (ConvertFrom-JuicerXboxConfig $noId).Exe | Should -Be 'Real.exe'
+        $only = '<Game><Executables><Executable Name="GameLaunchHelper.exe"/></Executables></Game>'
+        (ConvertFrom-JuicerXboxConfig $only).Exe | Should -Be 'GameLaunchHelper.exe'
+        (ConvertFrom-JuicerXboxConfig '<Game/>').Exe | Should -Be ''
+    }
+
+    It 'Epic: una instalación incompleta no es un juego' {
+        $prog = Join-Path $Tmp 'pd'
+        $man = Join-Path $prog 'Epic\EpicGamesLauncher\Data\Manifests'
+        New-Item -ItemType Directory -Path $man -Force | Out-Null
+        New-Item -ItemType Directory -Path (Join-Path $Tmp 'g\Bueno'), (Join-Path $Tmp 'g\Medio') -Force | Out-Null
+        foreach ($x in @(@('b', 'Bueno', 'false'), @('m', 'Medio', 'true'))) {
+            Set-Content -LiteralPath (Join-Path $man "$($x[0]).item") -Value ('{"AppName":"' + $x[0] + '","DisplayName":"' + $x[1] + '","InstallLocation":"' + ((Join-Path $Tmp "g\$($x[1])") -replace '\\', '\\') + '","bIsIncompleteInstall":' + $x[2] + '}')
+        }
+        $old = $env:ProgramData
+        $env:ProgramData = $prog
+        try {
+            @(Get-JuicerEpicGames | ForEach-Object { $_.Name }) | Should -Be @('Bueno')
+        } finally {
+            $env:ProgramData = $old
+        }
+    }
+
+    It 'la portada ancha de Steam es sólo un recurso: una vertical local la sustituye' {
+        Mock -ModuleName WinJuicer Save-JuicerCoverDownload {
+            param($Url, $Target)
+            if ($Url -like '*/header.jpg') { [IO.File]::WriteAllBytes($Target, [byte[]](@(0xFF, 0xD8, 0xFF, 0xE0, 0, 16) + @(0) * 14 + @(0xFF, 0xC0, 0, 17, 8, 0, 215, 1, 204, 3) + @(0) * 1100)); return $true }
+            $false
+        }
+        $g = @{ Id = 'steam:731'; Name = 'Juego'; Dir = ''; Exe = '' }
+        $c = Get-JuicerCover $g
+        $c.Kind | Should -Be 'cover'
+        $c.Path | Should -BeLike '*steam_731.wide.jpg'
+        Test-Path -LiteralPath (Join-Path (Get-JuicerCoverDir) 'steam_731.jpg') | Should -BeFalse
+        # Still there, and without downloading again.
+        (Get-JuicerCover $g -NoDownload).Path | Should -BeLike '*steam_731.wide.jpg'
+        # Steam's own library cache fills in later: the portrait wins and the fallback goes.
+        $cache = Join-Path $Tmp 'appcache\librarycache'
+        New-Item -ItemType Directory -Path $cache -Force | Out-Null
+        New-TestJpgFile (Join-Path $cache '731_library_600x900.jpg') 600 900
+        $env:WJ_TEST_STEAM = $Tmp
+        try {
+            Mock -ModuleName WinJuicer Get-JuicerSteamDir { $env:WJ_TEST_STEAM }
+            (Get-JuicerCover $g -NoDownload).Path | Should -Be (Join-Path $cache '731_library_600x900.jpg')
+            Test-Path -LiteralPath (Join-Path (Get-JuicerCoverDir) 'steam_731.wide.jpg') | Should -BeFalse
+            # A wide cover cached as the main one by an older version is replaced the same way...
+            New-TestJpgFile (Join-Path (Get-JuicerCoverDir) 'steam_732.jpg') 460 215
+            New-TestJpgFile (Join-Path $cache '732_library_600x900.jpg') 600 900
+            $old = Get-JuicerCover @{ Id = 'steam:732'; Name = 'Viejo'; Dir = ''; Exe = '' } -NoDownload
+            $old.Path | Should -Be (Join-Path $cache '732_library_600x900.jpg')
+            # ...and with no portrait anywhere it is still shown (as the fallback).
+            New-TestJpgFile (Join-Path (Get-JuicerCoverDir) 'steam_733.jpg') 460 215
+            $w = Get-JuicerCover @{ Id = 'steam:733'; Name = 'Sin vertical'; Dir = ''; Exe = '' } -NoDownload
+            $w.Kind | Should -Be 'cover'
+            $w.Path | Should -BeLike '*steam_733.wide.jpg'
+        } finally {
+            Remove-Item Env:\WJ_TEST_STEAM -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'Epic sin catálogo o sin ese juego no deja la marca de «sin portada» de una semana' {
+        Mock -ModuleName WinJuicer Get-JuicerEpicCoverUrl { $null }
+        Mock -ModuleName WinJuicer Save-JuicerExeIcon { $false }
+        Get-JuicerCover @{ Id = 'epic games:abc'; Name = 'X'; Dir = ''; Exe = '' } | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path (Get-JuicerCoverDir) 'epic games_abc.none') | Should -BeFalse
+        @(Get-ChildItem -LiteralPath (Get-JuicerCoverDir) -Filter '*.none').Count | Should -Be 0
+        # Steam, where a miss is definite, keeps it.
+        Mock -ModuleName WinJuicer Save-JuicerCoverDownload { $false }
+        Get-JuicerCover @{ Id = 'steam:9'; Name = 'Y'; Dir = ''; Exe = '' } | Should -BeNullOrEmpty
+        Test-Path -LiteralPath (Join-Path (Get-JuicerCoverDir) 'steam_9.none') | Should -BeTrue
+    }
+
+    It 'sin catcache.bin no se recuerda el catálogo vacío' {
+        $prog = Join-Path $Tmp 'pd'
+        New-Item -ItemType Directory -Path $prog | Out-Null
+        $old = $env:ProgramData
+        $env:ProgramData = $prog
+        try {
+            & (Get-Module WinJuicer) { $script:EpicCovers = $null }
+            Get-JuicerEpicCoverUrl 'abc' | Should -BeNullOrEmpty
+            & (Get-Module WinJuicer) { $null -eq $script:EpicCovers } | Should -BeTrue
+            $cat = Join-Path $prog 'Epic\EpicGamesLauncher\Data\Catalog'
+            New-Item -ItemType Directory -Path $cat -Force | Out-Null
+            Set-Content -LiteralPath (Join-Path $cat 'catcache.bin') -Value '[{"keyImages":[{"type":"DieselGameBoxTall","url":"https://cdn1.epicgames.com/t.jpg"}],"releaseInfo":[{"appId":"abc"}]}]'
+            Get-JuicerEpicCoverUrl 'ABC' | Should -Be 'https://cdn1.epicgames.com/t.jpg'
+        } finally {
+            $env:ProgramData = $old
+            & (Get-Module WinJuicer) { $script:EpicCovers = $null }
+        }
+    }
+
+    It 'una descarga que redirige fuera de las tiendas se descarta; dentro, se sigue hasta tres veces' {
+        $target = Join-Path $Tmp 'cubierta.jpg'
+        $env:WJ_TEST_TMP = $Tmp
+        try {
+            Mock -ModuleName WinJuicer Invoke-JuicerCoverRequest {
+                param($Url, $OutFile)
+                switch -Wildcard ($Url) {
+                    '*/a.jpg' { return @{ Status = 302; Location = 'https://evil.example.com/x.jpg' } }
+                    '*/b.jpg' { return @{ Status = 301; Location = '/c.jpg' } }
+                    '*/c.jpg' {
+                        $img = [byte[]](@(0xFF, 0xD8, 0xFF, 0xE0, 0, 16) + @(0) * 14 + @(0xFF, 0xC0, 0, 17, 8, 3, 132, 2, 88, 3) + @(0) * 1100)
+                        [IO.File]::WriteAllBytes($OutFile, $img)
+                        return @{ Status = 200; Location = '' }
+                    }
+                    '*/loop.jpg' { return @{ Status = 302; Location = 'https://cdn.cloudflare.steamstatic.com/loop.jpg' } }
+                }
+                throw "inesperada: $Url"
+            }
+            Save-JuicerCoverDownload 'https://cdn.cloudflare.steamstatic.com/a.jpg' $target | Should -BeFalse
+            Should -Invoke -ModuleName WinJuicer Invoke-JuicerCoverRequest -Times 1 -Exactly
+            Test-Path -LiteralPath $target | Should -BeFalse
+            Save-JuicerCoverDownload 'https://cdn.cloudflare.steamstatic.com/b.jpg' $target | Should -BeTrue
+            Test-Path -LiteralPath $target | Should -BeTrue
+            Test-Path -LiteralPath "$target.descarga" | Should -BeFalse
+            Remove-Item -LiteralPath $target
+            Save-JuicerCoverDownload 'https://cdn.cloudflare.steamstatic.com/loop.jpg' $target | Should -BeFalse
+            # The first request plus three hops, and no more.
+            Should -Invoke -ModuleName WinJuicer Invoke-JuicerCoverRequest -Times 7 -Exactly
+        } finally {
+            Remove-Item Env:\WJ_TEST_TMP -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'lee a dónde redirige una respuesta, en Windows PowerShell y en PowerShell 7' {
+        Get-JuicerRedirectLocation ([pscustomobject]@{ Headers = @{ Location = 'https://x.example.com/a' } }) | Should -Be 'https://x.example.com/a'
+        $h = New-Object Net.WebHeaderCollection
+        $h['Location'] = 'https://y.example.com/b'
+        Get-JuicerRedirectLocation ([pscustomobject]@{ Headers = $h }) | Should -Be 'https://y.example.com/b'
+        Get-JuicerRedirectLocation $null | Should -Be ''
+        # The request itself: a 3xx that is returned, not followed.
+        Mock -ModuleName WinJuicer Invoke-WebRequest {
+            [pscustomobject]@{ StatusCode = 302; BaseResponse = [pscustomobject]@{ Headers = @{ Location = 'https://evil.example.com/z' } } }
+        }
+        $r = Invoke-JuicerCoverRequest 'https://cdn.cloudflare.steamstatic.com/a.jpg' (Join-Path $Tmp 'x')
+        $r.Status | Should -Be 302
+        $r.Location | Should -Be 'https://evil.example.com/z'
+        Should -Invoke -ModuleName WinJuicer Invoke-WebRequest -Times 1 -Exactly -ParameterFilter { $MaximumRedirection -eq 0 }
+    }
+
+    It 'PowerShell 7: un 3xx que lanza HttpResponseException también se entiende como redirección' -Skip:($PSVersionTable.PSEdition -ne 'Core') {
+        Mock -ModuleName WinJuicer Invoke-WebRequest {
+            $resp = [Net.Http.HttpResponseMessage]::new(302)
+            $resp.Headers.Location = [uri]'https://evil.example.com/z'
+            throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('redirect', $resp)
+        }
+        $r = Invoke-JuicerCoverRequest 'https://cdn.cloudflare.steamstatic.com/a.jpg' (Join-Path $Tmp 'x')
+        $r.Status | Should -Be 302
+        $r.Location | Should -Be 'https://evil.example.com/z'
+        # A real error still throws, for Get-JuicerWebFailureKind to classify.
+        Mock -ModuleName WinJuicer Invoke-WebRequest { throw [Microsoft.PowerShell.Commands.HttpResponseException]::new('nada', [Net.Http.HttpResponseMessage]::new(404)) }
+        { Invoke-JuicerCoverRequest 'https://cdn.cloudflare.steamstatic.com/a.jpg' (Join-Path $Tmp 'x') } | Should -Throw
+    }
+
+    It 'reconoce muchos más monitores OLED por su nombre' {
+        foreach ($n in 'PG32UCDM', 'PG27AQDP', 'PG27UCDM', 'PG34WCDM', 'XG27AQDMG', '27GR95QE', '27GS95QE', '32GS95UE', '45GR95QE', 'LS32DG802 G80SD', 'G60SD', 'G85SD', 'G95SC', 'AW2725DF', 'AW3225QF', 'AW3423DWF', 'MAG 271QPX', 'MPG 321URX', '271QRX', 'FO27Q3', 'FO32U2', 'MSI QD-OLED', 'Algo WOLED', 'OLED48C1') {
+            Test-JuicerOledName $n | Should -BeTrue -Because $n
+        }
+        foreach ($n in 'VG27AQ3A', 'XG27AQ', 'LG 27GP850', 'U2723QE', '') {
+            Test-JuicerOledName $n | Should -BeFalse -Because $n
+        }
+    }
+
+    It 'lo que dice el dueño sobre OLED manda sobre el nombre, y el modo no lo pisa' {
+        $m = & $TestMon 'PG32UCDM'
+        Test-JuicerMonitorOled $m | Should -BeTrue
+        Set-JuicerMonitorOled $m $false | Should -BeFalse
+        Test-JuicerMonitorOled $m | Should -BeFalse
+        Get-JuicerMonitorOledOverride $m | Should -Be $false
+        # Another monitor with a name that does not say OLED, but is.
+        $o = & $TestMon 'Raro 27'
+        Test-JuicerMonitorOled $o | Should -BeFalse
+        (Get-JuicerMonitorOledOverride $o) | Should -BeNullOrEmpty
+        Set-JuicerMonitorOled $o $true | Should -BeTrue
+        # Changing the use of the monitor keeps it.
+        [void](Set-JuicerMonitorMode $o 'Fijo')
+        Get-JuicerMonitorOledOverride $o | Should -Be $true
+        Get-JuicerMonitorMode $o | Should -Be 'Fijo'
+        # The findings follow it.
+        $o.Info.Brand = 'ASUS'
+        $o.Info.MaxNits = 0
+        @(Get-JuicerMonitorFindings @($o) 'NVIDIA' | Where-Object { $_.Title -like 'OLED*' }).Count | Should -Be 1
+        # Back to the name's guess; with the mode left alone.
+        Set-JuicerMonitorOled $o $null | Should -BeFalse
+        Get-JuicerMonitorMode $o | Should -Be 'Fijo'
+        @(Get-JuicerMonitorFindings @($o) 'NVIDIA' | Where-Object { $_.Title -like 'OLED*' }).Count | Should -Be 0
+        # Said and then unsaid, with no mode, leaves no trace in the file.
+        $x = & $TestMon 'Otro'
+        [void](Set-JuicerMonitorOled $x $true)
+        [void](Set-JuicerMonitorOled $x $null)
+        (Read-JuicerMonitorModes).ContainsKey((Get-JuicerMonitorKey $x)) | Should -BeFalse
+    }
+
+    It 'desde la línea de órdenes, -PantallaOled' {
+        $env:WJ_TEST_OLEDMON = 'Raro 27'
+        $mon = & $TestMon 'Raro 27'
+        try {
+            Mock -ModuleName WinJuicer Get-JuicerPrimaryMonitor { @{ Display = [pscustomobject]@{ Monitor = $env:WJ_TEST_OLEDMON; MonitorId = '\\?\DISPLAY#TST1234#5&abc&0&UID1'; Hz = 240; MaxHz = 240; Primary = $true }; Info = @{ Name = $env:WJ_TEST_OLEDMON; Brand = 'Marca' }; Vrr = $null } }
+            @(Start-Juicer -PantallaOled 'Si' -Si 6>$null)[-1] | Should -Be 0
+            Test-JuicerMonitorOled $mon | Should -BeTrue
+            @(Start-Juicer -PantallaOled 'No' -Si 6>$null)[-1] | Should -Be 0
+            Test-JuicerMonitorOled $mon | Should -BeFalse
+            @(Start-Juicer -PantallaOled 'Auto' -Si 6>$null)[-1] | Should -Be 0
+            Get-JuicerMonitorOledOverride $mon | Should -BeNullOrEmpty
+        } finally {
+            Remove-Item Env:\WJ_TEST_OLEDMON -ErrorAction SilentlyContinue
+        }
     }
 }

@@ -89,6 +89,17 @@ function Get-JuicerGameLibraries {
         if ($p) { & $add 'GOG' (Get-JuicerGameLibraryFolder ([string]$p.Value)) }
     }
 
+    # EA, Ubisoft, Battle.net, Riot...: their games are only in the registry's uninstall list.
+    # The folder above each game, never a drive root or a system folder (Defender exclusions).
+    try {
+        foreach ($g in @(Get-JuicerPublisherGames)) {
+            $folder = Get-JuicerGameLibraryFolder ([string]$g.Dir)
+            if ($folder -and -not (Test-JuicerBroadFolder $folder)) { & $add $g.Launcher $folder }
+        }
+    } catch {
+        Write-Verbose "Juegos de EA, Ubisoft y otros ilegibles: $_"
+    }
+
     if (Test-JuicerWindows) {
         foreach ($d in [IO.DriveInfo]::GetDrives()) {
             if ($d.DriveType -eq 'Fixed') { & $add 'Xbox / Game Pass' (Join-Path $d.RootDirectory.FullName 'XboxGames') }
@@ -148,7 +159,8 @@ function New-JuicerPriorityTweak {
 
 function Get-JuicerConfiguredGames {
     $journal = Read-JuicerJournal
-    @($journal | Where-Object { $_.Id -like 'juego:*' })
+    # 'fps:*' are the frame-pacer entries (Limiter.ps1): they are a game's settings too.
+    @($journal | Where-Object { $_.Id -like 'juego:*' -or $_.Id -like 'fps:*' })
 }
 
 function Get-JuicerGpuCount {
