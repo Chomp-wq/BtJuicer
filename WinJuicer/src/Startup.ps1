@@ -251,13 +251,120 @@ function Get-JuicerStartupVerdict {
     $null
 }
 
-# Startup entries with their verdict, for the screens.
+# --- What Windows measured ------------------------------------------------------
+#
+# Windows times what slows each boot and logs it in Diagnostics-Performance: event 101 for
+# an application, 102 for a driver, 103 for a service. DegradationTime is how long it held
+# the boot back (TotalTime, how long it took to start, is the fallback). Windows only logs
+# the ones that are slow, so most entries have nothing to say and show nothing.
+
+$script:BootDelayLog = 'Microsoft-Windows-Diagnostics-Performance/Operational'
+$script:BootDelayKinds = @{ 101 = 'app'; 102 = 'driver'; 103 = 'service' }
+
+# One event's data into @{ Kind; Keys; Seconds }, or null when it says nothing usable. Keys
+# are what an entry can be matched by, lower case: the file name (Name and FileName for an
+# app or a driver, wherever they sit in the path) and, for a service, its name and its
+# display name.
+function ConvertFrom-JuicerBootEvent {
+    param([int]$Id, [hashtable]$Data)
+    $kind = $script:BootDelayKinds[$Id]
+    if (-not $kind -or -not $Data) { return $null }
+    $ms = 0.0
+    foreach ($f in 'DegradationTime', 'TotalTime') {
+        $v = 0.0
+        if ($Data[$f] -and [double]::TryParse([string]$Data[$f], [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$v) -and $v -gt 0) { $ms = $v; break }
+    }
+    if ($ms -le 0) { return $null }
+    $keys = New-Object System.Collections.ArrayList
+    foreach ($f in 'Name', 'FileName', 'Path', 'FriendlyName') {
+        $raw = [string]$Data[$f]
+        if (-not $raw.Trim()) { continue }
+        # A regex, not Split-Path: these are Windows paths whatever runs this (the tests).
+        $leaf = ($raw.Trim().Trim('"') -replace '^.*[\\/]', '').ToLowerInvariant()
+        if ($leaf -and $keys -notcontains $leaf) { [void]$keys.Add($leaf) }
+    }
+    if ($keys.Count -eq 0) { return $null }
+    @{ Kind = $kind; Keys = $keys.ToArray(); Seconds = [Math]::Round($ms / 1000, 1) }
+}
+
+# Recent boot delays, newest event of each item winning: key (lower case) to seconds.
+# Events is what Get-JuicerEvents hands back (newest first), so tests can pass their own.
+function ConvertFrom-JuicerBootEvents {
+    param([object[]]$Events)
+    $delays = @{}
+    foreach ($e in @($Events | Where-Object { $_ })) {
+        $data = @{}
+        try {
+            foreach ($d in ([xml]$e.ToXml()).Event.EventData.Data) { $data[[string]$d.Name] = [string]$d.'#text' }
+        } catch {
+            Write-Verbose "Evento de arranque ilegible: $_"
+            continue
+        }
+        $r = ConvertFrom-JuicerBootEvent ([int]$e.Id) $data
+        if (-not $r) { continue }
+        foreach ($k in $r.Keys) { if (-not $delays.ContainsKey($k)) { $delays[$k] = $r.Seconds } }
+    }
+    $delays
+}
+
+# The last 30 days of them. Empty when the log cannot be read (it may be off, or empty:
+# most PCs only log what is slow).
+function Get-JuicerBootDelays {
+    param([int]$Days = 30)
+    $events = Get-JuicerEvents @{ LogName = $script:BootDelayLog; Id = 101, 102, 103; StartTime = (Get-Date).AddDays(-$Days) }
+    if ($null -eq $events) { return @{} }
+    # Newest first, whatever order the log came in.
+    ConvertFrom-JuicerBootEvents @($events | Sort-Object { $_.TimeCreated } -Descending)
+}
+
+# The seconds Windows measured for one startup entry, or $null. Matches by file name: the
+# program of the command line («"C:\Games\Steam\steam.exe" -silent» is steam.exe), and for a
+# service its name and display name. No match is no data, not a zero.
+function Get-JuicerStartupDelay {
+    param([hashtable]$Item, [hashtable]$Delays)
+    if (-not $Item -or -not $Delays -or $Delays.Count -eq 0) { return $null }
+    $keys = @()
+    if ($Item.Kind -eq 'Servicio') {
+        $keys += @([string]$Item.ServiceName, [string]$Item.Name)
+    } else {
+        $prog = ([string](Get-JuicerCommandProgram ([string]$Item.Command)).Trim()).Trim('"')
+        if ($prog -match '^(?<exe>[^\s"]+?\.(?:exe|com|bat|cmd|scr|lnk))(?:\s|$)') { $keys += $Matches.exe }
+    }
+    $best = $null
+    foreach ($k in $keys) {
+        $key = ([string]$k -replace '^.*[\\/]', '').Trim().ToLowerInvariant()
+        if ($key -and $Delays.ContainsKey($key) -and ($null -eq $best -or $Delays[$key] -gt $best)) { $best = $Delays[$key] }
+    }
+    $best
+}
+
+# Startup entries with their verdict, for the screens. BootDelay: seconds Windows measured
+# for the entry in the last 30 days, absent when it has none.
 function Get-JuicerStartupReview {
+    $delays = @{}
+    try { $delays = Get-JuicerBootDelays } catch { Write-JuicerLog "Sin tiempos de arranque de Windows: $_" }
     foreach ($i in @(Get-JuicerStartupItems)) {
+        $d = Get-JuicerStartupDelay $i $delays
+        if ($d -gt 0) { $i.BootDelay = [double]$d }
         if ($i.Kind -eq 'Servicio') { $i; continue }
         $v = Get-JuicerStartupVerdict $i.Name $i.Command
         $i.Verdict = if ($v) { $v.Verdict } else { $null }
         $i.Why = if ($v) { $v.Why } else { $null }
         $i
     }
+}
+
+# «+12 s», without the zero: what the screens show beside an entry. Empty when there is none.
+function Format-JuicerBootDelay {
+    param($Seconds)
+    if ($null -eq $Seconds -or [double]$Seconds -le 0) { return '' }
+    $s = [double]$Seconds
+    if ($s -lt 10) { return ('+{0} s' -f $s.ToString('0.#', [Globalization.CultureInfo]::InvariantCulture)) }
+    '+{0} s' -f [int][Math]::Round($s)
+}
+
+# Slow enough to point at: Windows itself calls a boot degraded at 2 s or more per item.
+function Test-JuicerBootDelaySlow {
+    param($Seconds)
+    $null -ne $Seconds -and [double]$Seconds -ge 2
 }

@@ -49,3 +49,29 @@ function Get-JuicerUpdateNotice {
     }
     @{ Local = $Local; Latest = $new; Command = $script:OneLineCommand }
 }
+
+# «Actualizar ahora»: a new PowerShell that runs exactly the published one-line command
+# shown in the notice, i.e. the launcher that downloads the zip and checks its SHA256
+# before anything runs. Nothing is fetched or run from here, and only that exact shape of
+# command is accepted: what is handed to PowerShell must never be anything else.
+# -NoExit keeps the window open, so a failed download or a cancelled UAC can be read.
+function Get-JuicerUpdateInvocation {
+    param([string]$Command = $script:OneLineCommand, [string]$HostPath)
+    if ($Command -notmatch '^irm https://github\.com/[\w.\-]+/[\w.\-]+/releases/download/[\w.\-]+/[\w.\-]+\.ps1 \| iex$') {
+        throw "La orden de actualización no es la publicada: no se ejecuta ($Command)."
+    }
+    if (-not $HostPath) {
+        # The same PowerShell this runs in; the one Windows ships if it cannot be told.
+        try { $HostPath = (Get-Process -Id $PID).Path } catch { Write-Verbose "Sin ruta de PowerShell: $_" }
+        if (-not $HostPath) { $HostPath = 'powershell.exe' }
+    }
+    @{ FilePath = $HostPath; ArgumentList = "-NoProfile -ExecutionPolicy Bypass -NoExit -Command `"$Command`""; Command = $Command }
+}
+
+# Starts it. The caller asks first and closes Win Juicer afterwards: this never runs on its own.
+function Start-JuicerUpdate {
+    param([Parameter(Mandatory)][hashtable]$Notice)
+    $inv = Get-JuicerUpdateInvocation $Notice.Command
+    Write-JuicerLog "Actualizar ahora: $($inv.Command)"
+    Start-Process -FilePath $inv.FilePath -ArgumentList $inv.ArgumentList | Out-Null
+}

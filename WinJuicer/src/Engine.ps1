@@ -95,6 +95,23 @@ function ConvertTo-JuicerHashtable {
     $InputObject
 }
 
+# The previous good journal, kept by every save, and where a corrupt one is
+# set aside when the copy is restored.
+function Get-JuicerJournalBackupPath { Join-Path (Get-JuicerHome) 'diario.1.json' }
+function Get-JuicerJournalAsidePath { Join-Path (Get-JuicerHome) 'diario.dañado.json' }
+
+# Whether a file holds a journal that can be read. Never throws.
+function Test-JuicerJournalFile {
+    param([string]$Path)
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $false }
+    try {
+        $d = [IO.File]::ReadAllText($Path) | ConvertFrom-Json
+        return ($null -ne $d -and $null -ne $d.PSObject.Properties['Entries'])
+    } catch {
+        return $false
+    }
+}
+
 function Read-JuicerJournal {
     $path = Get-JuicerJournalPath
     $list = New-Object System.Collections.ArrayList
@@ -102,7 +119,9 @@ function Read-JuicerJournal {
     try {
         $data = [IO.File]::ReadAllText($path) | ConvertFrom-Json
     } catch {
-        throw "El diario de cambios está dañado ($path). No lo borres: guarda el estado original de cada ajuste. Error: $_"
+        # The copy that every save leaves behind is the way out: say so, where it is, and how.
+        $hint = if (Test-JuicerJournalFile (Get-JuicerJournalBackupPath)) { " Hay una copia del diario anterior (diario.1.json) y se puede restaurar: WinJuicer.cmd -RestaurarDiario, o Deshacer en el menú de la consola." } else { '' }
+        throw "El diario de cambios está dañado ($path). No lo borres: guarda el estado original de cada ajuste.$hint Error: $_"
     }
     foreach ($e in @($data.Entries)) {
         $h = ConvertTo-JuicerHashtable $e
@@ -205,9 +224,46 @@ function Write-JuicerTextAtomic {
     }
 }
 
+# Before each save, the journal as it is now (if it reads fine) becomes diario.1.json, so
+# a damaged file or a bad write always leaves one step back. A corrupt current file is
+# never copied over the good backup.
 function Save-JuicerJournal {
     param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.IList]$Entries)
-    Write-JuicerTextAtomic (Get-JuicerJournalPath) (ConvertTo-JuicerJson @{ Version = 1; Entries = $Entries })
+    $path = Get-JuicerJournalPath
+    $text = ConvertTo-JuicerJson @{ Version = 1; Entries = $Entries }
+    if (Test-JuicerJournalFile $path) {
+        try {
+            $current = [IO.File]::ReadAllText($path)
+            if ($current -ne $text) { Write-JuicerTextAtomic (Get-JuicerJournalBackupPath) $current }
+        } catch {
+            Write-JuicerLog "No se pudo guardar la copia del diario: $_"
+        }
+    }
+    Write-JuicerTextAtomic $path $text
+}
+
+# Puts diario.1.json back as the journal. The current file, if there is one, is moved
+# aside as diario.dañado.json first (nothing is deleted). Ok is false, with the reason,
+# when there is no usable copy.
+function Restore-JuicerJournal {
+    $backup = Get-JuicerJournalBackupPath
+    if (-not (Test-JuicerJournalFile $backup)) {
+        return @{ Ok = $false; Entries = 0; Message = 'No hay una copia utilizable del diario (diario.1.json).' }
+    }
+    $path = Get-JuicerJournalPath
+    $aside = Get-JuicerJournalAsidePath
+    try {
+        $text = [IO.File]::ReadAllText($backup)
+        if (Test-Path -LiteralPath $path) { Move-Item -LiteralPath $path -Destination $aside -Force -ErrorAction Stop }
+        Write-JuicerTextAtomic $path $text
+    } catch {
+        Write-JuicerLog "No se pudo restaurar el diario: $_"
+        return @{ Ok = $false; Entries = 0; Message = "No se pudo restaurar el diario: $_" }
+    }
+    # Not @(…): the journal comes back as one list, and @() would count it as one.
+    $n = (Read-JuicerJournal).Count
+    Write-JuicerLog "Diario restaurado desde diario.1.json ($n entradas); el anterior queda en diario.dañado.json."
+    @{ Ok = $true; Entries = $n; Message = "Diario restaurado desde la copia anterior ($(Format-JuicerCount $n 'cambio guardado' 'cambios guardados')). El que estaba dañado queda aparte en $aside." }
 }
 
 function Get-JuicerJournalEntry {
@@ -646,6 +702,40 @@ function Get-JuicerTweakState {
         $s.State = 'Error'; $s.Reason = "$_"
     }
     $s
+}
+
+# What Windows (a feature update, a driver installer, another tool) has undone since Win
+# Juicer applied it: journaled tweaks whose live state is no longer in place. Left out on
+# purpose: what the engine skips (NoAplica, a state it could not read) and a game's
+# profile while the game runs, which is not touched then and would only look like drift.
+# Returns @{ Id; Title; Tweak; State; Level; Pending } per tweak, in journal order (wrap the
+# call in @(): none gives nothing).
+function Get-JuicerDrift {
+    param([System.Collections.IList]$Journal)
+    if ($null -eq $Journal) { $Journal = Read-JuicerJournal }
+    $out = @()
+    foreach ($e in $Journal) {
+        $t = Resolve-JuicerJournalTweak ([string]$e.Id)
+        if (-not $t) { continue }
+        $s = Get-JuicerTweakState $t $Journal
+        if ($s.State -notin 'Pendiente', 'Parcial') { continue }
+        $open = @($s.Pending | Where-Object { $_.Type -in 'FpsLimit', 'NvSetting' -and (Test-JuicerGameRunning ([string]$_.Exe)) })
+        if ($open.Count -gt 0) { continue }
+        $out += @{ Id = [string]$e.Id; Title = [string]$t.Title; Tweak = $t; State = $s.State; Level = [int]$t.Level; Pending = @($s.Pending) }
+    }
+    $out
+}
+
+# The words for a list of drifted tweaks (screens and CLI): a title with the count and one
+# line per tweak, at most Max of them.
+function Format-JuicerDriftSummary {
+    param([object[]]$Drift, [int]$Max = 8)
+    $d = @($Drift | Where-Object { $_ })
+    if ($d.Count -eq 0) { return @{ Title = ''; Lines = @() } }
+    $title = if ($d.Count -eq 1) { 'Windows ha deshecho 1 cambio tuyo' } else { "Windows ha deshecho $($d.Count) cambios tuyos" }
+    $lines = @($d | Select-Object -First $Max | ForEach-Object { '· ' + $_.Title + $(if ($_.State -eq 'Parcial') { ' (en parte)' } else { '' }) })
+    if ($d.Count -gt $Max) { $lines += "· y $($d.Count - $Max) más" }
+    @{ Title = $title; Lines = $lines }
 }
 
 function New-JuicerResult {

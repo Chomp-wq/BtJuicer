@@ -145,6 +145,20 @@ function Find-JuicerTweak {
     $null
 }
 
+# The tweak a journal id stands for: a catalog id, or «<id>!» for the «no» side of a
+# preference (see Get-JuicerInverseTweak). Null for what is not in the catalog (an app
+# removed, a game's frame pacer), which has its own way back.
+function Resolve-JuicerJournalTweak {
+    param([string]$Id)
+    $t = Find-JuicerTweak $Id
+    if ($t) { return $t }
+    if ($Id -and $Id.EndsWith('!')) {
+        $base = Find-JuicerTweak $Id.Substring(0, $Id.Length - 1)
+        if ($base -and $base.Off) { return (Get-JuicerInverseTweak $base) }
+    }
+    $null
+}
+
 function Get-JuicerProfile {
     param([ValidateRange(1, 3)][int]$Level)
     @(Get-JuicerCatalog | Where-Object { $_.Level -ge 1 -and $_.Level -le $Level })

@@ -55,6 +55,11 @@ function Invoke-JuicerUpkeep {
     # The content protection as well, its task included: one deleted by hand
     # comes back at the next sign-in.
     try { [void](Repair-JuicerShield) } catch { Write-JuicerLog "Mantener: no se pudo revisar la protección: $_" }
+    # What Windows has undone since: only logged, never put back behind the user's back.
+    try {
+        $drift = @(Get-JuicerDrift)
+        if ($drift.Count -gt 0) { Write-JuicerLog ('Mantener: {0}: {1}. Se vuelven a aplicar con -Revisar -Si.' -f (Format-JuicerDriftSummary $drift).Title, (($drift | ForEach-Object { $_.Id }) -join ', ')) }
+    } catch { Write-JuicerLog "Mantener: no se pudo revisar lo que Windows ha deshecho: $_" }
     $state = Read-JuicerUpkeepState
     $games = @(Get-JuicerGames -KeepNew)
     $monitor = $null

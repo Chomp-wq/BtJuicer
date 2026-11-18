@@ -502,7 +502,8 @@ function Show-JuicerStartup {
     while ($true) {
         Write-JuicerHeader 'Programas de inicio'
         Write-Host '  Leyendo…' -ForegroundColor DarkGray
-        $items = @(Get-JuicerStartupReview | Sort-Object { -not $_.Enabled }, { $_.Name })
+        # On first, then the ones Windows measured slowing the boot (slowest first).
+        $items = @(Get-JuicerStartupReview | Sort-Object { -not $_.Enabled }, { -[double]$_.BootDelay }, { $_.Name })
         Write-JuicerHeader 'Programas de inicio'
         if ($items.Count -eq 0) { Write-Host '  No hay nada configurado para arrancar al iniciar sesión.' -ForegroundColor Green }
         $n = 0
@@ -514,13 +515,16 @@ function Show-JuicerStartup {
             Write-Host ('{0,3}  ' -f $n) -ForegroundColor Yellow -NoNewline
             Write-Host ('{0,-28} ' -f $(if ($i.Name.Length -gt 28) { $i.Name.Substring(0, 27) + '…' } else { $i.Name })) -NoNewline
             Write-Host ('{0,-28} ' -f $i.Source) -ForegroundColor DarkGray -NoNewline
-            if ($i.Verdict) { Write-Host $i.Verdict.ToLowerInvariant() -ForegroundColor $script:StartupVerdictColors[$i.Verdict] } else { Write-Host '' }
+            Write-Host ('{0,-14}' -f $(if ($i.Verdict) { $i.Verdict.ToLowerInvariant() } else { '' })) -ForegroundColor $(if ($i.Verdict) { $script:StartupVerdictColors[$i.Verdict] } else { 'Gray' }) -NoNewline
+            # What Windows measured (Diagnostics-Performance); nothing when it has no data.
+            Write-Host (Format-JuicerBootDelay $i.BootDelay) -ForegroundColor $(if (Test-JuicerBootDelaySlow $i.BootDelay) { 'Yellow' } else { 'DarkGray' })
             if ($i.Why) { Write-JuicerWrapped $i.Why 12 'Gray' }
             $cmd = $i.Command
             if ($cmd.Length -gt $w + 30) { $cmd = $cmd.Substring(0, $w + 29) + '…' }
             Write-Host "            $cmd" -ForegroundColor DarkGray
         }
         Write-Host ''
+        if (@($items | Where-Object { $_.BootDelay }).Count -gt 0) { Write-JuicerWrapped '«+N s»: lo que Windows midió que ese programa retrasó el arranque en los últimos 30 días. Sin cifra, Windows no ha registrado retraso.' 2 'DarkGray' }
         Write-JuicerWrapped 'Desactivar no borra nada: es el mismo interruptor del Administrador de tareas. Las apps de la Tienda que arrancan solas se gestionan en Configuración > Aplicaciones > Inicio.' 2 'DarkGray'
         $junk = @($items | Where-Object { $_.Enabled -and $_.Verdict -eq 'Prescindible' })
         $prompt = if ($junk.Count -gt 0) { "Números para activar o desactivar (ej. 2,5,7), P para desactivar los $($junk.Count) prescindibles, Intro para volver" } else { 'Números para activar o desactivar (ej. 2,5,7), Intro para volver' }
@@ -881,10 +885,81 @@ function Show-JuicerMaintenance {
     }
 }
 
+# Restores the previous journal (diario.1.json) after setting the current one aside. Prints
+# what happened; returns whether it was restored. A readable current journal is only
+# replaced after a question (-Si answers it): the copy is one step older and loses the last changes.
+function Invoke-JuicerJournalRestore {
+    $backup = Get-JuicerJournalBackupPath
+    if (-not (Test-JuicerJournalFile $backup)) {
+        Write-JuicerWrapped 'No hay una copia utilizable del diario (diario.1.json): no hay nada que restaurar.' 2 'Yellow'
+        return $false
+    }
+    $readable = $true
+    try { [void](Read-JuicerJournal) } catch { $readable = $false }
+    if ($readable -and (Test-Path -LiteralPath (Get-JuicerJournalPath))) {
+        Write-JuicerWrapped 'El diario actual se lee bien. La copia anterior es un paso más antigua: restaurarla olvida el último cambio guardado (el actual queda aparte como diario.dañado.json).' 2 'Yellow'
+        if (-not (Confirm-JuicerAction '¿Restaurar la copia anterior de todos modos?')) { return $false }
+    }
+    $r = Restore-JuicerJournal
+    Write-JuicerWrapped $r.Message 2 $(if ($r.Ok) { 'Green' } else { 'Yellow' })
+    [bool]$r.Ok
+}
+
+# What Windows has undone, for the screens: the count, the list and how to put it back.
+function Write-JuicerDrift {
+    param([object[]]$Drift)
+    $sum = Format-JuicerDriftSummary $Drift
+    if (-not $sum.Title) { return }
+    Write-Host "  $($sum.Title)" -ForegroundColor Yellow
+    foreach ($l in $sum.Lines) { Write-JuicerWrapped $l 4 'Gray' }
+}
+
+# Puts back what Windows undid, the same way as anything else that is applied: the Extremo
+# ones asked one by one, a restore point first.
+function Invoke-JuicerDriftReapply {
+    param([object[]]$Drift, [switch]$Simulate, [switch]$AcceptRisk, [switch]$NoRestorePoint)
+    $tweaks = @($Drift | ForEach-Object { $_.Tweak })
+    Invoke-JuicerTweakSet $tweaks -Simulate:$Simulate -AcceptRisk:$AcceptRisk -NoRestorePoint:$NoRestorePoint
+}
+
+# -Revisar: what Windows has undone since it was applied. With -Si, applies it again.
+function Invoke-JuicerDriftCli {
+    param([switch]$Apply, [switch]$Simulate, [switch]$AcceptRisk, [switch]$NoRestorePoint)
+    $drift = @()
+    try { $drift = @(Get-JuicerDrift) } catch { Write-Host "  $_" -ForegroundColor Red; return 1 }
+    if ($drift.Count -eq 0) {
+        Write-Host '  Todo lo que aplicó Win Juicer sigue en su sitio.' -ForegroundColor Green
+        return 0
+    }
+    Write-Host ''
+    Write-JuicerDrift $drift
+    if (-not $Apply -and -not $Simulate) {
+        Write-Host ''
+        Write-JuicerWrapped 'Para volver a aplicarlos: WinJuicer.cmd -Revisar -Si (los Extremo, además, con -AceptoRiesgos). Con -Simular, qué cambiaría.' 2 'DarkGray'
+        return 0
+    }
+    $results = @(Invoke-JuicerDriftReapply $drift -Simulate:$Simulate -AcceptRisk:$AcceptRisk -NoRestorePoint:$NoRestorePoint)
+    Show-JuicerResults $results
+    if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { return 1 }
+    0
+}
+
 function Show-JuicerUndo {
     while ($true) {
         Write-JuicerHeader 'Deshacer'
-        $journal = Read-JuicerJournal
+        $journal = $null
+        try {
+            $journal = Read-JuicerJournal
+        } catch {
+            Write-JuicerWrapped "$_" 2 'Red'
+            if (Test-JuicerJournalFile (Get-JuicerJournalBackupPath)) {
+                if (Confirm-JuicerAction '¿Restauro la copia anterior del diario? El dañado queda aparte, sin borrarlo') {
+                    if (Invoke-JuicerJournalRestore) { Wait-JuicerKey; continue }
+                }
+            }
+            Wait-JuicerKey
+            return
+        }
         if ($journal.Count -eq 0) {
             Write-Host '  No hay cambios de Win Juicer que deshacer.' -ForegroundColor Green
             Wait-JuicerKey
@@ -900,9 +975,18 @@ function Show-JuicerUndo {
             Write-Host $when -ForegroundColor DarkGray
         }
         Write-Host ''
+        $drift = @()
+        try { $drift = @(Get-JuicerDrift $journal) } catch { Write-JuicerLog "No se pudo revisar lo que Windows ha deshecho: $_" }
+        if ($drift.Count -gt 0) { Write-JuicerDrift $drift; Write-Host '' }
         Write-JuicerWrapped "Deshacer devuelve cada ajuste a como estaba antes de que Win Juicer lo tocara por primera vez. El diario está en $(Get-JuicerJournalPath)." 2 'DarkGray'
-        $c = Read-JuicerChoice 'Números a deshacer, T para todo, Intro para volver'
+        $prompt = 'Números a deshacer, T para todo, '
+        if ($drift.Count -gt 0) { $prompt += "V para volver a aplicar $(Format-JuicerCount $drift.Count 'cambio' 'cambios') que Windows deshizo, " }
+        $c = Read-JuicerChoice ($prompt + 'Intro para volver')
         if ($c -eq '') { return }
+        if ($c -match '^[vV]$' -and $drift.Count -gt 0) {
+            if (Confirm-JuicerAction "¿Volver a aplicar $(Format-JuicerCount $drift.Count 'ajuste')?") { Show-JuicerResults @(Invoke-JuicerDriftReapply $drift); Wait-JuicerKey }
+            continue
+        }
         if ($c -match '^[tT]$') {
             if (Confirm-JuicerAction $(if ($journal.Count -eq 1) { '¿Deshacer el cambio?' } else { "¿Deshacer los $($journal.Count) cambios?" })) { Show-JuicerResults @(Undo-JuicerAll); Wait-JuicerKey }
             continue
@@ -1272,6 +1356,25 @@ function Show-JuicerShield {
     }
 }
 
+# «Listo para jugar»: a tick or a warning per thing, from what this PC reports.
+function Show-JuicerReady {
+    Write-JuicerHeader 'Listo para jugar — no cambia nada'
+    if ($script:Screen) { Write-Host '  Mirando el equipo…' -ForegroundColor DarkGray }
+    $lines = @(Get-JuicerReady)
+    if ($script:Screen) { Write-JuicerHeader 'Listo para jugar — no cambia nada' }
+    if ($lines.Count -eq 0) {
+        Write-Host '  No se ha podido leer nada de este equipo.' -ForegroundColor Yellow
+    }
+    foreach ($l in $lines) {
+        Write-Host ('  {0} ' -f $(if ($l.Ok) { '[ok]' } else { '[ !]' })) -ForegroundColor $(if ($l.Ok) { 'Green' } else { 'Yellow' }) -NoNewline
+        Write-Host $l.Title
+        if ($l.Reason) { Write-JuicerWrapped $l.Reason 7 'DarkGray' }
+    }
+    Write-Host ''
+    Write-JuicerWrapped 'Lo que no se ha podido leer no aparece: no se da por bueno ni por malo.' 2 'DarkGray'
+    Wait-JuicerKey
+}
+
 function Show-JuicerMainMenu {
     $script:UpdateNotice = Get-JuicerUpdateNotice
     while ($true) {
@@ -1292,10 +1395,22 @@ function Show-JuicerMainMenu {
             @('13', 'Antes y después', 'arranque, procesos y memoria: qué han cambiado los ajustes'),
             @('14', 'Ajuste fino', 'undervolt de CPU y overclock de GPU para tus componentes, y vigilarlos'),
             @('15', 'Protección contra contenido adulto', 'opcional y para siempre: bloquea el porno y sus atajos'),
+            @('16', 'Listo para jugar', 'Modo juego, HAGS, Resizable BAR, energía, monitor: de un vistazo'),
             @('0', 'Salir', '')
         )
+        # What Windows has undone since: only when something has been (and the journal reads).
+        try {
+            $drift = @(Get-JuicerDrift)
+            if ($drift.Count -gt 0) {
+                Write-JuicerWrapped "$((Format-JuicerDriftSummary $drift).Title): míralos y vuelve a aplicarlos en Deshacer (11), o con -Revisar -Si." 2 'Yellow'
+                Write-Host ''
+            }
+        } catch {
+            Write-JuicerWrapped 'El diario de cambios no se puede leer: entra en Deshacer (11), que ofrece restaurar la copia anterior.' 2 'Red'
+            Write-Host ''
+        }
         if ($script:UpdateNotice) {
-            Write-JuicerWrapped "Hay otra versión publicada de Win Juicer ($($script:UpdateNotice.Latest); tienes la $($script:UpdateNotice.Local)). Para usarla, sal y ejecuta en PowerShell: $($script:UpdateNotice.Command)" 2 'Yellow'
+            Write-JuicerWrapped "Hay otra versión publicada de Win Juicer ($($script:UpdateNotice.Latest); tienes la $($script:UpdateNotice.Local)). A: actualizar ahora (abre PowerShell con la orden publicada, que comprueba su SHA256, y cierra Win Juicer). O, en PowerShell: $($script:UpdateNotice.Command)" 2 'Yellow'
             Write-Host ''
         }
         $c = Read-JuicerChoice
@@ -1315,6 +1430,12 @@ function Show-JuicerMainMenu {
             '13' { Show-JuicerMeasure }
             '14' { Show-JuicerFineTune }
             '15' { Show-JuicerShield }
+            '16' { Show-JuicerReady }
+            'A' {
+                if ($script:UpdateNotice -and (Confirm-JuicerAction '¿Actualizar ahora? Se abre PowerShell con la orden publicada y Win Juicer se cierra')) {
+                    try { Start-JuicerUpdate $script:UpdateNotice; return } catch { Write-JuicerWrapped "$_" 2 'Red'; Wait-JuicerKey }
+                }
+            }
             '0' { return }
         }
     }
@@ -1408,6 +1529,9 @@ function Start-Juicer {
         [int]$Fps,
         [string]$ModoMonitor,
         [switch]$Lista,
+        [switch]$Revisar,
+        [switch]$RestaurarDiario,
+        [switch]$Estado,
         [switch]$Recomendado,
         [string]$Perfil,
         [string[]]$Aplicar = @(),
@@ -1433,7 +1557,7 @@ function Start-Juicer {
     $LimitarFps = & $split $LimitarFps
     $BloquearWeb = & $split $BloquearWeb
     if ($BloquearWeb.Count -gt 0 -and -not $ProteccionAdultos) { $ProteccionAdultos = 'Bloquear' }
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     # The protected copy the sign-in task runs follows this version.
@@ -1456,7 +1580,11 @@ function Start-Juicer {
     }
     $script:Screen = $false
     $script:Interactive = -not $Si
+    # Before anything reads the journal: a corrupt one is what this is for.
+    if ($RestaurarDiario) { return $(if (Invoke-JuicerJournalRestore) { 0 } else { 1 }) }
     if ($Lista) { Show-JuicerList; return 0 }
+    if ($Revisar) { return (Invoke-JuicerDriftCli -Apply:$Si -Simulate:$Simular -AcceptRisk:$AceptoRiesgos -NoRestorePoint:$SinPuntoDeRestauracion) }
+    if ($Estado) { Show-JuicerReady; return 0 }
     if ($Informe) {
         $f = @(Get-JuicerAudit)
         $p = Save-JuicerAuditReport $Informe (Format-JuicerHardwareSummary (Get-JuicerHardwareProfile)) $f
