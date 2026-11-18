@@ -641,8 +641,9 @@ Describe 'Audio en Windows de verdad' -Tag 'Windows' -Skip:(-not $OnWindows) {
     }
 
     It 'el diagnóstico responde sin lanzar, con o sin tarjeta de sonido: nada o una salida bien formada' {
-        $info = 'sin llamar'
-        { $info = & (Get-Module WinJuicer) { Get-WinAudioInfo } } | Should -Not -Throw
+        # Called directly, not inside { } | Should -Not -Throw: that block runs in
+        # a child scope and the assignment would be lost. A throw fails the test anyway.
+        $info = & (Get-Module WinJuicer) { Get-WinAudioInfo }
         if ($null -ne $info) {
             $info.Name | Should -Not -BeNullOrEmpty
             $info.Bluetooth | Should -BeOfType [bool]
