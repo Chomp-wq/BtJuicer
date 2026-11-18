@@ -148,6 +148,44 @@ function Read-JuicerMonitorModes {
     @{}
 }
 
+# Panel names of OLED monitors (the EDID rarely says «OLED»). Families, not a full list: the
+# owner can always say it by hand (Set-JuicerMonitorOled) and that wins either way.
+$script:OledNames = 'OLED|WOLED|QD-?OLED|PG32UCDM|PG27UCDM|PG27AQDM|PG27AQDP|PG34WCDM|XG27AQDMG|27GR95QE|27GS95QE|32GS95UE|45GR95QE|G(60|80|85)SD|G95SC|AW2725DF|AW3225QF|AW3423|AW2725|MAG\s*271QPX|MPG\s*321URX|271QRX|FO27Q|FO32U'
+
+function Test-JuicerOledName {
+    param([string]$Name)
+    [bool]($Name -match $script:OledNames)
+}
+
+# The owner's say about OLED for this monitor: $true, $false, or $null (go by the name).
+function Get-JuicerMonitorOledOverride {
+    param([hashtable]$Monitor)
+    if (-not $Monitor) { return $null }
+    $e = (Read-JuicerMonitorModes)[(Get-JuicerMonitorKey $Monitor)]
+    if ($e -is [hashtable] -and $e.ContainsKey('Oled') -and $e.Oled -is [bool]) { return [bool]$e.Oled }
+    $null
+}
+
+function Test-JuicerMonitorOled {
+    param([hashtable]$Monitor)
+    $o = Get-JuicerMonitorOledOverride $Monitor
+    if ($null -ne $o) { return $o }
+    [bool]($Monitor -and $Monitor.Info -and (Test-JuicerOledName ([string]$Monitor.Info.Name)))
+}
+
+# Oled: $true or $false is the owner's word; $null goes back to guessing by the name.
+function Set-JuicerMonitorOled {
+    param([Parameter(Mandatory)][hashtable]$Monitor, $Oled)
+    $all = Read-JuicerMonitorModes
+    $key = Get-JuicerMonitorKey $Monitor
+    $e = if ($all[$key] -is [hashtable]) { $all[$key] } else { @{} }
+    if ($null -eq $Oled) { $e.Remove('Oled') } else { $e.Oled = [bool]$Oled }
+    if (-not $e.ContainsKey('Name')) { $e.Name = $(if ($Monitor.Info -and $Monitor.Info.Name) { "$($Monitor.Info.Brand) $($Monitor.Info.Name)" } else { [string]$Monitor.Display.Monitor }) }
+    if ($e.ContainsKey('Mode') -or $e.ContainsKey('Oled')) { $all[$key] = $e } else { $all.Remove($key) }
+    Write-JuicerTextAtomic (Get-JuicerMonitorModesPath) (ConvertTo-JuicerJson $all)
+    Test-JuicerMonitorOled $Monitor
+}
+
 function Get-JuicerMonitorMode {
     param([hashtable]$Monitor)
     if (-not $Monitor) { return 'Automatico' }
@@ -161,7 +199,11 @@ function Set-JuicerMonitorMode {
     $key = @($script:MonitorModes.Keys | Where-Object { $_ -eq $Mode })
     if ($key.Count -eq 0) { throw "Modo de monitor desconocido: $Mode. Valen: $(@($script:MonitorModes.Keys) -join ', ')." }
     $all = Read-JuicerMonitorModes
-    $all[(Get-JuicerMonitorKey $Monitor)] = @{ Mode = $key[0]; Name = $(if ($Monitor.Info -and $Monitor.Info.Name) { "$($Monitor.Info.Brand) $($Monitor.Info.Name)" } else { [string]$Monitor.Display.Monitor }) }
+    # Whatever else was said about this monitor (Oled) stays.
+    $e = if ($all[(Get-JuicerMonitorKey $Monitor)] -is [hashtable]) { $all[(Get-JuicerMonitorKey $Monitor)] } else { @{} }
+    $e.Mode = $key[0]
+    $e.Name = $(if ($Monitor.Info -and $Monitor.Info.Name) { "$($Monitor.Info.Brand) $($Monitor.Info.Name)" } else { [string]$Monitor.Display.Monitor })
+    $all[(Get-JuicerMonitorKey $Monitor)] = $e
     Write-JuicerTextAtomic (Get-JuicerMonitorModesPath) (ConvertTo-JuicerJson $all)
     $Monitor.Mode = $key[0]
     $Monitor.Use = Resolve-JuicerMonitorUse $Monitor
@@ -234,7 +276,7 @@ function Get-JuicerMonitorFindings {
         if (-not $m.Info) { continue }
         $i = $m.Info; $d = $m.Display
         $title = Format-JuicerMonitor $m
-        $oled = $i.Name -match 'OLED|PG27AQDM|AW3423|AW2725|QD-?OLED'
+        $oled = Test-JuicerMonitorOled $m
         $hz = [int]$d.MaxHz
         $use = Resolve-JuicerMonitorUse $m
         $rates = @($d.RefreshRates | Where-Object { $_ })

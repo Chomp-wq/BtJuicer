@@ -92,6 +92,11 @@
     Automatico, VRR, Estrobo (ELMB, DyAc… sin VRR), EstroboSync (ELMB Sync…)
     o Fijo. Se guarda para ese monitor; con -LimitarFps, se usa ya.
 
+.PARAMETER PantallaOled
+    Si tu monitor es OLED, cuando su nombre no lo delata: Si, No, o Auto para
+    volver a decidirlo por el nombre. Se guarda para ese monitor y manda sobre
+    el nombre.
+
 .PARAMETER Lista
     Muestra todos los ajustes, con su nombre corto y su estado.
 
@@ -224,6 +229,7 @@ param(
     [string[]]$BloquearWeb = @(),
     [int]$Fps,
     [ValidateSet('Automatico', 'VRR', 'Estrobo', 'EstroboSync', 'Fijo')][string]$ModoMonitor,
+    [ValidateSet('Auto', 'Si', 'No')][string]$PantallaOled,
     [switch]$Lista,
     [switch]$Revisar,
     [switch]$RestaurarDiario,

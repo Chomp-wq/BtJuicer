@@ -7,7 +7,10 @@
 # executable named like the game, never an uninstaller or a crash reporter)
 # and remembered; the user can always pick another.
 
-$script:NotGameNames = 'Redistributable|Redistributables|Soundtrack|\bOST\b|\bSDK\b|Dedicated Server|Proton|Steam Linux Runtime|SteamVR|Wallpaper Engine|Steamworks Common|DirectX|Visual C\+\+|\.NET|PhysX|Benchmark Tool|Demo$'
+$script:NotGameNames = 'Redistributable|Redistributables|Soundtrack|\bOST\b|\bSDK\b|Dedicated Server|Proton|Steam Linux Runtime|SteamVR|Wallpaper Engine|Steamworks Common|DirectX|Visual C\+\+|\.NET|PhysX|Benchmark Tool|Demo$|Riot Vanguard|Anti-?Cheat|Easy ?Anti|BattlEye|Update Agent|Crash ?(Reporter|Handler)'
+# Anti-cheat and updater agents register like games (Riot Vanguard, Battle.net Update Agent,
+# EA helpers). «Vanguard» alone is not listed on purpose (Call of Duty: Vanguard is a game),
+# and neither is a name merely ending in «Launcher»: a real game can be called that.
 # Whole executable names (without .exe), never prefixes: a game called
 # CrashBandicoot, ServerSim or ConfigurationQuest must not be taken for a tool.
 $script:NotGameExe = '^(' + (@(
@@ -15,7 +18,7 @@ $script:NotGameExe = '^(' + (@(
         'vc_?redist.*', 'vcredist.*', 'redist', 'dxsetup', 'dxwebsetup', 'dotnet[_-].*', 'dotnetfx.*', 'physx(setup|legacy|_?installer).*',
         '(ue4?|ue5)?prereq.*', 'ue4prereqsetup.*',
         '.*crash(handler|report(er|client)?|pad_handler|sender|_?dump)\d*', 'bugsplat.*', 'errorreport.*', 'report(er)?', 'dump(er)?', 'minidump.*', 'crs-.+',
-        'easyanticheat.*', 'eac_?(launcher|setup|server|bootstrapper)', 'beservice.*', 'battleye.*', 'start_protected_game',
+        'gamelaunchhelper', 'easyanticheat.*', 'eac_?(launcher|setup|server|bootstrapper)', 'beservice.*', 'battleye.*', 'start_protected_game',
         'cefprocess', 'cef_?subprocess', 'cefsharp.*', 'unrealcefsubprocess', 'epicwebhelper', '.*webhelper(_.*)?', 'qtwebengineprocess',
         '(game)?overlay(ui|renderer|helper|process)?(_?(x64|x86|64|32))?', 'notification(helper|service)?', 'socialclub(helper)?',
         'launcherpatcher', '.*updater', 'update(r)?', '.+[_ -]update', '.*patcher', 'repair', 'cleanup', 'config(tool|urator)?', 'configure', '.+[_ -]config(tool)?', 'settings',
@@ -108,6 +111,8 @@ function Get-JuicerEpicGames {
             continue
         }
         if ($m.AppCategories -and @($m.AppCategories) -notcontains 'games') { continue }
+        # A half-finished install (or a pending update that left the manifest) is not a playable game yet.
+        if ($m.bIsIncompleteInstall -eq $true) { continue }
         if (-not $m.InstallLocation -or (Test-JuicerNotAGame ([string]$m.DisplayName))) { continue }
         $exe = if ($m.LaunchExecutable) { Join-Path $m.InstallLocation $m.LaunchExecutable } else { '' }
         New-JuicerGame 'Epic Games' ([string]$m.AppName) ([string]$m.DisplayName) ([string]$m.InstallLocation) $exe
@@ -130,9 +135,19 @@ function ConvertFrom-JuicerXboxConfig {
     param([string]$Text)
     try { $x = [xml]$Text } catch { return $null }
     $exe = @($x.SelectNodes('//*[local-name()="Executable"]'))
+    # The first one is not always the game: some packages list a launch helper first.
+    $pick = $null
+    foreach ($e in $exe) { if ([string]$e.GetAttribute('Id') -eq 'Game') { $pick = $e; break } }
+    if (-not $pick) {
+        foreach ($e in $exe) {
+            $base = [IO.Path]::GetFileNameWithoutExtension(([string]$e.GetAttribute('Name') -split '[\\/]')[-1])
+            if ($base -and $base -notmatch $script:NotGameExe) { $pick = $e; break }
+        }
+    }
+    if (-not $pick -and $exe.Count -gt 0) { $pick = $exe[0] }
     $name = $x.SelectSingleNode('//*[local-name()="ShellVisuals"]')
     @{
-        Exe = $(if ($exe.Count -gt 0) { [string]$exe[0].GetAttribute('Name') } else { '' })
+        Exe = $(if ($pick) { [string]$pick.GetAttribute('Name') } else { '' })
         Name = $(if ($name) { [string]$name.GetAttribute('DefaultDisplayName') } else { '' })
     }
 }

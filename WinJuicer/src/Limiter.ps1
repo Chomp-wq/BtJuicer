@@ -637,10 +637,12 @@ function Get-JuicerPacerCalibration {
     }
     $floor = [Math]::Max(30, $(if ($Use -in 'VRR', 'EstroboSync' -and $VrrMin -gt 0) { $VrrMin + 3 } else { 0 }))
     if ($misses) {
-        $new = [int][Math]::Floor($Result.Fps95)
+        # Fps95 is what the game just managed on 95 % of its frames: a cap right at it would miss
+        # again half the time, so 3 % under it, and never under the floor.
+        $new = [int][Math]::Floor($Result.Fps95 * 0.97)
         if ($new -lt $floor) { $new = $floor }
         if ($new -lt $Cap) {
-            return @{ Fps = $new; Action = 'Bajar'; Why = ('Calibrado: con {0} FPS el 5 % de los fotogramas llegaba tarde; a {1} FPS ({2:N2} ms) los sostiene, y un ritmo que se cumple siempre se nota más fluido que uno más alto que se rompe.' -f $Cap, $new, (1000 / $new)) }
+            return @{ Fps = $new; Action = 'Bajar'; Why = ('Calibrado: con {0} FPS el 5 % de los fotogramas llegaba tarde; a {1} FPS ({2:N2} ms), un 3 % por debajo de lo que alcanzaba, debería sostenerlos, y un ritmo que se cumple siempre se nota más fluido que uno más alto que se rompe.' -f $Cap, $new, (1000 / $new)) }
         }
         return @{ Fps = $Cap; Action = 'Mantener'; Why = "No sostiene $Cap FPS, pero bajar más saldría del rango de frecuencia variable: mejor bajar la calidad gráfica." }
     }

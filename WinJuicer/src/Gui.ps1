@@ -789,7 +789,7 @@ $script:GuiXaml = @'
 
                   <TextBlock Text="Más rendimiento" Style="{StaticResource Head}" FontSize="16"/>
                   <CheckBox x:Name="GameGpuOn" Content="Usar siempre la gráfica potente" ToolTipService.ShowOnDisabled="True"/>
-                  <CheckBox x:Name="GamePrioOn" Content="Darle prioridad alta en el procesador" ToolTip="Ayuda si otros programas compiten por el procesador mientras juegas"/>
+                  <CheckBox x:Name="GamePrioOn" Content="Darle prioridad por encima de lo normal en el procesador" ToolTip="Ayuda si otros programas compiten por el procesador mientras juegas. No «alta»: con alta el equipo puede congelarse"/>
 
                   <TextBlock Text="Medir" Style="{StaticResource Head}" FontSize="16"/>
                   <TextBlock Style="{StaticResource Note}" Text="Abre el juego, pulsa y vuelve a él: mide un minuto de partida y te dice FPS, tirones, latencia y qué limita. Cada medida se compara con la anterior."/>
@@ -2769,7 +2769,7 @@ function Show-JuicerGuiGames {
         [void]$c.LibPanel.Children.Add($cb)
     }
     if (@($Libraries).Count -eq 0) {
-        [void]$c.LibPanel.Children.Add((New-JuicerUi TextBlock @{ Text = 'No he encontrado bibliotecas de Steam, Epic, GOG ni Xbox. Puedes añadir otra carpeta.'; Foreground = '#9A9AA5'; TextWrapping = 'Wrap' }))
+        [void]$c.LibPanel.Children.Add((New-JuicerUi TextBlock @{ Text = 'No he encontrado bibliotecas de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net ni Riot. Puedes añadir otra carpeta.'; Foreground = '#9A9AA5'; TextWrapping = 'Wrap' }))
     }
 }
 

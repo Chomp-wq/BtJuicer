@@ -187,6 +187,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
 .\WinJuicer.ps1 -OlvidarAjuste
 .\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el ritmo va exacto a los Hz
+.\WinJuicer.ps1 -PantallaOled Si                         # tu monitor es OLED aunque su nombre no lo diga (No; Auto: por el nombre)
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
@@ -369,18 +370,22 @@ planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar»
 
 Y por juego, desde la pestaña **Juegos** (o el menú Juegos de la consola): GPU
 de alto rendimiento y prioridad por encima de lo normal para un `.exe`, y exclusiones de Microsoft
-Defender para las bibliotecas de Steam, Epic, GOG y Xbox (Extremo).
+Defender para las bibliotecas de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net y Riot
+(Extremo; nunca una unidad entera ni una carpeta del sistema).
 
 ### Tus juegos
 
 La pestaña **Juegos** empieza por la lista de los juegos instalados, que Win
 Juicer encuentra solo:
 - Steam, por sus manifiestos.
-- Epic, por los suyos.
+- Epic, por los suyos (una instalación a medias no cuenta).
 - GOG, por el registro.
-- Xbox/Game Pass, por su `MicrosoftGame.config`.
+- Xbox/Game Pass, por su `MicrosoftGame.config` (el ejecutable `Game`, no un
+  ayudante de arranque).
 - EA, Ubisoft, Battle.net, Riot, Rockstar, HoYoverse, Bethesda y Wargaming,
-  por sus desinstaladores. Los lanzadores no cuentan como juegos.
+  por sus desinstaladores. Los lanzadores no cuentan como juegos, ni tampoco los
+  anti-trampas (Vanguard, Easy Anti-Cheat, BattlEye) ni los agentes de
+  actualización o de informe de errores.
 
 Para cada uno busca el `.exe` que se ejecuta de verdad: el que declara la
 tienda o, si no lo dice, el `*-Win64-Shipping.exe` de los juegos Unreal o el
@@ -391,13 +396,17 @@ Los muestra como una **galería**, agrupados por tienda (Steam, Epic, GOG,
 Xbox…), con un buscador. Cada juego lleva su portada:
 - **Steam**: la de la caché de su biblioteca, ya en tu PC. Steam guarda ahora
   cada juego en su carpeta con nombres que cambian, así que Win Juicer elige la
-  vertical por su tamaño, leyendo sólo la cabecera de cada imagen.
+  vertical por su tamaño, leyendo sólo la cabecera de cada imagen. Si Steam no
+  tiene vertical, se descarga la apaisada como recurso (`*.wide.jpg`), y en
+  cuanto aparezca una vertical en tu PC la sustituye.
 - **Xbox**: el logo que trae el propio juego en su carpeta.
 - Si no está en tu PC, se descarga una vez de la tienda: Steam, Epic (la URL
   sale de la caché del catálogo de su lanzador) o GOG (su API pública). Sólo
-  por HTTPS, sólo de sus servidores, y sólo si lo que llega empieza como un JPEG
+  por HTTPS, sólo de sus servidores (también cada redirección, hasta tres), y
+  sólo si lo que llega empieza como un JPEG
   o un PNG de tamaño normal. Lo que no existe (404) no se vuelve a buscar en
-  una semana; si no hay conexión, no se apunta nada y se reintenta enseguida.
+  una semana; si no hay conexión, o Epic todavía no tiene su catálogo o no lista
+  el juego, no se apunta nada y se reintenta.
 - Si no hay portada, el icono del propio `.exe` sobre un color.
 
 Todo queda en `ProgramData\WinJuicer\portadas`. Los juegos ya optimizados
@@ -543,7 +552,11 @@ con Win Juicer cerrado:
   tu monitor» (o con `-ModoMonitor`): Automático, Frecuencia variable,
   Estroboscopio sin VRR, Estroboscopio con VRR (ELMB Sync, Aim Stabilizer
   Sync) o Frecuencia fija. «Recalcular los ritmos» los vuelve a poner con el
-  modo nuevo.
+  modo nuevo. Si tu monitor es OLED y su nombre no lo delata (se reconocen
+  muchas familias: PG32UCDM, AW3225QF, 27GR95QE, G80SD, MAG 271QPX…), dilo con
+  `-PantallaOled Si|No|Auto` o en el menú del frame pacer de la consola («Tu
+  monitor es OLED»): se guarda en `monitores.json` y manda sobre el nombre. En
+  la ventana no hay interruptor todavía.
 - **Cuánto**, como objetivo de frametime:
   - con frecuencia variable (con o sin estroboscopio), **Hz − Hz²/3600**, la
     cifra que usa NVIDIA Reflex (138 a 144 Hz, 157 a 165 Hz, 171 a 180 Hz, 224
@@ -594,7 +607,8 @@ con Win Juicer cerrado:
   identificador público.
 - **Calibrar** (un juego de la lista, o `-CalibrarJuego`): lo mide 60 segundos
   con su ritmo y lo ajusta a lo que sostiene de verdad. Si el 5 % más lento de
-  los fotogramas no llega, lo baja a ese ritmo, sin salir nunca del rango VRR.
+  los fotogramas no llega, lo baja a ese ritmo menos un 3 % de margen, sin salir
+  nunca del rango VRR.
   Si lo sostiene pero con cola delante de la gráfica, lo baja **por latencia**
   hasta dejarle a la gráfica un 12 % de cada fotograma: menos fotogramas,
   pero cada uno llega antes a la pantalla. A frecuencia fija sin VRR ni
@@ -659,6 +673,9 @@ gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
   - Ryzen 5000/7000/9000: Curve Optimizer por núcleo y PBO.
   - Intel K de 12.ª a 14.ª: AC Load Line u offset, tras el microcódigo 0x12B
     en 13.ª y 14.ª.
+  - Intel Core Ultra 200 K (Arrow Lake): guía prudente, con la BIOS al día y
+    pasos pequeños de AC/DC Load Line u offset (10 mV) y prueba de estabilidad
+    en cada uno.
   - La placa lo guarda y lo aplica en cada arranque, antes de Windows, sin
     ningún programa. Win Juicer no lo aplica desde Windows: las herramientas que
     lo hacen necesitan un driver de núcleo (WinRing0 y similares) que Microsoft
@@ -668,8 +685,12 @@ gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
   - RTX 40: curva a 0,95-1,00 V.
   - RTX 30: curva a 850-900 mV; la GDDR6X rinde menos, sin colgarse, si te
     pasas de memoria.
-  - RTX 20/GTX 16, GTX 10, RX 9000/7000/6000 e Intel Arc: cada una con su
-    receta.
+  - RTX 20/GTX 16, GTX 10, RX 9000/7000/6000/5000 e Intel Arc: cada una con
+    su receta. Las tarjetas de estación de trabajo (RTX A, RTX Ada, RTX PRO,
+    Quadro, Tesla) no tienen receta.
+  - En un portátil (o una gráfica «Laptop», «Max-Q» o «Mobile») no se da la
+    receta de sobremesa, sino una nota: sin tocar los límites de potencia,
+    curva pequeña, que decida la temperatura y con la herramienta del fabricante.
   - Cómo hacer que se aplique en cada inicio: el perfil de Afterburner con
     «Aplicar overclock al iniciar el sistema», o AMD Software, que lo conserva
     salvo tras un cuelgue. La API pública de NVIDIA permite leer frecuencias y

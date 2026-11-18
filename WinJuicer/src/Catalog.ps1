@@ -669,6 +669,7 @@ function New-JuicerCatalog {
         What = 'Deshabilita «Experiencias del usuario y telemetría asociadas» (DiagTrack).'
         Gain = 'Evita la recogida y el envío periódico de datos de diagnóstico. Poca ganancia, pero sin efectos secundarios en un equipo doméstico.'
         Cost = 'El programa Windows Insider lo necesita.'
+        Skip = { if (Test-JuicerInsider) { 'Estás en Windows Insider, que necesita los datos de diagnóstico.' } }
         Actions = @(
             @{ Type = 'Service'; Name = 'DiagTrack'; Start = 'Disabled' }
         )

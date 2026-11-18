@@ -551,7 +551,7 @@ function Show-JuicerGames {
         Write-JuicerMenu @(
             @('0', 'Tus juegos', 'los encuentra solos: frame pacer y GPU en un paso'),
             @('1', 'Exclusiones de Defender', 'cargas más rápidas en tus bibliotecas (Extremo)'),
-            @('2', 'Configurar un juego', 'GPU potente y prioridad alta para un .exe'),
+            @('2', 'Configurar un juego', 'GPU potente y prioridad por encima de lo normal para un .exe'),
             @('3', 'Juegos configurados', 'ver y deshacer'),
             @('4', 'Medir FPS y frametimes', 'media, 1 % bajo, tirones y qué limita, con PresentMon'),
             @('5', 'Frame pacer', 'un ritmo por juego que se aplica solo, según tu monitor, y se calibra')
@@ -662,6 +662,7 @@ function Show-JuicerLimiter {
             @('P', 'Prioridad de un juego', 'fluidez, o latencia mínima (por encima de los Hz al calibrar)'),
             @('Q', 'Quitar el frame pacer a un juego', 'por número'),
             @('U', 'Cómo usas tu monitor', 'VRR, ELMB/DyAc u otro estroboscopio, o frecuencia fija'),
+            @('D', 'Tu monitor es OLED', $(if ($m) { $o = Get-JuicerMonitorOledOverride $m; 'ahora: ' + $(if ($null -eq $o) { 'según su nombre (' + $(if (Test-JuicerMonitorOled $m) { 'OLED' } else { 'no OLED' }) + ')' } elseif ($o) { 'sí, lo dices tú' } else { 'no, lo dices tú' }) } else { 'si el nombre no lo delata' })),
             @('E', 'Motor', "ahora: $($pacer.Engine); con estrobo, RivaTuner admite décimas"),
             @('O', 'Olvidar las calibraciones', 'volver al ritmo recomendado'),
             @('R', 'Recalcular los ritmos', 'con el modo y la frecuencia de ahora')
@@ -711,6 +712,15 @@ function Show-JuicerLimiter {
                     if ($limits.Count -gt 0 -and (Confirm-JuicerAction '¿Recalcular con este modo el ritmo de los juegos que ya lo tienen?')) { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
                 }
             }
+            'D' {
+                if (-not $m) { Write-JuicerWrapped 'No se pudo leer el monitor.' 2 'Yellow'; Wait-JuicerKey; continue }
+                Write-Host ''
+                Write-Host '  1. Según su nombre (automático)'
+                Write-Host '  2. Sí, es OLED'
+                Write-Host '  3. No, no es OLED'
+                $q = Read-JuicerChoice 'Número'
+                if ($q -in '1', '2', '3') { [void](Set-JuicerMonitorOled $m $(switch ($q) { '2' { $true } '3' { $false } default { $null } })) }
+            }
             'E' {
                 $engines = @(Get-JuicerPacerEngines)
                 Write-Host ''
@@ -757,7 +767,7 @@ function Show-JuicerDefenderLibraries {
     Write-JuicerHeader 'Exclusiones de Defender'
     $libs = @(Get-JuicerGameLibraries)
     if ($libs.Count -eq 0) {
-        Write-JuicerWrapped 'No he encontrado bibliotecas de Steam, Epic, GOG ni Xbox. Puedes excluir otra carpeta escribiendo su ruta.' 2
+        Write-JuicerWrapped 'No he encontrado bibliotecas de Steam, Epic, GOG, Xbox, EA, Ubisoft, Battle.net ni Riot. Puedes excluir otra carpeta escribiendo su ruta.' 2
     }
     $tweaks = @($libs | ForEach-Object { New-JuicerDefenderTweak $_.Path $_.Launcher })
     $journal = Read-JuicerJournal
@@ -822,7 +832,13 @@ function Show-JuicerConfiguredGames {
     foreach ($e in $entries) { $n++; Write-Host ('  {0,3}  {1}' -f $n, $e.Title) }
     $c = Read-JuicerChoice 'Números a deshacer, Intro para volver'
     if ($c -eq '') { return }
-    Show-JuicerResults @(Get-JuicerNumbers $c $entries.Count | ForEach-Object { Undo-JuicerTweak $entries[$_ - 1].Id })
+    # A frame pacer goes through Remove-JuicerFpsLimit (as in the window): it also clears its
+    # pending state and waits for the game to close if it is open; a plain Undo would not.
+    $results = @(Get-JuicerNumbers $c $entries.Count | ForEach-Object {
+            $id = [string]$entries[$_ - 1].Id
+            if ($id -like 'fps:*') { Remove-JuicerFpsLimit $id.Substring(4) } else { Undo-JuicerTweak $id }
+        })
+    Show-JuicerResults $results
     Wait-JuicerKey
 }
 
@@ -1537,6 +1553,7 @@ function Start-Juicer {
         [string[]]$BloquearWeb = @(),
         [int]$Fps,
         [string]$ModoMonitor,
+        [ValidateSet('', 'Auto', 'Si', 'No')][string]$PantallaOled = '',
         [switch]$Lista,
         [switch]$Revisar,
         [switch]$RestaurarDiario,
@@ -1566,7 +1583,7 @@ function Start-Juicer {
     $LimitarFps = & $split $LimitarFps
     $BloquearWeb = & $split $BloquearWeb
     if ($BloquearWeb.Count -gt 0 -and -not $ProteccionAdultos) { $ProteccionAdultos = 'Bloquear' }
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $PantallaOled -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     # The protected copy the sign-in task runs follows this version.
@@ -1602,6 +1619,13 @@ function Start-Juicer {
     }
     if ($Diagnostico) { Show-JuicerAudit; return 0 }
     $monitor = $null
+    if ($PantallaOled) {
+        try { $monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+        if (-not $monitor) { Write-Host '  No se pudo leer el monitor para guardar si es OLED.' -ForegroundColor Yellow; return 1 }
+        $now = Set-JuicerMonitorOled $monitor $(switch ($PantallaOled) { 'Si' { $true } 'No' { $false } default { $null } })
+        Write-Host ('  ' + (Format-JuicerMonitor $monitor) + ': ' + $(if ($now) { 'OLED' } else { 'no OLED' }) + $(if ($PantallaOled -eq 'Auto') { ' (según su nombre)' } else { ' (lo dices tú)' }))
+        if (-not $ModoMonitor -and $LimitarFps.Count -eq 0 -and -not $CalibrarJuego -and -not $MotorPacer) { return 0 }
+    }
     if ($ModoMonitor) {
         $mode = @((Get-JuicerMonitorModes).Keys | Where-Object { $_ -eq $ModoMonitor })
         if ($mode.Count -eq 0) { Write-Host ('  -ModoMonitor admite: ' + (@((Get-JuicerMonitorModes).Keys) -join ', ') + '.') -ForegroundColor Yellow; return 2 }
