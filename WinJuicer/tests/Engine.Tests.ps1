@@ -490,6 +490,41 @@ Describe 'Consola' {
         @(Get-JuicerNumbers 'abc' 10).Count | Should -Be 0
     }
 
+    It 'las listas de números ignoran lo enorme y recortan los rangos' {
+        @(Get-JuicerNumbers '99999999999' 10).Count | Should -Be 0
+        @(Get-JuicerNumbers '99999999999999999999999' 10).Count | Should -Be 0
+        Get-JuicerNumbers '1-2000000000' 5 | Should -Be @(1, 2, 3, 4, 5)
+        Get-JuicerNumbers '5-3' 10 | Should -Be @(3, 4, 5)
+        @(Get-JuicerNumbers '0' 10).Count | Should -Be 0
+    }
+
+    It 'escribir un texto es atómico y sin BOM' {
+        $f = Join-Path (Get-JuicerHome) 'atomico-prueba.txt'
+        try {
+            Write-JuicerTextAtomic $f 'uno'
+            Write-JuicerTextAtomic $f 'dos ñ'
+            [IO.File]::ReadAllText($f) | Should -Be 'dos ñ'
+            [IO.File]::ReadAllBytes($f)[0] | Should -Not -Be 0xEF
+            Test-Path -LiteralPath "$f.tmp" | Should -BeFalse
+        } finally {
+            Remove-Item -LiteralPath $f -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'un frame-pacer.json dañado se aparta en vez de perderse' {
+        $p = Get-JuicerPacerPath
+        $bad = "$p.dañado"
+        Remove-Item -LiteralPath $bad -ErrorAction SilentlyContinue
+        try {
+            [IO.File]::WriteAllText($p, '{ esto no es json')
+            (Read-JuicerPacer).Engine | Should -Be 'Auto'
+            Test-Path -LiteralPath $p | Should -BeFalse
+            [IO.File]::ReadAllText($bad) | Should -Be '{ esto no es json'
+        } finally {
+            Remove-Item -LiteralPath $p, $bad -ErrorAction SilentlyContinue
+        }
+    }
+
     It 'la línea de órdenes devuelve sólo el código de salida' {
         $m = New-FakeMachine
         $out = @(Start-Juicer -Lista 6>$null)

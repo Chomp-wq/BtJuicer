@@ -72,7 +72,9 @@ function Read-JuicerPacer {
             if ($d.Pending -is [hashtable]) { $s.Pending = $d.Pending }
             if ($d.Recipe) { $s.Recipe = [int]$d.Recipe }
         } catch {
-            Write-JuicerLog "frame-pacer.json dañado, se ignora: $_"
+            Write-JuicerLog "frame-pacer.json dañado, se aparta como .dañado y se empieza de cero: $_"
+            # Keep the bad file: the next save would overwrite it with defaults and lose any chance to recover it.
+            try { Move-Item -LiteralPath $p -Destination "$p.dañado" -Force -ErrorAction Stop } catch { Write-JuicerLog "No se pudo apartar frame-pacer.json: $_" }
         }
     }
     $s
@@ -80,7 +82,7 @@ function Read-JuicerPacer {
 
 function Save-JuicerPacer {
     param([hashtable]$State)
-    [IO.File]::WriteAllText((Get-JuicerPacerPath), (ConvertTo-JuicerJson $State), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerPacerPath) (ConvertTo-JuicerJson $State)
 }
 
 function Get-JuicerPacerEngine { [string](Read-JuicerPacer).Engine }
@@ -376,11 +378,19 @@ function Add-JuicerFpsLimit {
     $use = if ($Use -and $Use -ne 'Automatico') { $Use } else { Resolve-JuicerMonitorUse $Monitor }
     $why = ''
     $exact = 0
+    $asked = 0
     if ($Fps -le 0) {
         $cap = Get-JuicerRecommendedFps $Exe $Monitor
-        if (-not $cap) { throw 'No se pudo leer la pantalla para calcular el ritmo: indícalo a mano.' }
-        $Fps = $cap.Fps; $why = $cap.Why; $exact = [double]$cap.Exact
+        if ($cap) {
+            $Fps = $cap.Fps; $why = $cap.Why; $exact = [double]$cap.Exact
+        } else {
+            # A rate chosen by hand needs no screen to be read.
+            $Fps = Get-JuicerPacerFps $exeName
+            if ($Fps -le 0) { throw 'No se pudo leer la pantalla para calcular el ritmo: indícalo a mano.' }
+            $why = 'Ritmo elegido por ti: {0} FPS ({1:N2} ms por fotograma).' -f $Fps, (1000 / $Fps)
+        }
     }
+    $asked = $Fps
     $b = Get-JuicerBackend
     # NVIDIA caps a few games in their own profile because they break above
     # it (physics, timers): the frame pacer never goes higher than that.
@@ -404,7 +414,12 @@ function Add-JuicerFpsLimit {
         })
     # What an earlier recipe set and this one no longer does goes back first.
     [void](Remove-JuicerStaleCaptures $t)
-    Invoke-JuicerTweak $t
+    $r = Invoke-JuicerTweak $t
+    # What was asked is not what was set: say so instead of leaving it to the title.
+    if ($Fps -lt $asked -and $r.Outcome -in 'Aplicado', 'YaEstaba') {
+        $r.Message = "NVIDIA limita $exeName a $Fps FPS en su propio perfil (por encima no funciona bien): pediste $asked FPS y el frame pacer no pasa de $Fps."
+    }
+    $r
 }
 
 # Takes a game's frame pacer away; if the game is open, when it closes.

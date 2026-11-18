@@ -380,7 +380,7 @@ function Save-JuicerFrameResult {
     param([Parameter(Mandatory)][hashtable]$Result)
     $list = @(Read-JuicerFrameHistory) + $Result
     if ($list.Count -gt 50) { $list = @($list | Select-Object -Last 50) }
-    [IO.File]::WriteAllText((Get-JuicerFrameHistoryPath), (ConvertTo-JuicerJson $list), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerFrameHistoryPath) (ConvertTo-JuicerJson $list)
 }
 
 # The last chart of each game (up to 40 games), for its page in the gallery.
@@ -406,7 +406,7 @@ function Save-JuicerFrameChart {
     if ($all.Count -gt 40) {
         foreach ($k in @($all.Keys | Sort-Object { [string]$all[$_].Date } | Select-Object -First ($all.Count - 40))) { $all.Remove($k) }
     }
-    [IO.File]::WriteAllText((Get-JuicerFrameChartPath), (ConvertTo-JuicerJson $all), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerFrameChartPath) (ConvertTo-JuicerJson $all)
 }
 
 function Get-JuicerFrameChart {
@@ -436,38 +436,41 @@ function Invoke-JuicerFrameCapture {
         '--session_name', 'WinJuicer', '--no_console_stats', '--exclude', 'dwm.exe')
     if ($Delay -gt 0) { $argList += @('--delay', $Delay) }
     if ($Process) { $argList += @('--process_name', "`"$Process`"") }
-    $p = Start-Process -FilePath $pm -ArgumentList $argList -WindowStyle Hidden -PassThru
-
-    $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
-    $smiOut = "$csv.gpu"
+    $p = $null
     $smiProc = $null
-    $before = $null
-    $beforeAt = $null
-    $start = Get-Date
-    $limit = $start.AddSeconds($Delay + $Seconds + 30)
-    while (-not $p.HasExited -and (Get-Date) -lt $limit) {
-        $elapsed = ((Get-Date) - $start).TotalSeconds
-        if ($elapsed -lt $Delay) {
-            & $say ('Empieza en {0:N0} s: vuelve al juego y juega con normalidad.' -f ($Delay - $elapsed))
-        } else {
-            if ($null -eq $before) {
-                $before = @(Get-JuicerProcessCpu)
-                $beforeAt = Get-Date
-                if (Test-Path -LiteralPath $smi) {
-                    $smiProc = Start-Process -FilePath $smi -ArgumentList @('--query-gpu=temperature.gpu,utilization.gpu,clocks.gr', '--format=csv,noheader,nounits', '-l', '1', '-f', "`"$smiOut`"") -WindowStyle Hidden -PassThru
-                }
-            }
-            & $say ('Midiendo: quedan {0:N0} s.' -f [Math]::Max(0, $Delay + $Seconds - $elapsed))
-        }
-        Start-Sleep -Milliseconds 500
-    }
-    if (-not $p.HasExited) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
-    $after = @(Get-JuicerProcessCpu)
-    $sampled = if ($beforeAt) { ((Get-Date) - $beforeAt).TotalSeconds } else { 0 }
-    if ($smiProc -and -not $smiProc.HasExited) { Stop-Process -Id $smiProc.Id -Force -ErrorAction SilentlyContinue }
-    & $say 'Analizando los fotogramas…'
-
     try {
+        $p = Start-Process -FilePath $pm -ArgumentList $argList -WindowStyle Hidden -PassThru
+
+        $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
+        $smiOut = "$csv.gpu"
+        $before = $null
+        $beforeAt = $null
+        $start = Get-Date
+        $limit = $start.AddSeconds($Delay + $Seconds + 30)
+        while (-not $p.HasExited -and (Get-Date) -lt $limit) {
+            $elapsed = ((Get-Date) - $start).TotalSeconds
+            if ($elapsed -lt $Delay) {
+                & $say ('Empieza en {0:N0} s: vuelve al juego y juega con normalidad.' -f ($Delay - $elapsed))
+            } else {
+                if ($null -eq $before) {
+                    $before = @(Get-JuicerProcessCpu)
+                    $beforeAt = Get-Date
+                    if (Test-Path -LiteralPath $smi) {
+                        $smiProc = Start-Process -FilePath $smi -ArgumentList @('--query-gpu=temperature.gpu,utilization.gpu,clocks.gr', '--format=csv,noheader,nounits', '-l', '1', '-f', "`"$smiOut`"") -WindowStyle Hidden -PassThru
+                    }
+                }
+                & $say ('Midiendo: quedan {0:N0} s.' -f [Math]::Max(0, $Delay + $Seconds - $elapsed))
+            }
+            Start-Sleep -Milliseconds 500
+        }
+        $exitedByItself = $p.HasExited
+        if (-not $exitedByItself) { Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue }
+        # PresentMon gone early with an error (no admin rights, say): no point sampling or waiting more.
+        if ($exitedByItself -and $p.ExitCode -ne 0) { throw "PresentMon terminó con el código $($p.ExitCode). ¿Le falta permiso de administrador?" }
+        $after = @(Get-JuicerProcessCpu)
+        $sampled = if ($beforeAt) { ((Get-Date) - $beforeAt).TotalSeconds } else { 0 }
+        if ($smiProc -and -not $smiProc.HasExited) { Stop-Process -Id $smiProc.Id -Force -ErrorAction SilentlyContinue }
+        & $say 'Analizando los fotogramas…'
         [void]$p.WaitForExit(3000)
         if ($p.HasExited -and $p.ExitCode -ne 0) { throw "PresentMon terminó con el código $($p.ExitCode). ¿Le falta permiso de administrador?" }
         $rows = if (Test-Path -LiteralPath $csv) { @(Import-Csv -LiteralPath $csv) } else { @() }
@@ -511,6 +514,12 @@ function Invoke-JuicerFrameCapture {
             Write-JuicerLog "Sin límite recomendado: $_"
         }
     } finally {
+        # Whatever happens (an error, the window closing and stopping the task): no process or temp file is left behind.
+        foreach ($proc in $p, $smiProc) {
+            if ($proc) {
+                try { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } catch { Write-Verbose "Sin parar el proceso: $_" }
+            }
+        }
         Remove-Item -LiteralPath $csv, $smiOut -Force -ErrorAction SilentlyContinue
     }
 }

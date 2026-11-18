@@ -153,15 +153,23 @@ function Add-JuicerJsonValue {
     [void]$Sb.Append((ConvertTo-JuicerJsonString ([string]$Value)))
 }
 
+# Write-then-swap: a power cut or a crash must never leave half a file.
+# UTF-8 without BOM, the temp file next to the target so the swap is on one volume.
+function Write-JuicerTextAtomic {
+    param([Parameter(Mandatory)][string]$Path, [Parameter(Mandatory)][AllowEmptyString()][string]$Text)
+    $tmp = "$Path.tmp"
+    try {
+        [IO.File]::WriteAllText($tmp, $Text, (New-Object Text.UTF8Encoding $false))
+        # ([NullString] because PowerShell hands .NET an empty string for $null.)
+        if (Test-Path -LiteralPath $Path) { [IO.File]::Replace($tmp, $Path, [NullString]::Value) } else { [IO.File]::Move($tmp, $Path) }
+    } finally {
+        if (Test-Path -LiteralPath $tmp) { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+}
+
 function Save-JuicerJournal {
     param([Parameter(Mandatory)][AllowEmptyCollection()][System.Collections.IList]$Entries)
-    $path = Get-JuicerJournalPath
-    $json = ConvertTo-JuicerJson @{ Version = 1; Entries = $Entries }
-    $tmp = "$path.tmp"
-    [IO.File]::WriteAllText($tmp, $json, (New-Object Text.UTF8Encoding $false))
-    # Write-then-swap: a power cut must never leave half a journal.
-    # ([NullString] because PowerShell hands .NET an empty string for $null.)
-    if (Test-Path -LiteralPath $path) { [IO.File]::Replace($tmp, $path, [NullString]::Value) } else { [IO.File]::Move($tmp, $path) }
+    Write-JuicerTextAtomic (Get-JuicerJournalPath) (ConvertTo-JuicerJson @{ Version = 1; Entries = $Entries })
 }
 
 function Get-JuicerJournalEntry {

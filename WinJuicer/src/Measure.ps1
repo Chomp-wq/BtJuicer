@@ -58,7 +58,7 @@ function Save-JuicerMetrics {
     $list = @(if (-not $Reset) { Read-JuicerMetrics })
     $list += $Metrics
     if ($list.Count -gt 10) { $list = @($list[0]) + @($list | Select-Object -Last 9) }
-    [IO.File]::WriteAllText((Get-JuicerMetricsPath), (ConvertTo-JuicerJson $list), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerMetricsPath) (ConvertTo-JuicerJson $list)
 }
 
 # Called before applying anything: the first time, that is the «before».

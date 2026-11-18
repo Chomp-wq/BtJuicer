@@ -30,7 +30,7 @@ function Read-JuicerUpkeepState {
 
 function Save-JuicerUpkeepState {
     param([hashtable]$State)
-    [IO.File]::WriteAllText((Get-JuicerUpkeepPath), (ConvertTo-JuicerJson $State), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerUpkeepPath) (ConvertTo-JuicerJson $State)
 }
 
 # What the FPS limits depend on: change any of it and they are recalculated.
@@ -66,8 +66,18 @@ function Invoke-JuicerUpkeep {
     $results += @(Invoke-JuicerPacerPending $monitor)
     $results += @(Repair-JuicerGameSetups)
     if ($plan.Recalc) { $results += @(Update-JuicerFpsLimits $monitor) }
-    if ($plan.New.Count -gt 0 -and (Get-JuicerFpsBackend)) { $results += @(Invoke-JuicerGameSetup $plan.New 'Recomendado' -Monitor $monitor) }
-    $state.Seen = @($games | ForEach-Object { $_.Id })
+    $hasBackend = $false
+    if ($plan.New.Count -gt 0 -and (Get-JuicerFpsBackend)) {
+        $hasBackend = $true
+        $results += @(Invoke-JuicerGameSetup $plan.New 'Recomendado' -Monitor $monitor)
+    }
+    # A new game stays unseen (so the next run retries it) when there was no FPS backend yet
+    # or its setup errored; marking it seen would skip it for good.
+    $failed = @($plan.New | Where-Object {
+            $id = "juego:$($_.ExeName)"
+            -not $hasBackend -or @($results | Where-Object { $_.Id -eq $id -and $_.Outcome -eq 'Error' }).Count -gt 0
+        } | ForEach-Object { $_.Id })
+    $state.Seen = @($games | Where-Object { $failed -notcontains $_.Id } | ForEach-Object { $_.Id })
     if ($sig) { $state.Signature = $sig }
     Save-JuicerUpkeepState $state
     # A game that started failing after it was optimized gets its changes taken away.
@@ -105,13 +115,24 @@ function Install-JuicerCopy {
     $src = $script:ModuleRoot
     $dst = Get-JuicerInstallDir
     if ((Resolve-Path -LiteralPath $src).ProviderPath.TrimEnd('\') -eq $dst.TrimEnd('\')) { return $dst }
-    New-Item -ItemType Directory -Path (Join-Path $dst 'src') -Force | Out-Null
-    foreach ($f in 'WinJuicer.ps1', 'WinJuicer.psm1', 'WinJuicer.cmd', 'version.txt', 'README.md') {
-        $p = Join-Path $src $f
-        if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force }
+    New-Item -ItemType Directory -Path $dst -Force | Out-Null
+    # Stage the new src next to the old one and swap only after every copy worked: a failed
+    # copy (file in use, disk full) must not leave the protected copy without its scripts.
+    $stage = Join-Path $dst 'src.nuevo'
+    if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction Stop }
+    New-Item -ItemType Directory -Path $stage -Force | Out-Null
+    try {
+        Copy-Item -Path (Join-Path $src 'src\*.ps1') -Destination $stage -Force -ErrorAction Stop
+        foreach ($f in 'WinJuicer.ps1', 'WinJuicer.psm1', 'WinJuicer.cmd', 'version.txt', 'README.md') {
+            $p = Join-Path $src $f
+            if (Test-Path -LiteralPath $p) { Copy-Item -LiteralPath $p -Destination $dst -Force -ErrorAction Stop }
+        }
+        $old = Join-Path $dst 'src'
+        if (Test-Path -LiteralPath $old) { Remove-Item -Path (Join-Path $old '*.ps1') -Force -ErrorAction Stop } else { New-Item -ItemType Directory -Path $old -Force | Out-Null }
+        Move-Item -Path (Join-Path $stage '*.ps1') -Destination $old -Force -ErrorAction Stop
+    } finally {
+        if (Test-Path -LiteralPath $stage) { Remove-Item -LiteralPath $stage -Recurse -Force -ErrorAction SilentlyContinue }
     }
-    Remove-Item -Path (Join-Path $dst 'src\*.ps1') -Force -ErrorAction SilentlyContinue
-    Copy-Item -Path (Join-Path $src 'src\*.ps1') -Destination (Join-Path $dst 'src') -Force
     $dst
 }
 

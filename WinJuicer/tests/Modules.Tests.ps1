@@ -1711,6 +1711,41 @@ Describe 'Galería de juegos' {
         Get-JuicerPacerFps 'b.exe' | Should -Be 120
     }
 
+    It 'un ritmo a mano puesto desde la galería o la línea de comandos tampoco se pierde al recalcular' {
+        $mon = @{ Display = [pscustomobject]@{ Monitor = 'X'; MonitorId = 'm#X#1'; Hz = 180; MaxHz = 180; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 180; Kind = 'FreeSync' } }
+        $game = @{ Id = 'custom:a'; Name = 'A'; Exe = 'a.exe'; ExeName = 'a.exe' }
+        (Invoke-JuicerGameSetup @($game) 'Fps' 178 -Monitor $mon -GpuCount 1).Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.FpsLimits['a.exe'] | Should -Be 178
+        Get-JuicerPacerFps 'a.exe' | Should -Be 178
+        @(Update-JuicerFpsLimits $mon) | Out-Null
+        $M.Backend.State.FpsLimits['a.exe'] | Should -Be 178
+        # «Recomendado» with a rate is the same request (-OptimizarJuegos -Fps).
+        $game2 = @{ Id = 'custom:b'; Name = 'B'; Exe = 'b.exe'; ExeName = 'b.exe' }
+        @(Invoke-JuicerGameSetup @($game2) 'Recomendado' 178 -Monitor $mon -GpuCount 1) | Out-Null
+        Get-JuicerPacerFps 'b.exe' | Should -Be 178
+        @(Update-JuicerFpsLimits $mon) | Out-Null
+        $M.Backend.State.FpsLimits['b.exe'] | Should -Be 178
+        # Without a rate («Fps» with Intro) it is automatic again.
+        @(Invoke-JuicerGameSetup @($game) 'Fps' 0 -Monitor $mon -GpuCount 1) | Out-Null
+        Get-JuicerPacerFps 'a.exe' | Should -Be 0
+        $M.Backend.State.FpsLimits['a.exe'] | Should -Be 171
+    }
+
+    It 'un ritmo a mano se aplica aunque no se pueda leer la pantalla, y avisa si algo lo limita o no se mantiene' {
+        $mon = @{ Display = [pscustomobject]@{ Monitor = 'X'; MonitorId = 'm#X#1'; Hz = 180; MaxHz = 180; Primary = $true }; Info = @{}; Vrr = @{ Min = 48; Max = 180; Kind = 'FreeSync' } }
+        Set-JuicerPacerFps 'cs2.exe' 178 $mon | Out-Null
+        Mock -ModuleName WinJuicer Get-JuicerPrimaryMonitor { $null }
+        # The manual rate needs no screen to be applied again.
+        $M.Backend.State.FpsLimits['cs2.exe'] = 100
+        (Add-JuicerFpsLimit 'cs2.exe' 0).Outcome | Should -Be 'Aplicado'
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 178
+        # NVIDIA's own cap for the game wins, and the result says so.
+        $M.Backend.State.NvPredefined[('old.exe|{0}' -f [uint32]0x10835002)] = 60
+        $r = Set-JuicerPacerFps 'old.exe' 178 $mon
+        $M.Backend.State.FpsLimits['old.exe'] | Should -Be 60
+        $r.Message | Should -BeLike '*178*60*'
+    }
+
     It 'la página de un juego reúne lo que hace falta para dibujarla' {
         # The priority first: changing it recalculates the rate with the
         # screen of this PC, and CI runners have one.
@@ -1933,6 +1968,14 @@ Describe 'Mantener los juegos optimizados' {
         [void](Invoke-JuicerUpkeep -Quiet)
         $M.Backend.State.FpsLimits['nuevo.exe'] | Should -Be 224
         (Read-JuicerUpkeepState).Signature | Should -BeLike '240|*'
+    }
+
+    It 'un juego nuevo sin frame pacer disponible no se da por visto' {
+        Save-JuicerUpkeepState @{ Seen = @('steam:1'); Signature = (Get-JuicerLimitSignature $Mon) }
+        $M.Backend.State.FpsBackend = $null
+        [void](Invoke-JuicerUpkeep -Quiet)
+        (Read-JuicerUpkeepState).Seen | Should -Not -Contain 'steam:2'
+        (Read-JuicerUpkeepState).Seen | Should -Contain 'steam:1'
     }
 
     It 'desde la línea de órdenes' {
