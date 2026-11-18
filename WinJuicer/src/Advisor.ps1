@@ -196,9 +196,10 @@ function Get-JuicerAdvice {
 
 # What «Recomendado para este equipo» selects: catalog tweaks recommended
 # here. Nothing à la carte: tastes, parts of Windows and uninstalling
-# OneDrive are only done when picked one by one.
+# OneDrive are only done when picked one by one, and never the Extreme level
+# (Level 3), which is chosen knowing its cost; same as the home screen.
 function Get-JuicerRecommendedTweaks {
     param([Parameter(Mandatory)][hashtable]$Hw)
     $advice = Get-JuicerAdvice $Hw
-    @(Get-JuicerCatalog | Where-Object { $_.Level -ge 1 -and $advice[$_.Id].Verdict -eq 'Recomendado' })
+    @(Get-JuicerCatalog | Where-Object { $_.Level -ge 1 -and $_.Level -lt 3 -and $advice[$_.Id].Verdict -eq 'Recomendado' })
 }

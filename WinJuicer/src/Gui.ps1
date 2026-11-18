@@ -2875,7 +2875,10 @@ function Register-JuicerGuiHandlers {
             }
         }
         BtnCleanup            = { Start-JuicerModuleWindow 'Invoke-JuicerCleanup' 'Win Juicer: limpieza' }
-        BtnOptimize           = { Start-JuicerModuleWindow 'Invoke-JuicerDriveOptimize' 'Win Juicer: optimizar unidades' }
+        BtnOptimize           = {
+            $warn = Get-JuicerOptimizeWarning
+            if (-not $warn -or (Confirm-JuicerGui "$warn ¿Seguir?")) { Start-JuicerModuleWindow 'Invoke-JuicerDriveOptimize' 'Win Juicer: optimizar unidades' }
+        }
         BtnComponents         = { Start-JuicerModuleWindow 'Invoke-JuicerComponentCleanup' 'Win Juicer: limpiar componentes' }
         BtnRepair             = { Start-JuicerModuleWindow 'Invoke-JuicerSystemRepair' 'Win Juicer: reparar Windows' }
         BtnNetReset           = {
@@ -2884,7 +2887,7 @@ function Register-JuicerGuiHandlers {
             }
         }
         BtnWuReset            = {
-            if (Confirm-JuicerGui 'Detiene Windows Update, aparta su caché (renombrada, no borrada) y lo vuelve a arrancar. Para cuando se atasca o falla siempre igual. ¿Seguir?') {
+            if (Confirm-JuicerGui 'Detiene Windows Update, aparta su caché (renombrada, no borrada; sólo se guarda la última copia) y lo vuelve a arrancar. Para cuando se atasca o falla siempre igual. ¿Seguir?') {
                 Start-JuicerModuleWindow 'Invoke-JuicerUpdateReset' 'Win Juicer: restablecer Windows Update'
             }
         }

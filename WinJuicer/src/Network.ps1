@@ -71,15 +71,24 @@ function Invoke-JuicerNetworkReset {
 
 # Windows Update stuck downloading or failing with the same error: stop its
 # services, set aside its cache and signatures folder, start again. The old
-# folders are renamed, not deleted.
+# folders are renamed, not deleted; only the latest backup of each is kept, so
+# repeated resets do not pile up gigabytes.
 function Invoke-JuicerUpdateReset {
     $services = 'wuauserv', 'bits', 'cryptsvc', 'msiserver'
     $out = @()
+    # Only what was running goes back up: msiserver and bits are on demand and
+    # starting them unasked is not what the user had.
+    $wasRunning = @()
+    foreach ($s in $services) {
+        $svc = Get-Service -Name $s -ErrorAction SilentlyContinue
+        if ($svc -and $svc.Status -eq 'Running') { $wasRunning += $s }
+    }
     foreach ($s in $services) {
         try { Stop-Service -Name $s -Force -ErrorAction Stop; $out += @{ Step = "Detener $s"; Ok = $true } } catch { $out += @{ Step = "Detener $s"; Ok = $false; Output = "$_" } }
     }
     $stamp = (Get-Date).ToString('yyyyMMdd-HHmmss')
-    foreach ($dir in @((Join-Path $env:SystemRoot 'SoftwareDistribution'), (Join-Path $env:SystemRoot 'System32\catroot2'))) {
+    $dirs = @((Join-Path $env:SystemRoot 'SoftwareDistribution'), (Join-Path $env:SystemRoot 'System32\catroot2'))
+    foreach ($dir in $dirs) {
         if (-not (Test-Path -LiteralPath $dir)) { continue }
         try {
             Rename-Item -LiteralPath $dir -NewName ((Split-Path -Leaf $dir) + ".old-$stamp") -ErrorAction Stop
@@ -88,8 +97,14 @@ function Invoke-JuicerUpdateReset {
             $out += @{ Step = "Apartar $dir"; Ok = $false; Output = "$_" }
         }
     }
-    foreach ($s in $services) {
-        try { Start-Service -Name $s -ErrorAction Stop } catch { Write-JuicerLog "No se pudo arrancar ${s}: $_" }
+    foreach ($s in @($services | Where-Object { $wasRunning -contains $_ })) {
+        try { Start-Service -Name $s -ErrorAction Stop } catch { Write-JuicerLog "No se pudo arrancar ${s}: $_"; $out += @{ Step = "Iniciar $s"; Ok = $false; Output = "$_" } }
+    }
+    foreach ($dir in $dirs) {
+        $old = @(Get-ChildItem -LiteralPath (Split-Path -Parent $dir) -Directory -Filter ((Split-Path -Leaf $dir) + '.old-*') -ErrorAction SilentlyContinue | Sort-Object Name)
+        foreach ($d in @($old | Select-Object -First ([Math]::Max(0, $old.Count - 1)))) {
+            try { Remove-Item -LiteralPath $d.FullName -Recurse -Force -ErrorAction Stop; $out += @{ Step = "Borrar copia antigua $($d.FullName)"; Ok = $true } } catch { $out += @{ Step = "Borrar copia antigua $($d.FullName)"; Ok = $false; Output = "$_" } }
+        }
     }
     Write-JuicerLog ('Windows Update restablecido: ' + (($out | ForEach-Object { '{0} {1}' -f $_.Step, $_.Ok }) -join '; '))
     $out

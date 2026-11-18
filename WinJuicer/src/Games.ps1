@@ -14,6 +14,41 @@ function ConvertFrom-JuicerSteamLibraries {
     }
 }
 
+# A folder too broad to hand to Defender as an exclusion: a drive root, or
+# anything that is, or contains, the Windows folder, Program Files, ProgramData
+# or the user profile (C:\Users included). Pure string work so it behaves the
+# same on every machine; the system folders come from the environment.
+function Test-JuicerBroadFolder {
+    param([string]$Path, [string[]]$Protected = @($env:SystemRoot, $env:ProgramFiles, ${env:ProgramFiles(x86)}, $env:ProgramData, $env:USERPROFILE))
+    if (-not $Path) { return $true }
+    $norm = { param($v) ($v -replace '/', '\').Trim().TrimEnd('\').ToLowerInvariant() }
+    $p = & $norm $Path
+    if ($p -eq '' -or $p -match '^[a-z]:$' -or $p -match '^\\\\[^\\]+\\[^\\]+$') { return $true }
+    $roots = @($Protected | Where-Object { $_ } | ForEach-Object { & $norm $_ })
+    # C:\Users: the parent of the profile folder.
+    foreach ($r in @($roots)) { if ($r -match '^(.+\\users)\\[^\\]+$') { $roots += $Matches[1] } }
+    foreach ($r in $roots) {
+        if ($p -eq $r -or $r.StartsWith($p + '\')) { return $true }
+    }
+    $false
+}
+
+# Where a game's library lives: the folder above the game, unless that is too
+# broad (a game at D:\Cyberpunk would give the whole drive, one in Program
+# Files would give Program Files); then the game's own folder. $null when
+# even that is too broad.
+function Get-JuicerGameLibraryFolder {
+    param([string]$GameFolder, [string[]]$Protected)
+    if (-not $GameFolder) { return $null }
+    $guard = @{}
+    if ($PSBoundParameters.ContainsKey('Protected')) { $guard.Protected = $Protected }
+    $g = ($GameFolder -replace '[\\/]+$', '')
+    $parent = $g -replace '[\\/][^\\/]*$', ''
+    if ($parent -ne $g -and -not (Test-JuicerBroadFolder $parent @guard)) { return $parent }
+    if (Test-JuicerBroadFolder $g @guard) { return $null }
+    $g
+}
+
 function Get-JuicerGameLibraries {
     $libs = New-Object System.Collections.ArrayList
     $add = {
@@ -40,7 +75,7 @@ function Get-JuicerGameLibraries {
             foreach ($item in (Get-ChildItem -LiteralPath $manifests -Filter '*.item' -ErrorAction SilentlyContinue)) {
                 try {
                     $loc = ([IO.File]::ReadAllText($item.FullName) | ConvertFrom-Json).InstallLocation
-                    if ($loc) { & $add 'Epic Games' (Split-Path -Parent $loc) }
+                    if ($loc) { & $add 'Epic Games' (Get-JuicerGameLibraryFolder $loc) }
                 } catch {
                     Write-Verbose "Manifiesto de Epic ilegible: $($item.FullName)"
                 }
@@ -51,7 +86,7 @@ function Get-JuicerGameLibraries {
     $gog = 'HKLM\SOFTWARE\WOW6432Node\GOG.com\Games'
     foreach ($id in (Get-JuicerRegChildren $gog)) {
         $p = Read-JuicerReg "$gog\$id" 'path'
-        if ($p) { & $add 'GOG' (Split-Path -Parent ([string]$p.Value)) }
+        if ($p) { & $add 'GOG' (Get-JuicerGameLibraryFolder ([string]$p.Value)) }
     }
 
     if (Test-JuicerWindows) {
@@ -64,6 +99,8 @@ function Get-JuicerGameLibraries {
 
 function New-JuicerDefenderTweak {
     param([Parameter(Mandatory)][string]$Path, [string]$Launcher = '')
+    # A drive or system folder as an exclusion would blind Defender over far more than games.
+    if (Test-JuicerBroadFolder $Path) { throw "No se excluye «$Path»: es una unidad entera o una carpeta del sistema." }
     $label = if ($Launcher) { "$Launcher ($Path)" } else { $Path }
     @{
         Id = 'juego:defender:' + (ConvertTo-JuicerExclusionPath $Path); Category = 'Juegos'; Level = 3; Impact = 'Medio'; Reboot = 'No'

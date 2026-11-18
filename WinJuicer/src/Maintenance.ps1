@@ -84,7 +84,7 @@ function Invoke-JuicerCleanup {
             }
         }
         $r = Clear-JuicerFolder -Path $t.Path -OlderThanHours $t.Hours
-        foreach ($s in $stopped) { Start-Service -Name $s -ErrorAction SilentlyContinue }
+        foreach ($s in $stopped) { try { Start-Service -Name $s -ErrorAction Stop } catch { Write-JuicerLog "No se pudo volver a arrancar ${s}: $_" } }
         $results += @{ Name = $t.Name; Freed = $r.Freed; Skipped = $r.Skipped }
     }
 
@@ -105,10 +105,24 @@ function Invoke-JuicerCleanup {
 
 # SSDs get a retrim and hard disks a defrag: Optimize-Volume picks the right
 # one per drive, the same as Windows' weekly task.
+function Get-JuicerOptimizeVolumes {
+    @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter -and $_.FileSystem -in 'NTFS', 'ReFS' })
+}
+
+# The question to ask before optimizing: a hard disk gets a full defrag, which
+# can take hours; empty when there is none (SSD retrims are quick).
+function Get-JuicerOptimizeWarning {
+    $hdd = @(foreach ($v in (Get-JuicerOptimizeVolumes)) {
+            $m = Get-JuicerDriveMedia "$($v.DriveLetter):"
+            if ($m -and $m.Media -eq 'HDD') { "$($v.DriveLetter):" }
+        })
+    if ($hdd.Count -eq 0) { return '' }
+    "Se va a desfragmentar $($hdd -join ', '), que es un disco duro: puede tardar horas en un disco duro. Puedes seguir usando el PC, pero irá más lento. Los SSD sólo se reoptimizan (TRIM), en segundos."
+}
+
 function Invoke-JuicerDriveOptimize {
     $results = @()
-    $volumes = @(Get-Volume -ErrorAction SilentlyContinue | Where-Object { $_.DriveType -eq 'Fixed' -and $_.DriveLetter -and $_.FileSystem -in 'NTFS', 'ReFS' })
-    foreach ($v in $volumes) {
+    foreach ($v in (Get-JuicerOptimizeVolumes)) {
         $media = Get-JuicerDriveMedia "$($v.DriveLetter):"
         try {
             Optimize-Volume -DriveLetter $v.DriveLetter -ErrorAction Stop

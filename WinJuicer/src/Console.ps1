@@ -773,7 +773,7 @@ function Show-JuicerDefenderLibraries {
     } else {
         $path = $c.Trim('"', ' ')
         if (-not (Test-Path -LiteralPath $path -PathType Container)) { Write-Host '  Esa carpeta no existe.' -ForegroundColor Red; Wait-JuicerKey; return }
-        $chosen += New-JuicerDefenderTweak $path
+        try { $chosen += New-JuicerDefenderTweak $path } catch { Write-Host "  $($_.Exception.Message)" -ForegroundColor Red; Wait-JuicerKey; return }
     }
     if ($chosen.Count -eq 0) { return }
     Write-Host ''
@@ -852,6 +852,8 @@ function Show-JuicerMaintenance {
             }
             '2' {
                 Write-JuicerHeader 'Optimizar unidades'
+                $warn = Get-JuicerOptimizeWarning
+                if ($warn -and -not (Confirm-JuicerAction "$warn ¿Seguir")) { continue }
                 foreach ($r in (Invoke-JuicerDriveOptimize)) {
                     $color = if ($r.Ok) { 'Green' } else { 'Red' }
                     Write-Host ('  {0} {1,-12} {2}' -f $r.Drive, $r.Media, $(if ($r.Ok) { 'hecho' } else { $r.Message })) -ForegroundColor $color
@@ -871,7 +873,7 @@ function Show-JuicerMaintenance {
             '6' {
                 Write-JuicerHeader 'Restablecer Windows Update'
                 foreach ($r in (Invoke-JuicerUpdateReset)) { Write-Host ('  {0} {1}' -f $(if ($r.Ok) { '[ok]' } else { '[!!]' }), $r.Step) -ForegroundColor $(if ($r.Ok) { 'Green' } else { 'Red' }) }
-                Write-JuicerWrapped 'Las carpetas antiguas quedan renombradas como .old: bórralas cuando Windows Update vuelva a funcionar.' 2 'DarkGray'
+                Write-JuicerWrapped 'Las carpetas antiguas quedan renombradas como .old-fecha: sólo se guarda la última copia, la anterior se borra.' 2 'DarkGray'
                 Wait-JuicerKey
             }
             '' { return }

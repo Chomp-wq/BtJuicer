@@ -366,8 +366,8 @@ Xbox…), con un buscador. Cada juego lleva su portada:
 - Si no está en tu PC, se descarga una vez de la tienda: Steam, Epic (la URL
   sale de la caché del catálogo de su lanzador) o GOG (su API pública). Sólo
   por HTTPS, sólo de sus servidores, y sólo si lo que llega empieza como un JPEG
-  o un PNG de tamaño normal. Lo que no se encuentra no se vuelve a buscar en
-  una semana.
+  o un PNG de tamaño normal. Lo que no existe (404) no se vuelve a buscar en
+  una semana; si no hay conexión, no se apunta nada y se reintenta enseguida.
 - Si no hay portada, el icono del propio `.exe` sobre un color.
 
 Todo queda en `ProgramData\WinJuicer\portadas`. Los juegos ya optimizados
@@ -928,9 +928,11 @@ deshace. Lo que sólo tiene sentido aquí (programas de inicio, ajustes de un
 ### Mantenimiento
 
 Limpieza de temporales, informes de errores y descargas de Windows Update;
-TRIM o desfragmentado según la unidad; limpieza de componentes; DISM + SFC;
+TRIM o desfragmentado según la unidad (en un disco duro puede tardar horas, y
+lo avisa antes); limpieza de componentes; DISM + SFC;
 restablecer la red (Winsock y TCP/IP) y Windows Update (su caché se renombra, no
-se borra). Esto no se puede deshacer, así que sólo borra lo que Windows
+se borra, y sólo se guarda la última copia; vuelve a arrancar sólo los servicios
+que estaban en marcha). Esto no se puede deshacer, así que sólo borra lo que Windows
 regenera. **La caché de shaders y Prefetch no se tocan**: vaciarlas hace que la
 siguiente partida tenga tirones.
 

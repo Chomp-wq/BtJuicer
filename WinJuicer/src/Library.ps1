@@ -8,7 +8,20 @@
 # and remembered; the user can always pick another.
 
 $script:NotGameNames = 'Redistributable|Redistributables|Soundtrack|\bOST\b|\bSDK\b|Dedicated Server|Proton|Steam Linux Runtime|SteamVR|Wallpaper Engine|Steamworks Common|DirectX|Visual C\+\+|\.NET|PhysX|Benchmark Tool|Demo$'
-$script:NotGameExe = '^(unins|uninstall|setup|install|vc_?redist|vcredist|dxsetup|dxwebsetup|directx|crash|bugsplat|errorreport|report|dump|ue4prereq|ueprereq|prereq|dotnet|physx|easyanticheat|eac|beservice|battleye|start_protected_game|cefprocess|cef|webhelper|qtwebengine|overlay|notification|socialclub|launcherpatcher|updater|update|patcher|repair|cleanup|config|settings|unitycrashhandler|crs-|python|pythonw|7z|unrealcefsubprocess|epicwebhelper|vulkan|redist|server|dedicated|editor)'
+# Whole executable names (without .exe), never prefixes: a game called
+# CrashBandicoot, ServerSim or ConfigurationQuest must not be taken for a tool.
+$script:NotGameExe = '^(' + (@(
+        'unins\d*', 'uninstall(er)?', '.+[_ -]uninstall(er)?', 'setup', 'setup[_ -].+', '.+[_ -]setup', 'install(er)?', 'install[_ -].+', '.+[_ -]installer',
+        'vc_?redist.*', 'vcredist.*', 'redist', 'dxsetup', 'dxwebsetup', 'dotnet[_-].*', 'dotnetfx.*', 'physx(setup|legacy|_?installer).*',
+        '(ue4?|ue5)?prereq.*', 'ue4prereqsetup.*',
+        '.*crash(handler|report(er|client)?|pad_handler|sender|_?dump)\d*', 'bugsplat.*', 'errorreport.*', 'report(er)?', 'dump(er)?', 'minidump.*', 'crs-.+',
+        'easyanticheat.*', 'eac_?(launcher|setup|server|bootstrapper)', 'beservice.*', 'battleye.*', 'start_protected_game',
+        'cefprocess', 'cef_?subprocess', 'cefsharp.*', 'unrealcefsubprocess', 'epicwebhelper', '.*webhelper(_.*)?', 'qtwebengineprocess',
+        '(game)?overlay(ui|renderer|helper|process)?(_?(x64|x86|64|32))?', 'notification(helper|service)?', 'socialclub(helper)?',
+        'launcherpatcher', '.*updater', 'update(r)?', '.+[_ -]update', '.*patcher', 'repair', 'cleanup', 'config(tool|urator)?', 'configure', '.+[_ -]config(tool)?', 'settings',
+        'python(w)?', '7z', 'vulkan(info|install).*',
+        'server', '.+[_-]server', 'dedicated(_?server)?', '.*dedicatedserver', '(unreal)?editor', '.+[_-]editor'
+    ) -join '|') + ')$'
 
 # Steam's appmanifest_*.acf, Valve's KeyValues text.
 function ConvertFrom-JuicerAcf {
@@ -32,9 +45,13 @@ function Select-JuicerGameExe {
     param([object[]]$Files, [string]$Name)
     $loose = ConvertTo-JuicerLooseName $Name
     $best = $null; $bestScore = [double]::MinValue
+    $biggest = $null; $biggestSize = -1.0
     foreach ($f in $Files) {
         $file = Split-Path -Leaf $f.Path
         $base = [IO.Path]::GetFileNameWithoutExtension($file)
+        # Last resort when every exe looks like a tool: better a wrong guess
+        # the user can change than a game that silently disappears.
+        if ([double]$f.Size -gt $biggestSize) { $biggestSize = [double]$f.Size; $biggest = $f.Path }
         if ($base -match $script:NotGameExe) { continue }
         $score = 0.0
         if ($file -match '-Win64-Shipping\.exe$') { $score += 60 }
@@ -46,7 +63,7 @@ function Select-JuicerGameExe {
         $score -= 3 * ([regex]::Matches($f.Path, '\\').Count)
         if ($score -gt $bestScore) { $bestScore = $score; $best = $f.Path }
     }
-    $best
+    if ($best) { $best } else { $biggest }
 }
 
 # The executables of a game folder, four levels deep at most.
@@ -71,7 +88,8 @@ function New-JuicerGame {
 function Get-JuicerSteamGames {
     foreach ($lib in @(Get-JuicerGameLibraries | Where-Object { $_.Launcher -eq 'Steam' })) {
         foreach ($acf in @(Get-ChildItem -LiteralPath $lib.Path -Filter 'appmanifest_*.acf' -ErrorAction SilentlyContinue)) {
-            $a = ConvertFrom-JuicerAcf ([IO.File]::ReadAllText($acf.FullName))
+            # One unreadable manifest (locked, half-written) must not hide the rest of the library.
+            try { $a = ConvertFrom-JuicerAcf ([IO.File]::ReadAllText($acf.FullName)) } catch { Write-Verbose "Manifiesto de Steam ilegible: $($acf.FullName)"; continue }
             if (-not $a -or (Test-JuicerNotAGame $a.Name)) { continue }
             $dir = Join-Path (Join-Path $lib.Path 'common') $a.InstallDir
             if (Test-Path -LiteralPath $dir) { New-JuicerGame 'Steam' $a.AppId $(if ($a.Name) { $a.Name } else { $a.InstallDir }) $dir }
@@ -203,8 +221,9 @@ function Get-JuicerGames {
     }
     $state = Read-JuicerLibraryState
     $found = New-Object System.Collections.ArrayList
+    $failed = $false
     foreach ($c in $Collectors) {
-        try { foreach ($g in @(& $c)) { if ($g) { [void]$found.Add($g) } } } catch { Write-JuicerLog "Una biblioteca de juegos no se pudo leer: $_" }
+        try { foreach ($g in @(& $c)) { if ($g) { [void]$found.Add($g) } } } catch { $failed = $true; Write-JuicerLog "Una biblioteca de juegos no se pudo leer: $_" }
     }
     foreach ($g in $state.Custom) { [void]$found.Add($g) }
     $seen = @{}
@@ -232,7 +251,13 @@ function Get-JuicerGames {
         $g.New = $state.Known.Count -gt 0 -and $state.Known -notcontains $g.Id
         $out += $g
     }
-    if (-not $KeepNew) { $state.Known = @($out | ForEach-Object { $_.Id }) }
+    # A collector that threw found nothing this run; forgetting its ids would
+    # make all its games look new the next time it works.
+    if (-not $KeepNew) {
+        $ids = @($out | ForEach-Object { $_.Id })
+        if ($failed) { $ids = @($ids + @($state.Known) | Select-Object -Unique) }
+        $state.Known = $ids
+    }
     Save-JuicerLibraryState $state
     $out
 }
