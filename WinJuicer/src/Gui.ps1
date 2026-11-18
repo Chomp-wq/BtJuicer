@@ -1256,18 +1256,32 @@ function Complete-JuicerGuiTask {
     $t.Runspace.Dispose()
     Set-JuicerGuiBusy $false 'Listo.'
     $result = $null
+    $warned = $null
     if ($out.Count -gt 0 -and $null -ne $out[-1]) { $result = $out[-1].psobject.BaseObject }
     if ($result -isnot [hashtable]) {
         Write-JuicerLog "La tarea $($t.Work) falló: $err"
         Show-JuicerGuiMessage "Algo falló ($($t.Work)): $err" 'Error' | Out-Null
+        # Without Done the pending watch would stay stopped (Test-JuicerGuiPendingClosed stops it
+        # before starting PacerPending), so a game waiting to be applied would never be retried.
+        if ($t.Work -eq 'PacerPending') {
+            try { Update-JuicerGuiPendingWatch @(Get-JuicerPacerPending) } catch { Write-JuicerLog "No se pudo reanudar la vigilancia de juegos pendientes: $_" }
+        }
     } else {
-        if ($err) { Write-JuicerLog "Aviso en $($t.Work): $err" }
+        if ($err) {
+            Write-JuicerLog "Aviso en $($t.Work): $err"
+            # A change that finished with errors must not look clean: the first one goes to the status bar.
+            if ($script:MutatingWork -contains $t.Work) {
+                $first = if ($err.Exception) { $err.Exception.Message } else { [string]$err }
+                $warned = "Hecho, con avisos: $first (ver el registro)"
+            }
+        }
         try {
             & $t.Done $result
         } catch {
             Write-JuicerLog "Error al mostrar $($t.Work): $_"
             Show-JuicerGuiMessage "Error al mostrar el resultado: $_" 'Error' | Out-Null
         }
+        if ($warned) { Set-JuicerGuiStatus $warned }
     }
     if (-not $script:Gui.Task -and $script:Gui.Queue.Count -gt 0) {
         $next = $script:Gui.Queue[0]
@@ -3179,7 +3193,7 @@ function Show-JuicerGui {
         Installed = $null; Ready = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
         Games = @(); Covers = @{}; CoverTried = @{}; Tiles = @{}; Sections = (New-Object System.Collections.ArrayList); Game = $null; Page = $null
-        Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null; Shield = $null
+        Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null; Shield = $null; LastError = $null
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }
     # An error in a click, a key or a search must not close the window.
@@ -3188,7 +3202,12 @@ function Show-JuicerGui {
             $ex = $_.Exception
             try {
                 Write-JuicerLog "Error en la ventana: $ex"
-                Show-JuicerGuiMessage "Algo falló, pero Win Juicer sigue abierto y no ha cambiado nada a medias:`n`n$($ex.Message)" 'Error' | Out-Null
+                # The same error often repeats on every tick or click: log it every time, show it once a minute.
+                $now = [DateTime]::UtcNow
+                if (-not $script:Gui.LastError -or $script:Gui.LastError.Message -ne $ex.Message -or ($now - $script:Gui.LastError.At).TotalSeconds -ge 60) {
+                    $script:Gui.LastError = @{ Message = $ex.Message; At = $now }
+                    Show-JuicerGuiMessage "Algo ha fallado: $($ex.Message)`n`nLo que se haya aplicado queda en «Deshacer»; los detalles están en el registro." 'Error' | Out-Null
+                }
             } catch {
                 Write-Verbose "Sin poder avisar del error: $_"
             }
@@ -3228,6 +3247,15 @@ function Show-JuicerGui {
                 $_.Cancel = $true
                 Show-JuicerGuiMessage 'Win Juicer está aplicando cambios. Espera a que termine para cerrar: cortarlo a medias dejaría el cambio en curso a medio hacer.' 'Warning' | Out-Null
                 return
+            }
+            # A measurement changes nothing (so it does not block closing for up to a minute), but
+            # closing throws it away: ask first, and stop it so its processes are cleaned up.
+            if ($t -and $t.Work -in 'Frames', 'GameMeasure' -and -not $t.Handle.IsCompleted) {
+                if (-not (Confirm-JuicerGui 'Hay una medición en marcha: si cierras ahora se pierde. ¿Cerrar igualmente?' 'Warning')) {
+                    $_.Cancel = $true
+                    return
+                }
+                try { $t.PS.Stop() } catch { Write-JuicerLog "No se pudo parar la medición: $_" }
             }
             $waiting = @($script:Gui.Queue | Where-Object { $script:MutatingWork -contains $_.Work })
             if ($waiting.Count -gt 0 -and -not (Confirm-JuicerGui "$(if ($waiting.Count -eq 1) { 'Hay 1 cambio esperando su turno' } else { "Hay $($waiting.Count) cambios esperando su turno" }): si cierras ahora, no se aplicará$(if ($waiting.Count -ne 1) { 'n' }). ¿Cerrar igualmente?" 'Warning')) {

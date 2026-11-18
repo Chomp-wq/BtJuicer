@@ -72,7 +72,9 @@ function Read-JuicerPacer {
             if ($d.Pending -is [hashtable]) { $s.Pending = $d.Pending }
             if ($d.Recipe) { $s.Recipe = [int]$d.Recipe }
         } catch {
-            Write-JuicerLog "frame-pacer.json dañado, se ignora: $_"
+            Write-JuicerLog "frame-pacer.json dañado, se aparta como .dañado y se empieza de cero: $_"
+            # Keep the bad file: the next save would overwrite it with defaults and lose any chance to recover it.
+            try { Move-Item -LiteralPath $p -Destination "$p.dañado" -Force -ErrorAction Stop } catch { Write-JuicerLog "No se pudo apartar frame-pacer.json: $_" }
         }
     }
     $s
@@ -80,7 +82,7 @@ function Read-JuicerPacer {
 
 function Save-JuicerPacer {
     param([hashtable]$State)
-    [IO.File]::WriteAllText((Get-JuicerPacerPath), (ConvertTo-JuicerJson $State), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerPacerPath) (ConvertTo-JuicerJson $State)
 }
 
 function Get-JuicerPacerEngine { [string](Read-JuicerPacer).Engine }

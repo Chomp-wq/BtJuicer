@@ -96,6 +96,22 @@ function Wait-JuicerKey {
     [void](Read-Host ' ')
 }
 
+# An FPS typed by hand: 0 for Intro (the recommended one), a whole number from 20 to 1000
+# (178.5 and 178,5 are rounded); anything else is said and asked again, never silently
+# turned into the recommended value.
+function Read-JuicerFpsInput {
+    while ($true) {
+        $f = (Read-JuicerChoice 'FPS (Intro: el recomendado)').Trim()
+        if (-not $f) { return 0 }
+        $n = 0.0
+        if ($f -match '^\d+([.,]\d+)?$' -and [double]::TryParse($f.Replace(',', '.'), [Globalization.NumberStyles]::Float, [Globalization.CultureInfo]::InvariantCulture, [ref]$n)) {
+            $r = [Math]::Round($n, [MidpointRounding]::AwayFromZero)
+            if ($r -ge 20 -and $r -le 1000) { return [int]$r }
+        }
+        Write-JuicerWrapped 'FPS no válido: escribe un número entero de 20 a 1000.' 2 'Yellow'
+    }
+}
+
 function Write-JuicerMenu {
     param([object[]]$Items)
     foreach ($i in $Items) {
@@ -109,8 +125,19 @@ function Get-JuicerNumbers {
     param([string]$Text, [int]$Max)
     $out = @()
     foreach ($part in ($Text -split '[,\s]+' | Where-Object { $_ })) {
-        if ($part -match '^(\d+)-(\d+)$') { $out += ([int]$Matches[1])..([int]$Matches[2]) }
-        elseif ($part -match '^\d+$') { $out += [int]$part }
+        # [long] with TryParse: a huge number is ignored instead of throwing, and a range is
+        # clamped to 1..Max before it is expanded so «1-2000000000» cannot build a giant array.
+        [long]$a = 0
+        [long]$b = 0
+        if ($part -match '^(\d+)-(\d+)$') {
+            if ([long]::TryParse($Matches[1], [ref]$a) -and [long]::TryParse($Matches[2], [ref]$b)) {
+                $lo = [Math]::Max(1L, [Math]::Min($a, $b))
+                $hi = [Math]::Min([long]$Max, [Math]::Max($a, $b))
+                if ($lo -le $hi) { $out += [int]$lo..[int]$hi }
+            }
+        } elseif ($part -match '^\d+$') {
+            if ([long]::TryParse($part, [ref]$a) -and $a -ge 1 -and $a -le $Max) { $out += [int]$a }
+        }
     }
     @($out | Where-Object { $_ -ge 1 -and $_ -le $Max } | Select-Object -Unique)
 }
@@ -584,7 +611,7 @@ function Show-JuicerGameList {
         $what = @{ O = 'Recomendado'; F = 'Fps'; P = 'Prioridad'; Q = 'Quitar' }[$key]
         if (-not $what) { continue }
         $fps = 0
-        if ($what -eq 'Fps') { $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'; if ($f -match '^\d+$') { $fps = [int]$f } }
+        if ($what -eq 'Fps') { $fps = Read-JuicerFpsInput }
         # Games picked one by one are what the user asked for, even one Win
         # Juicer protected after it failed; «t» (all of them) leaves those alone.
         Show-JuicerResults @(Invoke-JuicerGameSetup $sel $what $fps -Force:($pick -notmatch '^[tT]'))
@@ -639,8 +666,7 @@ function Show-JuicerLimiter {
             'A' {
                 $exe = Read-JuicerChoice 'Nombre del .exe (por ejemplo cs2.exe)'
                 if (-not $exe) { continue }
-                $f = Read-JuicerChoice 'FPS (Intro: el recomendado)'
-                $fps = if ($f -match '^\d+$') { [int]$f } else { 0 }
+                $fps = Read-JuicerFpsInput
                 Show-JuicerResults @(if ($fps -gt 0) { Set-JuicerPacerFps $exe $fps $m } else { Add-JuicerFpsLimit $exe 0 $m })
             }
             'M' { Show-JuicerResults @(foreach ($g in @(Get-JuicerUnlimitedGames)) { Add-JuicerFpsLimit $g }) }

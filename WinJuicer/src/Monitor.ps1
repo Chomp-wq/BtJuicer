@@ -149,7 +149,7 @@ function Set-JuicerMonitorMode {
     if ($key.Count -eq 0) { throw "Modo de monitor desconocido: $Mode. Valen: $(@($script:MonitorModes.Keys) -join ', ')." }
     $all = Read-JuicerMonitorModes
     $all[(Get-JuicerMonitorKey $Monitor)] = @{ Mode = $key[0]; Name = $(if ($Monitor.Info -and $Monitor.Info.Name) { "$($Monitor.Info.Brand) $($Monitor.Info.Name)" } else { [string]$Monitor.Display.Monitor }) }
-    [IO.File]::WriteAllText((Get-JuicerMonitorModesPath), (ConvertTo-JuicerJson $all), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerMonitorModesPath) (ConvertTo-JuicerJson $all)
     $Monitor.Mode = $key[0]
     $Monitor.Use = Resolve-JuicerMonitorUse $Monitor
     $key[0]

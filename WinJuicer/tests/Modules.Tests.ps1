@@ -1970,6 +1970,14 @@ Describe 'Mantener los juegos optimizados' {
         (Read-JuicerUpkeepState).Signature | Should -BeLike '240|*'
     }
 
+    It 'un juego nuevo sin frame pacer disponible no se da por visto' {
+        Save-JuicerUpkeepState @{ Seen = @('steam:1'); Signature = (Get-JuicerLimitSignature $Mon) }
+        $M.Backend.State.FpsBackend = $null
+        [void](Invoke-JuicerUpkeep -Quiet)
+        (Read-JuicerUpkeepState).Seen | Should -Not -Contain 'steam:2'
+        (Read-JuicerUpkeepState).Seen | Should -Contain 'steam:1'
+    }
+
     It 'desde la línea de órdenes' {
         @(Start-Juicer -Mantener -Si 6>$null)[-1] | Should -Be 0
     }

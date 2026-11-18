@@ -190,7 +190,7 @@ function Read-JuicerLibraryState {
 
 function Save-JuicerLibraryState {
     param([hashtable]$State)
-    [IO.File]::WriteAllText((Get-JuicerLibraryPath), (ConvertTo-JuicerJson $State), (New-Object Text.UTF8Encoding $false))
+    Write-JuicerTextAtomic (Get-JuicerLibraryPath) (ConvertTo-JuicerJson $State)
 }
 
 # Every game found, with its .exe: the one chosen or remembered, the one the
