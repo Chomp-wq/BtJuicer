@@ -106,16 +106,49 @@ function Get-JuicerGameTips {
 
 # The tips for one game on this machine: reads the graphics card, the
 # monitor and the last measurement.
-function Get-JuicerGameTipsHere {
-    param([Parameter(Mandatory)][hashtable]$Game)
-    $vendor = ''
+# The main graphics card's vendor (the dedicated one if there are two), or ''.
+function Get-JuicerMainGpuVendor {
     try {
         $t = @(Get-CimInstance Win32_VideoController -ErrorAction Stop | ForEach-Object { Get-JuicerGpuTraits $_.Name })
         $main = @($t | Where-Object { $_.Discrete }) + @($t) | Select-Object -First 1
-        if ($main) { $vendor = $main.Vendor }
+        if ($main) { return [string]$main.Vendor }
     } catch {
         Write-Verbose "Sin gráfica: $_"
     }
+    ''
+}
+
+# NVIDIA Reflex, when the game turns it on with G-SYNC and VSync, caps the
+# game at about Hz - Hz^2/3600 (180 -> 171) by itself, and the lower of the
+# two caps wins: a manual rate above that is never reached. Win Juicer
+# forces VSync in the driver profile under VRR when the cap is below the
+# refresh, so that is the case for any rate up to the refresh. Returns the
+# note (Spanish, for the user) or $null when it does not apply; only games
+# the table knows to have Reflex count (for the rest we cannot know).
+# The cap is rounded down, the same way Get-JuicerFpsCap does it.
+function Get-JuicerReflexCapNote {
+    param([string]$ExeName, [int]$Fps, [int]$Hz, [string]$Use, [string]$GpuVendor)
+    if ($GpuVendor -ne 'NVIDIA' -or $Use -notin 'VRR', 'EstroboSync' -or $Hz -le 0 -or $Fps -le 0) { return $null }
+    $tip = Find-JuicerGameTip $ExeName
+    if (-not ($tip -and $tip.Reflex)) { return $null }
+    $cap = [int][Math]::Floor($Hz - $Hz * $Hz / 3600)
+    if ($Fps -le $cap -or $Fps -gt $Hz) { return $null }
+    "Con NVIDIA Reflex activado en el juego y G-SYNC, el propio juego se queda en $cap FPS: es el tope de Reflex para tus $Hz Hz y manda el más bajo. Es también lo recomendado. Para pasar de ahí tendrías que apagar Reflex en el juego (pierdes latencia)."
+}
+
+# The note for the rate stored by hand for this game, on this PC.
+function Get-JuicerReflexCapNoteHere {
+    param([Parameter(Mandatory)][string]$ExeName, [hashtable]$Monitor)
+    $manual = Get-JuicerPacerFps $ExeName
+    if ($manual -le 0) { return $null }
+    if (-not $Monitor) { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-Verbose "Sin monitor: $_" } }
+    if (-not $Monitor -or -not $Monitor.Display) { return $null }
+    Get-JuicerReflexCapNote $ExeName $manual ([int]$Monitor.Display.Hz) (Resolve-JuicerMonitorUse $Monitor) (Get-JuicerMainGpuVendor)
+}
+
+function Get-JuicerGameTipsHere {
+    param([Parameter(Mandatory)][hashtable]$Game)
+    $vendor = Get-JuicerMainGpuVendor
     $m = $null
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-Verbose "Sin monitor: $_" }
     Get-JuicerGameTips -ExeName $Game.ExeName -Title $Game.Name -GpuVendor $vendor -Use (Resolve-JuicerMonitorUse $m) -Measured (Get-JuicerPreviousFrameResult $Game.ExeName) -Hz $(if ($m) { [int]$m.Display.Hz } else { 0 })

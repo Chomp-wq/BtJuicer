@@ -419,6 +419,11 @@ function Add-JuicerFpsLimit {
     if ($Fps -lt $asked -and $r.Outcome -in 'Aplicado', 'YaEstaba') {
         $r.Message = "NVIDIA limita $exeName a $Fps FPS en su propio perfil (por encima no funciona bien): pediste $asked FPS y el frame pacer no pasa de $Fps."
     }
+    # The rate is applied as asked, but Reflex in the game may cap it lower: say so.
+    if ($r.Outcome -in 'Aplicado', 'YaEstaba') {
+        $reflex = Get-JuicerReflexCapNote $exeName $Fps $hz $use (Get-JuicerMainGpuVendor)
+        if ($reflex) { $r.Message = ("$($r.Message) $reflex").Trim() }
+    }
     $r
 }
 
