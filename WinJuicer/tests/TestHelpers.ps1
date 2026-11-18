@@ -80,8 +80,28 @@ function Get-MachineSnapshot {
     foreach ($n in ($s.Spi.Keys | Sort-Object)) { [void]$lines.Add(('P {0}|{1}' -f $n, $s.Spi[$n])) }
     foreach ($n in ($s.Defender | Sort-Object)) { [void]$lines.Add("D $n") }
     foreach ($n in ($s.Tasks.Keys | Sort-Object)) { [void]$lines.Add(('T {0}|{1}' -f $n, $s.Tasks[$n].Enabled)) }
+    [void]$lines.Add(('A {0}|{1}' -f $s.AudioHelper.Installed, $s.AudioHelper.Running))
     $f = $Machine.Fake
     [void]$lines.Add("F active=$($f.Active) plans=$((@($f.Plans) | Sort-Object) -join ',') hib=$($f.Hibernate)/$($f.HibernateType)")
     foreach ($k in ($f.Bcd.Keys | Sort-Object)) { [void]$lines.Add("B $k=$($f.Bcd[$k])") }
     $lines -join "`n"
+}
+
+# What the audio probe reports for a default output (a hashtable of raw fields, with -Over
+# replacing some), as the hashtable the rest of Win Juicer uses. Defaults: wired speakers on
+# the Windows HD Audio driver, enhancements off, 48 kHz, 10 ms engine that can go down to 2.7 ms.
+function New-FakeAudioRaw {
+    param([hashtable]$Over = @{})
+    $r = @{
+        Name = 'Altavoces (Realtek(R) Audio)'; Enumerator = 'HDAUDIO'; AdapterId = ''; FormFactor = 1; DisableSysFx = 1
+        SampleRate = 48000; Bits = 32; Channels = 2
+        DefaultFrames = 480; FundamentalFrames = 48; MinFrames = 128; MaxFrames = 480; CurrentFrames = 480
+    }
+    foreach ($k in $Over.Keys) { $r[$k] = $Over[$k] }
+    $r
+}
+
+function New-FakeAudioInfo {
+    param([hashtable]$Over = @{})
+    ConvertTo-JuicerAudioInfo (New-FakeAudioRaw $Over)
 }

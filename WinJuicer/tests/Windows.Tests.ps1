@@ -615,3 +615,45 @@ Import-Module '$psm' -Force
         }
     }
 }
+
+# Read-only, so it needs neither an administrator nor the variable above: the audio interop
+# has to compile in whichever PowerShell runs the tests and in Windows PowerShell 5.1 (the one
+# the helper script runs in), and the diagnosis has to answer on a runner with no sound card.
+Describe 'Audio en Windows de verdad' -Tag 'Windows' -Skip:(-not $OnWindows) {
+    It 'la parte nativa compila en esta PowerShell' {
+        { & (Get-Module WinJuicer) { Initialize-JuicerAudio } } | Should -Not -Throw
+        ('WinJuicer.AudioProbe' -as [type]) | Should -Not -BeNullOrEmpty
+        ('WinJuicer.AudioHold' -as [type]) | Should -Not -BeNullOrEmpty
+    }
+
+    It 'la parte nativa compila en Windows PowerShell 5.1 (C# 5), la que ejecuta el script de la tarea' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('wjaudio-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        try {
+            [IO.File]::WriteAllText((Join-Path $dir 'fuente.cs'), (& (Get-Module WinJuicer) { $script:AudioCSharp }), (New-Object Text.UTF8Encoding $false))
+            [IO.File]::WriteAllText((Join-Path $dir 'compilar.ps1'), "`$ErrorActionPreference = 'Stop'`nAdd-Type -TypeDefinition ([IO.File]::ReadAllText((Join-Path `$PSScriptRoot 'fuente.cs')))`n[WinJuicer.AudioProbe] | Out-Null`n'compilado'", (New-Object Text.UTF8Encoding $true))
+            $out = & (Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe') -NoProfile -ExecutionPolicy Bypass -File (Join-Path $dir 'compilar.ps1') 2>&1
+            $LASTEXITCODE | Should -Be 0 -Because ($out -join ' ')
+            ($out -join ' ') | Should -BeLike '*compilado*'
+        } finally {
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'el diagnóstico responde sin lanzar, con o sin tarjeta de sonido: nada o una salida bien formada' {
+        $info = 'sin llamar'
+        { $info = & (Get-Module WinJuicer) { Get-WinAudioInfo } } | Should -Not -Throw
+        if ($null -ne $info) {
+            $info.Name | Should -Not -BeNullOrEmpty
+            $info.Bluetooth | Should -BeOfType [bool]
+            $info.SampleRate | Should -BeGreaterOrEqual 0
+            @(Get-JuicerAudioFindings $info).Count | Should -BeGreaterThan 0
+            @(Get-JuicerReadyStatus @{ Audio = $info } | Where-Object { $_.Key -like 'audio-*' }).Count | Should -BeGreaterThan 0
+        }
+        # The tweak decides from the same read: a reason or nothing, never an error.
+        { Get-JuicerAudioSkip } | Should -Not -Throw
+        { Get-JuicerAudioAudit } | Should -Not -Throw
+        $h = & (Get-JuicerBackend).AudioHelperState
+        $h.Installed | Should -BeOfType [bool]
+    }
+}

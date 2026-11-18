@@ -11,7 +11,7 @@
 # Reboot: No, Explorador (restart Explorer), Sesion (sign out), Reinicio.
 
 $script:LevelNames = @{ 0 = 'A la carta'; 1 = 'Seguro'; 2 = 'Rendimiento'; 3 = 'Extremo' }
-$script:CategoryOrder = @('Reparación', 'Energía', 'Juegos', 'Interfaz', 'Privacidad', 'Segundo plano', 'Disco', 'Red',
+$script:CategoryOrder = @('Reparación', 'Energía', 'Juegos', 'Audio', 'Interfaz', 'Privacidad', 'Segundo plano', 'Disco', 'Red',
     'Actualizaciones', 'Seguridad', 'Preferencias', 'Componentes', 'Apps')
 
 # --- Power plans ---------------------------------------------------------
@@ -1073,6 +1073,7 @@ function New-JuicerCatalog {
 
     # --- Apps: the Store apps are in Debloat.ps1, built per machine ----------
 
+    New-JuicerAudioTweak
     New-JuicerOneDriveTweak
 }
 
@@ -1102,6 +1103,8 @@ function Get-JuicerMyths {
         @{ Title = 'Cambiar de DNS «para bajar el ping»'; Why = 'El DNS sólo interviene al buscar la dirección del servidor, una vez al conectar. No toca ni un paquete de la partida. Win Juicer permite elegir DNS, pero por privacidad, filtrado de malware o anuncios, o porque el de tu operador falle; no por el ping.' }
         @{ Title = 'Desactivar el ahorro de energía de la tarjeta de red o la moderación de interrupciones'; Why = 'Gana microsegundos que no ve nadie y sube el uso de CPU. La latencia que notas está en internet, no en tu adaptador.' }
         @{ Title = 'Desinstalar Microsoft Edge a la fuerza'; Why = 'Windows Update lo vuelve a instalar, y hay partes de Windows y programas que lo abren igualmente. Lo que cuesta de Edge son sus procesos de fondo, y eso se apaga en Segundo plano. En el Espacio Económico Europeo se puede desinstalar desde Configuración.' }
+        @{ Title = 'Prioridad o afinidad de audiodg.exe («para bajar la latencia del audio»)'; Why = 'audiodg.exe es el motor de audio de Windows y ya corre con prioridad alta y sus hilos de mezcla se registran en el planificador multimedia. Subirla más, o fijarlo a un núcleo, no acorta el período de mezcla, que es lo que fija la latencia; fijar la afinidad sólo lo hace competir con el juego por ese núcleo. Lo que sí acorta el período es el ajuste «Audio de baja latencia», sólo si el driver lo admite.' }
+        @{ Title = 'Desactivar el HPET (BIOS o Administrador de dispositivos) «para bajar la latencia»'; Why = 'Windows 11 elige solo el mejor reloj, y lo que cuesta es forzar el HPET (que Reparación quita), no tenerlo disponible. Desactivarlo no cambia ni el audio ni la latencia de forma medible: es otro valor mágico de foro.' }
         @{ Title = 'Desactivar IPv6 o Teredo'; Why = 'No da rendimiento, y Teredo es lo que usan el chat de grupo y el multijugador de Xbox para atravesar el router: sin él, «NAT estricta».' }
         @{ Title = 'Reducir los procesos svchost (SvcHostSplitThresholdInKB)'; Why = 'Agrupar servicios en menos procesos baja el número del Administrador de tareas, no el consumo, y hace que un fallo en uno tumbe a los demás.' }
     )

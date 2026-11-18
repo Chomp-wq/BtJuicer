@@ -684,7 +684,7 @@ function Get-JuicerAudit {
     $sections = @(
         @('Sistema', ${function:Get-JuicerSystemAudit}), @('Procesador y memoria', ${function:Get-JuicerHardwareAudit}),
         @('Overclock y BIOS', ${function:Get-JuicerTuningAudit}), @('Estabilidad', ${function:Get-JuicerStabilityAudit}),
-        @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}), @('Combinaciones', ${function:Get-JuicerComboAudit}),
+        @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}), @('Audio', ${function:Get-JuicerAudioAudit}), @('Combinaciones', ${function:Get-JuicerComboAudit}),
         @('Discos', ${function:Get-JuicerStorageAudit}), @('Red', ${function:Get-JuicerNetworkAudit}),
         @('Seguridad', ${function:Get-JuicerSecurityAudit}), @('Arranque', ${function:Get-JuicerBootAudit}),
         @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajuste fino', ${function:Get-JuicerFineTuneAudit}),
@@ -724,7 +724,8 @@ function Get-JuicerPlanKind {
 # (booleans or null); GameDvr (Game Bar records in the background: true, false or null);
 # PlanKind and CpuMax (the processor's maximum state plugged in, %);
 # OnBattery (null on a desktop); MonitorHz and MonitorMaxHz (0 when unknown);
-# Vbs and Hvci (virtualization-based security / memory integrity running, null unknown).
+# Vbs and Hvci (virtualization-based security / memory integrity running, null unknown);
+# Audio (the default output, see ConvertTo-JuicerAudioInfo; null unknown).
 # Out: @{ Key; Ok; Info; Title; Reason } per thing known, always in the same order. Info lines
 # are context, not a verdict: they carry Ok = true so nothing counts them as «por mirar».
 function Get-JuicerReadyStatus {
@@ -777,6 +778,8 @@ function Get-JuicerReadyStatus {
         if ($max -gt $hz + 1) { & $add 'monitor' $false "Monitor a $hz Hz, admite $max Hz" 'Cámbialo en Configuración > Sistema > Pantalla > Pantalla avanzada > Frecuencia de actualización. Si no aparece, el cable o el puerto no dan para más.' }
         else { & $add 'monitor' $true "Monitor a su frecuencia máxima ($hz Hz)" '' }
     }
+    # The default output: Bluetooth, enhancements, 48 kHz and what the engine period allows (Audio.ps1).
+    foreach ($l in @(Get-JuicerAudioReadyLines $In.Audio)) { [void]$out.Add($l) }
     # Information only, never a warning: it protects the kernel and costs some FPS, and what to do
     # about it is a decision about security (disabling it is Extremo). Not running: nothing to say.
     if ($In.Vbs -eq $true) {
@@ -832,7 +835,7 @@ function Get-JuicerGameDvrState {
 
 # Reads this PC for Get-JuicerReadyStatus. Each part on its own: one that fails is unknown.
 function Get-JuicerReadyInputs {
-    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; GameDvr = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0; Vbs = $null; Hvci = $null }
+    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; GameDvr = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0; Vbs = $null; Hvci = $null; Audio = $null }
     if (-not (Test-JuicerWindows)) { return $in }
     try {
         # Windows 11 has it on until someone turns it off: a missing value is «on».
@@ -890,6 +893,7 @@ function Get-JuicerReadyInputs {
         $in.OnBattery = [bool]$hw.OnBattery
         $in.OnBattery = Test-JuicerOnBattery
     }
+    $in.Audio = Get-JuicerAudioInfo
     try {
         $m = Get-JuicerPrimaryMonitor
         if ($m) { $in.MonitorHz = [int]$m.Display.Hz; $in.MonitorMaxHz = [int]$m.Display.MaxHz }

@@ -62,6 +62,12 @@ function Get-JuicerAdviceRule {
             if (-not $Hw.Laptop -or $discrete) { return New-JuicerVerdict 'Recomendado' 'La grabación continua cuesta FPS aunque nunca guardes un clip; NVIDIA, AMD y OBS graban mejor.' }
             return New-JuicerVerdict 'Recomendado' 'Sin gráfica dedicada, codificar vídeo todo el rato pesa todavía más.'
         }
+        'audio.latencia' {
+            $info = Get-JuicerAudioInfo
+            if ($info -and $info.Bluetooth) { return New-JuicerVerdict 'NoRecomendado' 'Tu salida de audio es Bluetooth: añade 100-300 ms por su cuenta, y esto sólo quita unos 5-7.' }
+            if ($Hw.Laptop) { return New-JuicerVerdict 'Opcional' 'Quita unos 5-7 ms de latencia de audio, pero mantiene el audio despierto: en un portátil cuesta algo de batería.' }
+            return New-JuicerVerdict 'Opcional' 'Quita unos 5-7 ms de latencia de audio a todos los programas; se nota en juegos de ritmo o de puntería con sonido, no en los FPS.'
+        }
         'juegos.raton' {
             return New-JuicerVerdict 'Opcional' 'Si juegas a shooters o a cualquier cosa de puntería, sí: el mismo gesto, el mismo giro. En el escritorio quizá subas la velocidad del puntero.'
         }
