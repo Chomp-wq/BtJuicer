@@ -109,7 +109,7 @@ function Get-JuicerWingetInstalled {
     if (-not (Test-JuicerWinget)) { return $set }
     $tmp = Join-Path ([IO.Path]::GetTempPath()) ('wj-winget-' + [guid]::NewGuid().ToString('N') + '.json')
     try {
-        [void](Invoke-JuicerNative 'winget.exe' @('export', '-o', $tmp, '--accept-source-agreements', '--disable-interactivity'))
+        [void](Invoke-JuicerNative 'winget.exe' @('export', '-o', $tmp, '--accept-source-agreements', '--disable-interactivity') -TimeoutSec 120)
         if (Test-Path -LiteralPath $tmp) {
             $data = [IO.File]::ReadAllText($tmp) | ConvertFrom-Json
             foreach ($src in @($data.Sources)) { foreach ($p in @($src.Packages)) { if ($p.PackageIdentifier) { $set[([string]$p.PackageIdentifier).ToLowerInvariant()] = $true } } }

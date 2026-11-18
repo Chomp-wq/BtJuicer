@@ -289,18 +289,43 @@ function Get-JuicerSystemAudit {
         -Deferral $(if ($deferOn -and [int]$deferOn.Value -eq 1 -and $defer) { [int]$defer.Value } else { 0 })
 
     try {
-        $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-        # The explorer of this session: other sessions (fast user switching, RDP) belong to other people.
-        $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
-        $owner = Get-CimInstance Win32_Process -Filter "Name='explorer.exe' AND SessionId=$([int]$session)" -ErrorAction Stop | Select-Object -First 1 |
-            Invoke-CimMethod -MethodName GetOwner -ErrorAction Stop
-        if ($owner -and $owner.User -and -not (Test-JuicerSameUser $me $owner.Domain $owner.User)) {
-            $out += New-JuicerFinding 'Sistema' 'Alto' "Win Juicer corre como $me, pero la sesión es de $($owner.Domain)\$($owner.User)" 'Los ajustes de usuario (ratón, animaciones, Game Bar…) se aplicarían a la cuenta de administrador, no a la tuya. Inicia sesión con tu cuenta y dale permisos de administrador.'
+        $mm = Get-JuicerUserMismatch
+        if ($mm) {
+            $out += New-JuicerFinding 'Sistema' 'Alto' "Win Juicer corre como $($mm.Me), pero la sesión es de $($mm.Session)" 'Los ajustes de usuario (ratón, animaciones, Game Bar…) se aplicarían a la cuenta de administrador, no a la tuya. Inicia sesión con tu cuenta y dale permisos de administrador.'
         }
     } catch {
         Write-Verbose "No se pudo comparar usuarios: $_"
     }
     $out
+}
+
+# The account that owns this session's explorer.exe, as @{ Domain; User } (null if unknown).
+function Get-JuicerSessionUser {
+    if (-not (Test-JuicerWindows)) { return $null }
+    # The explorer of this session: other sessions (fast user switching, RDP) belong to other people.
+    $session = [Diagnostics.Process]::GetCurrentProcess().SessionId
+    $owner = Get-CimInstance Win32_Process -Filter "Name='explorer.exe' AND SessionId=$([int]$session)" -ErrorAction Stop | Select-Object -First 1 |
+        Invoke-CimMethod -MethodName GetOwner -ErrorAction Stop
+    if ($owner -and $owner.User) { return @{ Domain = [string]$owner.Domain; User = [string]$owner.User } }
+    $null
+}
+
+# When Win Juicer runs elevated as someone other than the person at the screen (a UAC prompt
+# answered with another admin account), HKCU is the admin's hive: per-user settings would go to
+# the wrong account. Returns @{ Me; Session } or null when it is the same user or unknown.
+function Get-JuicerUserMismatch {
+    param([string]$Me = '')
+    if (-not (Test-JuicerWindows)) { return $null }
+    $me = if ($Me) { $Me } else { [Security.Principal.WindowsIdentity]::GetCurrent().Name }
+    $owner = Get-JuicerSessionUser
+    if ($owner -and -not (Test-JuicerSameUser $me $owner.Domain $owner.User)) { return @{ Me = $me; Session = "$($owner.Domain)\$($owner.User)" } }
+    $null
+}
+
+# The warning for Get-JuicerUserMismatch's result (GUI Home and console). Warning only.
+function Get-JuicerUserMismatchText {
+    param($Mismatch)
+    "Atención: Win Juicer corre como $($Mismatch.Me), pero la sesión abierta es de $($Mismatch.Session). Los ajustes de usuario (ratón, animaciones, Game Bar…) se aplicarán a la cuenta $($Mismatch.Me), no a la tuya. Para evitarlo, inicia sesión con tu cuenta y dale permisos de administrador."
 }
 
 # Whether DOMAIN\user (as WindowsIdentity names it) is the account Domain and
@@ -366,12 +391,33 @@ function Get-JuicerDriverAgeFinding {
     if (-not $url) { return $null }
     $limit = if ($t.Discrete) { 180 } else { 365 }
     if ($Age -le $limit) { return $null }
+    if ($t.Legacy) {
+        # Maxwell/Pascal and older, Polaris and Vega: the vendor moved them to a legacy
+        # branch with no regular releases, so an old driver is probably the newest there is.
+        return (New-JuicerFinding 'Gráfica' 'Info' "El driver de $Name tiene $Age días" "Para esta tarjeta el fabricante ya sólo publica drivers de mantenimiento: puede que el que tienes sea el último disponible. Si quieres comprobarlo: $url")
+    }
     $span = if ($limit -eq 180) { 'más de seis meses' } else { 'más de un año' }
     New-JuicerFinding 'Gráfica' 'Medio' "El driver de $Name tiene $span ($Age días)" "Los drivers nuevos traen optimizaciones y arreglos para juegos recientes. Descárgalo de la web del fabricante: $url"
 }
 
+# Resizable BAR only exists on cards whose firmware and driver support it: NVIDIA
+# RTX 30 and later, AMD RX 6000 and later, Intel Arc. On anything older it cannot be
+# turned on, so judging it would flag a «problem» nobody can fix. Takes the traits of
+# Get-JuicerGpuTraits; false for unknown cards.
+function Test-JuicerRebarCapable {
+    param($Traits)
+    if (-not $Traits) { return $false }
+    switch ($Traits.Vendor) {
+        'NVIDIA' { return ($null -ne $Traits.Series -and [int]$Traits.Series -ge 30) }
+        'AMD' { return ($Traits.Discrete -and $null -ne $Traits.Series -and [int]$Traits.Series -ge 6) }
+        'Intel' { return [bool]$Traits.Arc }
+        default { return $false }
+    }
+}
+
 function Get-JuicerGraphicsAudit {
     $out = @()
+    $real = @()
     try {
         $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction Stop)
         $real = @($gpus | Where-Object { $_.Name -notmatch $script:VirtualGpuPattern })
@@ -404,8 +450,9 @@ function Get-JuicerGraphicsAudit {
     }
 
     $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
-    if (Test-Path -LiteralPath $smi) {
-        $r = Invoke-JuicerNative $smi @('-q', '-d', 'MEMORY')
+    $barCapable = @($real | ForEach-Object { Get-JuicerGpuTraits $_.Name } | Where-Object { $_.Vendor -eq 'NVIDIA' -and (Test-JuicerRebarCapable $_) }).Count -gt 0
+    if ($barCapable -and (Test-Path -LiteralPath $smi)) {
+        $r = Invoke-JuicerNative $smi @('-q', '-d', 'MEMORY') -TimeoutSec 8
         $bar = ConvertFrom-JuicerNvidiaSmi $r.Output
         if ($bar -and -not $bar.Rebar) {
             $out += New-JuicerFinding 'Gráfica' 'Medio' 'Resizable BAR desactivado' 'Actívalo en la BIOS («Above 4G Decoding» y «Re-Size BAR Support»). NVIDIA lo usa juego a juego: según el título, de nada a un 10 %.'
@@ -726,6 +773,29 @@ function Get-JuicerReadyStatus {
     $out.ToArray()
 }
 
+# Whether a setting Win Juicer applied (the journal entry) was last written after the
+# given boot, i.e. it still waits for a restart. The last write counts, not the first:
+# a setting changed again after a reboot needs another one. Entries from before
+# LastAppliedAt existed fall back to AppliedAt.
+function Test-JuicerAppliedAfterBoot {
+    param($Entry, $Boot)
+    if (-not $Entry -or -not $Boot) { return $false }
+    $when = if ($Entry.LastAppliedAt) { $Entry.LastAppliedAt } else { $Entry.AppliedAt }
+    if (-not $when) { return $false }
+    try { ([datetime]$when) -gt $Boot } catch { $false }
+}
+
+# Windowed-game optimizations as Windows has them: true or false only when the
+# DirectXUserGlobalSettings string says so. Without the SwapEffectUpgradeEnable
+# token Windows uses its own default for the build, which this cannot see: null (unknown),
+# not «off».
+function Get-JuicerWindowedState {
+    $reg = Read-JuicerReg 'HKCU\Software\Microsoft\DirectX\UserGpuPreferences' 'DirectXUserGlobalSettings'
+    $v = Get-JuicerTokenValue (ConvertFrom-JuicerTokenString (Get-JuicerRegString $reg)) 'SwapEffectUpgradeEnable'
+    if ($null -eq $v) { return $null }
+    [string]$v -eq '1'
+}
+
 # Reads this PC for Get-JuicerReadyStatus. Each part on its own: one that fails is unknown.
 function Get-JuicerReadyInputs {
     $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0 }
@@ -751,20 +821,17 @@ function Get-JuicerReadyInputs {
                 # set it after the last boot, it still waits.
                 $e = Get-JuicerJournalEntry (Read-JuicerJournal) 'juegos.hags'
                 $boot = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).LastBootUpTime
-                if ($e -and $e.AppliedAt -and $boot) { $in.HagsRestart = ([datetime]$e.AppliedAt) -gt $boot }
+                $in.HagsRestart = Test-JuicerAppliedAfterBoot $e $boot
             }
         }
     } catch { Write-Verbose "Sin HAGS: $_" }
+    try { $in.Windowed = Get-JuicerWindowedState } catch { Write-Verbose "Sin optimizaciones de ventana: $_" }
     try {
-        $w = Find-JuicerTweak 'juegos.ventana'
-        $st = Get-JuicerTweakState $w
-        if ($st.State -eq 'Aplicado') { $in.Windowed = $true } elseif ($st.State -in 'Pendiente', 'Parcial') { $in.Windowed = $false }
-    } catch { Write-Verbose "Sin optimizaciones de ventana: $_" }
-    try {
-        if ($main -and $main.Discrete) {
+        # Only cards that support Resizable BAR are judged; on the rest it stays unknown.
+        if ($main -and $main.Discrete -and (Test-JuicerRebarCapable $main)) {
             $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
             if ($main.Vendor -eq 'NVIDIA' -and (Test-Path -LiteralPath $smi)) {
-                $bar = ConvertFrom-JuicerNvidiaSmi (Invoke-JuicerNative $smi @('-q', '-d', 'MEMORY')).Output
+                $bar = ConvertFrom-JuicerNvidiaSmi (Invoke-JuicerNative $smi @('-q', '-d', 'MEMORY') -TimeoutSec 8).Output
                 if ($bar) { $in.Rebar = [bool]$bar.Rebar }
             } elseif ($main.Vendor -ne 'NVIDIA') {
                 $in.Rebar = Test-JuicerRebarRanges (Get-JuicerGpuMemoryRanges $main.PnpId)
@@ -780,7 +847,7 @@ function Get-JuicerReadyInputs {
     if ($hw -and $hw.Laptop) {
         # Read again: the profile is from when Win Juicer opened, and the charger may have moved since.
         $in.OnBattery = [bool]$hw.OnBattery
-        try { $in.OnBattery = @(Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Where-Object { $_.PowerOnline -eq $false }).Count -gt 0 } catch { Write-Verbose "Sin batería: $_" }
+        $in.OnBattery = Test-JuicerOnBattery
     }
     try {
         $m = Get-JuicerPrimaryMonitor

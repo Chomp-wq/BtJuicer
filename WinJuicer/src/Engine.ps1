@@ -30,9 +30,38 @@ function Get-JuicerHome {
     $h
 }
 
+# True when the folder's ACL is already what Protect-JuicerHome would set: no
+# inheritance, owned by Administrators or SYSTEM, and nobody but them with a
+# write permission (Users, Authenticated Users, Everyone). Setting the ACL on
+# every start would rewrite security descriptors for no reason; it takes the
+# ACL as a parameter so it can be tested without a Windows disk.
+function Test-JuicerHomeAcl {
+    param([Parameter(Mandatory)]$Acl)
+    $sid = [Security.Principal.WellKnownSidType]
+    $sidType = [Security.Principal.SecurityIdentifier]
+    $admins = New-Object $sidType ($sid::BuiltinAdministratorsSid, $null)
+    $system = New-Object $sidType ($sid::LocalSystemSid, $null)
+    if (-not $Acl.AreAccessRulesProtected) { return $false }
+    $owner = $Acl.GetOwner($sidType)
+    if ($owner -ne $admins -and $owner -ne $system) { return $false }
+    $rights = [Security.AccessControl.FileSystemRights]
+    $write = $rights::Write -bor $rights::Delete -bor $rights::DeleteSubdirectoriesAndFiles -bor $rights::ChangePermissions -bor $rights::TakeOwnership
+    $weak = @(
+        (New-Object $sidType ($sid::BuiltinUsersSid, $null)),
+        (New-Object $sidType ($sid::AuthenticatedUserSid, $null)),
+        (New-Object $sidType ($sid::WorldSid, $null))
+    )
+    foreach ($rule in $Acl.GetAccessRules($true, $true, $sidType)) {
+        if ($rule.AccessControlType -ne [Security.AccessControl.AccessControlType]::Allow) { continue }
+        if ($rule.IdentityReference -in $weak -and ($rule.FileSystemRights -band $write)) { return $false }
+    }
+    $true
+}
+
 # Administrators and SYSTEM full control, Users read-only, no inheritance from ProgramData.
 # If the folder belongs to someone who is not an administrator, ownership is taken first: its
-# owner could change the permissions back. Never throws; a failure goes to the log.
+# owner could change the permissions back. Does nothing when the ACL is already right (this
+# runs on every start). Never throws; a failure goes to the log.
 function Protect-JuicerHome {
     param([Parameter(Mandatory)][string]$Path)
     try {
@@ -40,10 +69,14 @@ function Protect-JuicerHome {
         $admins = New-Object Security.Principal.SecurityIdentifier ($sid::BuiltinAdministratorsSid, $null)
         $system = New-Object Security.Principal.SecurityIdentifier ($sid::LocalSystemSid, $null)
         $users = New-Object Security.Principal.SecurityIdentifier ($sid::BuiltinUsersSid, $null)
-        $owner = (Get-Acl -LiteralPath $Path).GetOwner([Security.Principal.SecurityIdentifier])
+        $current = Get-Acl -LiteralPath $Path
+        if (Test-JuicerHomeAcl $current) { return }
+        $owner = $current.GetOwner([Security.Principal.SecurityIdentifier])
         if ($owner -ne $admins -and $owner -ne $system) {
-            # /A hands it to the Administrators group; /R covers what is already inside.
-            [void](Invoke-JuicerNative 'takeown.exe' @('/F', $Path, '/A', '/R', '/D', 'Y'))
+            # icacls takes the group by SID, so it works in any Windows language
+            # (takeown's /D answer is a localized letter); /T covers what is
+            # already inside, /C keeps going past files it cannot change.
+            [void](Invoke-JuicerNative 'icacls.exe' @($Path, '/setowner', '*S-1-5-32-544', '/T', '/C', '/Q'))
         }
         $rights = [Security.AccessControl.FileSystemRights]
         $inherit = [Security.AccessControl.InheritanceFlags]::ContainerInherit -bor [Security.AccessControl.InheritanceFlags]::ObjectInherit
@@ -120,7 +153,7 @@ function Read-JuicerJournal {
         $data = [IO.File]::ReadAllText($path) | ConvertFrom-Json
     } catch {
         # The copy that every save leaves behind is the way out: say so, where it is, and how.
-        $hint = if (Test-JuicerJournalFile (Get-JuicerJournalBackupPath)) { " Hay una copia del diario anterior (diario.1.json) y se puede restaurar: WinJuicer.cmd -RestaurarDiario, o Deshacer en el menú de la consola." } else { '' }
+        $hint = if (Test-JuicerJournalFile (Get-JuicerJournalBackupPath)) { " Hay una copia del diario anterior (diario.1.json) y se puede restaurar. Ábrelo de nuevo: Win Juicer te ofrecerá recuperarlo (o usa Deshacer en el menú de la consola)." } else { '' }
         throw "El diario de cambios está dañado ($path). No lo borres: guarda el estado original de cada ajuste.$hint Error: $_"
     }
     foreach ($e in @($data.Entries)) {
@@ -131,6 +164,20 @@ function Read-JuicerJournal {
         [void]$list.Add($h)
     }
     , $list
+}
+
+# The journal for screens that must keep working when it is corrupt: an empty list, with the
+# reason in $script:JournalReadError (null when it read fine). Never throws.
+$script:JournalReadError = $null
+function Read-JuicerJournalSafe {
+    $script:JournalReadError = $null
+    try {
+        Read-JuicerJournal
+    } catch {
+        $script:JournalReadError = "$_"
+        Write-JuicerLog "Diario ilegible: $_"
+        , (New-Object System.Collections.ArrayList)
+    }
 }
 
 # Windows PowerShell 5.1's ConvertTo-Json writes an array that came out of a
@@ -711,16 +758,26 @@ function Get-JuicerTweakState {
 # Returns @{ Id; Title; Tweak; State; Level; Pending } per tweak, in journal order (wrap the
 # call in @(): none gives nothing).
 function Get-JuicerDrift {
-    param([System.Collections.IList]$Journal)
+    # States: what Get-JuicerTweakState already gave for each tweak id (the window reads them
+    # all anyway); only the ones missing from it are read again.
+    param([System.Collections.IList]$Journal, [hashtable]$States)
     if ($null -eq $Journal) { $Journal = Read-JuicerJournal }
     $out = @()
+    $onBattery = $null
     foreach ($e in $Journal) {
         $t = Resolve-JuicerJournalTweak ([string]$e.Id)
         if (-not $t) { continue }
-        $s = Get-JuicerTweakState $t $Journal
+        $s = if ($States -and $States.ContainsKey([string]$e.Id)) { $States[[string]$e.Id] } else { Get-JuicerTweakState $t $Journal }
         if ($s.State -notin 'Pendiente', 'Parcial') { continue }
         $open = @($s.Pending | Where-Object { $_.Type -in 'FpsLimit', 'NvSetting' -and (Test-JuicerGameRunning ([string]$_.Exe)) })
         if ($open.Count -gt 0) { continue }
+        # The power mode overlay is stored per power source: the battery one reads as undone
+        # while the charger one is what Win Juicer set. Not drift on a laptop unplugged.
+        $pend = @($s.Pending)
+        if ($pend.Count -gt 0 -and @($pend | Where-Object { $_.Type -eq 'Custom' -and $_.Key -eq 'overlay' }).Count -eq $pend.Count) {
+            if ($null -eq $onBattery) { $onBattery = Test-JuicerOnBattery }
+            if ($onBattery) { continue }
+        }
         $out += @{ Id = [string]$e.Id; Title = [string]$t.Title; Tweak = $t; State = $s.State; Level = [int]$t.Level; Pending = @($s.Pending) }
     }
     $out
@@ -822,6 +879,15 @@ function Invoke-JuicerTweak {
     if ($stuck.Count -gt 0) {
         $result.Outcome = 'NoSeMantuvo'
         $result.Message = 'Windows no conservó: ' + (($stuck | ForEach-Object { Format-JuicerAction $_ }) -join '; ')
+    }
+    if ($result.Outcome -eq 'Aplicado') {
+        # AppliedAt is the first time (it never moves); what a restart check needs is the
+        # last time the setting changed, which is what LastAppliedAt keeps.
+        try {
+            $journal = Read-JuicerJournal
+            $entry = Get-JuicerJournalEntry $journal $Tweak.Id
+            if ($entry) { $entry.LastAppliedAt = (Get-Date).ToString('s'); Save-JuicerJournal $journal }
+        } catch { Write-JuicerLog "No se pudo anotar la fecha de $($Tweak.Id): $_" }
     }
     Write-JuicerLog "$($result.Outcome) $($Tweak.Id): $($result.Changes -join '; ')"
     $result

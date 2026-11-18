@@ -383,7 +383,7 @@ function Get-JuicerGpuTuningAudit {
     $nv = @()
     $smi = Join-Path $env:SystemRoot 'System32\nvidia-smi.exe'
     if (Test-Path -LiteralPath $smi) {
-        $r = Invoke-JuicerNative $smi @('--query-gpu=name,power.limit,power.default_limit,pcie.link.width.current,pcie.link.width.max', '--format=csv,noheader,nounits')
+        $r = Invoke-JuicerNative $smi @('--query-gpu=name,power.limit,power.default_limit,pcie.link.width.current,pcie.link.width.max', '--format=csv,noheader,nounits') -TimeoutSec 8
         if ($r.Code -eq 0) { $nv = @(ConvertFrom-JuicerNvidiaQuery $r.Output) }
     }
     # NVIDIA's own check runs in Get-JuicerGraphicsAudit; the rest go by the
