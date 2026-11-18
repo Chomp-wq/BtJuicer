@@ -73,10 +73,17 @@ misma pregunta.
 La ventana empieza **sencilla**, para que cualquiera pueda usarla: la pestaña
 **Empezar** tiene cuatro botones grandes, en palabras normales:
 - **Optimizar Windows**: aplica sólo lo que conviene a tu equipo (nada del
-  nivel Extremo), con un punto de restauración antes. Una pregunta y listo.
+  nivel Extremo), con un punto de restauración antes. Una pregunta y listo: la
+  pregunta lista los ajustes (los ocho primeros y «y N más»), marca los que
+  necesitan reiniciar o volver a entrar y lo dice una vez al final.
 - **Mis juegos**: la galería de tus juegos (abajo).
 - **Revisar mi PC**: el diagnóstico, con cuántas cosas conviene arreglar.
-- **Deshacer**: todo lo que ha hecho Win Juicer, de golpe.
+- **Deshacer**: todo lo que ha hecho Win Juicer, de golpe. Antes enseña qué
+  se va a revertir (los ocho primeros y «y N más») y lo que no puede deshacer
+  y se queda: la protección contra contenido adulto, la limpieza y el resto de
+  Mantenimiento, los programas instalados con winget y los puntos de
+  restauración. Las apps quitadas se reinstalan desde Microsoft Store (con
+  internet).
 
 Con eso, más **Equipo**, **Juegos** y **Deshacer**, no hace falta nada más.
 
@@ -150,6 +157,9 @@ abre el menú de texto, con lo mismo:
   11  Deshacer             todo, o cambio a cambio
   12  Lo que no hacemos    los «trucos» que circulan, y por qué no
 ```
+
+Una opción que no existe se dice («Opción no válida: x») y vuelve a pedir; si la
+entrada se cierra (una tubería que acaba), los menús salen en vez de repetirse.
 
 Debajo salen también **Antes y después**, **Ajuste fino**, **Protección contra
 contenido adulto** y **Listo para jugar** (16), la misma tarjeta de Empezar. Si
@@ -325,6 +335,8 @@ OneDrive) no está en ningún perfil: sólo se aplica si lo eliges.
 **Impacto** mide sólo rendimiento y peca de prudente: «bajo» quiere decir
 pequeño, no cero. Si un ajuste está aquí con impacto bajo es porque no cuesta
 nada, no porque vaya a hacer milagros.
+Un ajuste que sólo hace que Windows *se sienta* más rápido sin dar FPS ni acelerar
+nada de verdad (las animaciones) es «bajo», no «medio».
 
 ### Reparación — deshacer lo que otros «optimizadores» rompieron
 
@@ -433,6 +445,16 @@ si tienes dos. Se aplica solo cada vez que abras el juego.
   equipo se puede congelar).
 - **Medir**: tu última medida con su gráfica de frametimes, y un botón para
   medir este juego en concreto.
+- **Calibración**: cuántos días hace y a cuántos FPS («calibrado hace 12 días a
+  141 FPS»); pasados 30 días, una pista apagada: «puede haber cambiado (parche,
+  ajustes): vuelve a calibrar». También en la lista de juegos y en el menú del
+  frame pacer de la consola.
+- **No es un juego: ocultar**, para una herramienta o un benchmark que Win Juicer
+  ha tomado por juego. Lo saca de la galería y de «Optimizar todos» (y de la
+  optimización automática); no borra nada ni toca lo que ya tuviera puesto. En
+  la galería, «Mostrar ocultos (N)» los vuelve a enseñar y, en su página,
+  «Volver a mostrar». Se recuerda en `juegos.json`. En la consola, **H** (ocultar),
+  **M** (mostrar) y **O** (ver los ocultos) en la lista de juegos.
 - **Dentro del juego**: los consejos de abajo.
 
 Cada cambio en la página se aplica al momento y se deshace como todo lo demás.
@@ -707,7 +729,10 @@ gráfica concretos, dónde se hace, con qué valores empezar y cómo probarlo:
   - Afterburner ya no arranca con Windows.
 
 Los valores son puntos de partida: cada chip es distinto. Pruébalos como dice
-cada receta y mide FPS antes y después con Juegos > Medir.
+cada receta y mide FPS antes y después con «Antes y después» o Juegos > Medir.
+Las cifras de ganancia de las recetas («un 5-10 %») salen de reseñas y foros,
+no de tu equipo, y así se dice («según reseñas»): lo que cuenta es lo que midas.
+El «-0,04 V» de los Ryzen 5000X3D es un punto de partida típico, no tu valor.
 
 ### El monitor
 
@@ -737,11 +762,11 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
 | Ajuste | Nivel | Impacto |
 |---|---|---|
 | Sin apps promocionadas que Windows instala solo | Seguro | Bajo |
-| Sin animaciones | Rendimiento | Medio |
+| Sin animaciones | Rendimiento | Bajo |
 | Sin transparencias | Rendimiento | Bajo |
 | Menú contextual clásico | Rendimiento | Bajo |
 | Carpetas grandes al instante: sin detectar el tipo de cada carpeta | Rendimiento | Medio |
-| Búsqueda de Inicio sin resultados de Bing | Rendimiento | Medio |
+| Búsqueda de Inicio sin resultados de Bing | Rendimiento | Bajo |
 | Sin Widgets | Rendimiento | Bajo |
 
 ### Privacidad
@@ -770,7 +795,7 @@ llamando a casa por su cuenta.
 | Edge sin procesos de fondo ni promociones | Rendimiento | Bajo |
 | Sin nombres cortos 8.3 en NTFS | Rendimiento | Bajo |
 | Sin fecha de último acceso en NTFS | Rendimiento | Bajo |
-| Sin algoritmo de Nagle (sólo juegos TCP, como los MMO) | Rendimiento | Bajo |
+| Sin algoritmo de Nagle (sólo juegos TCP, como los MMO; sólo los adaptadores que hay al aplicarlo) | Rendimiento | Bajo |
 | Sin indexado de búsqueda | Extremo | Bajo |
 
 ### Actualizaciones
@@ -958,6 +983,14 @@ No cambia nada:
   portátil está **con batería** o enchufado.
 - **El monitor**, a su frecuencia máxima o por debajo.
 
+- **Grabación de Game Bar en segundo plano**, con los mismos valores del registro
+  que cambia el ajuste «juegos.grabacion»: si está activa, ⚠ «graba en segundo
+  plano: cuesta FPS» y apunta a ese ajuste. Sin forma de leerlo, no aparece.
+- **Seguridad basada en virtualización (VBS / integridad de memoria)**, si está
+  en marcha (la misma clase de Windows que lee el diagnóstico): sólo
+  **informativa** (marca ℹ), nunca cuenta entre las cosas «por mirar»; quitarla es
+  del nivel Extremo y decides tú.
+
 Lo que no se puede leer **no aparece**: no se da por bueno ni por malo. Se calcula
 en segundo plano al abrir la ventana, y de nuevo al aplicar algo.
 
@@ -1046,7 +1079,11 @@ equipo necesita se tratan como al aplicarlas o quitarlas a mano (ver arriba).
 
 ### Mantenimiento
 
-Limpieza de temporales, informes de errores y descargas de Windows Update;
+Limpieza de temporales, informes de errores y descargas de Windows Update (antes
+de limpiar calcula, sin borrar, cuánto libera cada carpeta y el total, y lo
+enseña en la pregunta, en la ventana y en la consola; la carpeta de descargas de
+Windows Update se deja si Windows espera un reinicio para terminar de instalar, y
+lo dice);
 TRIM o desfragmentado según la unidad (en un disco duro puede tardar horas, y
 lo avisa antes); limpieza de componentes; DISM + SFC;
 restablecer la red (Winsock y TCP/IP) y Windows Update (su caché se renombra, no
@@ -1188,7 +1225,10 @@ Invoke-Pester ./WinJuicer/tests
 
 `Features.Tests.ps1` cubre lo que Windows deshace, la copia del diario, los
 tiempos de arranque, «Actualizar ahora» (sólo cómo se construye la orden: no
-arranca nada), «Listo para jugar» y la edad de los drivers.
+arranca nada), «Listo para jugar» y la edad de los drivers. `Mejoras.Tests.ps1`,
+las confirmaciones con detalle, las opciones no válidas de los menús (y que sin
+entrada salen), la grabación y VBS de «Listo para jugar», los juegos ocultos, la
+edad de la calibración y la vista previa de la limpieza sobre carpetas temporales.
 
 Las pruebas de `Windows.Tests.ps1` cambian de verdad la configuración del equipo,
 nivel Extremo incluido, y luego la devuelven. Están pensadas para una máquina

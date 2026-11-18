@@ -713,6 +713,27 @@ function Invoke-JuicerPacerCalibration {
     $out
 }
 
+# How old a calibration is, in words: «calibrado hace 12 días a 141 FPS», and after 30 days
+# a hint that it may no longer hold (a patch, other settings). Null when there is no date to
+# count from. -Now only for the tests.
+function Get-JuicerCalibrationAge {
+    param([string]$Date, [int]$Fps, [datetime]$Now = (Get-Date))
+    if (-not $Date -or $Fps -le 0) { return $null }
+    $when = [datetime]::MinValue
+    if (-not [datetime]::TryParse($Date, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$when)) { return $null }
+    $days = [Math]::Max(0, [int][Math]::Floor(($Now - $when).TotalDays))
+    $ago = if ($days -eq 0) { 'hoy' } elseif ($days -eq 1) { 'hace 1 día' } else { "hace $days días" }
+    $stale = $days -ge 30
+    $a = @{
+        Days = $days; Stale = $stale
+        Text = "calibrado $ago a $Fps FPS"
+        Hint = $(if ($stale) { 'puede haber cambiado (parche, ajustes): vuelve a calibrar' } else { '' })
+    }
+    # The same, as a sentence for the game page.
+    $a.Sentence = $a.Text.Substring(0, 1).ToUpperInvariant() + $a.Text.Substring(1) + '.' + $(if ($stale) { ' ' + $a.Hint.Substring(0, 1).ToUpperInvariant() + $a.Hint.Substring(1) + '.' } else { '' })
+    $a
+}
+
 # Forgets what calibrating found, for one game or all.
 function Clear-JuicerPacerCalibration {
     param([string]$Exe)

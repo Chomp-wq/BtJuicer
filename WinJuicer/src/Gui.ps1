@@ -678,6 +678,7 @@ $script:GuiXaml = @'
               <WrapPanel>
                 <CheckBox x:Name="ChkUpkeep" Content="Optimizar automáticamente los juegos que instale" VerticalAlignment="Center" IsEnabled="False" ToolTip="Al iniciar sesión, sin abrir Win Juicer: optimiza los juegos nuevos y recalcula el frame pacer si cambias de monitor. Copia Win Juicer a Program Files (sólo administradores pueden cambiarlo) y crea una tarea de inicio de sesión; desmárcalo para quitar las dos cosas."/>
                 <Button x:Name="BtnPacerOptions" Content="Mi pantalla y el frame pacer…" Margin="16,3,3,3"/>
+                <Button x:Name="BtnGamesShowHidden" Content="Mostrar ocultos" Margin="3" Visibility="Collapsed" ToolTip="Lo que marcaste como «no es un juego». Ocultar no borra nada ni toca lo que Win Juicer haya puesto"/>
               </WrapPanel>
               <Border x:Name="PacerOptions" Visibility="Collapsed" Background="#1F1F25" CornerRadius="6" Padding="12,4,12,10" Margin="0,4,0,6">
                 <StackPanel>
@@ -740,6 +741,7 @@ $script:GuiXaml = @'
                   <Border x:Name="GameCover" Width="230" Height="345" CornerRadius="8" Background="#1F1F25" HorizontalAlignment="Left" ClipToBounds="True"/>
                   <TextBlock x:Name="GameExe" Style="{StaticResource Note}" Margin="2,8,12,2" TextTrimming="CharacterEllipsis"/>
                   <Button x:Name="BtnGameExe" Content="Cambiar .exe…" HorizontalAlignment="Left" ToolTip="Si el frame pacer no actúa, puede que el .exe no sea el que se ejecuta de verdad (no el lanzador)"/>
+                  <Button x:Name="BtnGameHide" Content="No es un juego: ocultar" HorizontalAlignment="Left" ToolTip="Lo saca de la galería y de «Optimizar todos». No borra nada; se puede volver a mostrar"/>
                 </StackPanel>
                 <StackPanel Grid.Column="1" Margin="10,0,0,0">
                   <TextBlock x:Name="GameTitle" FontSize="26" FontWeight="SemiBold" TextWrapping="Wrap"/>
@@ -785,6 +787,7 @@ $script:GuiXaml = @'
                       <Button x:Name="BtnGameCalibrate" Content="Calibrar (empieza en 10 s)" ToolTip="Mide el juego 60 s con su ritmo y lo ajusta a lo que sostiene de verdad: lo baja si no llega o si la gráfica va al límite, lo sube si sobra margen"/>
                     </WrapPanel>
                     <TextBlock Style="{StaticResource Note}" Text="Calibrar: abre el juego, pulsa y vuelve a él antes de 10 segundos; juega con normalidad un minuto y el ritmo se ajusta a lo que tu PC sostiene de verdad."/>
+                    <TextBlock x:Name="GameCalibAge" Style="{StaticResource Note}" Visibility="Collapsed"/>
                   </StackPanel>
 
                   <TextBlock Text="Más rendimiento" Style="{StaticResource Head}" FontSize="16"/>
@@ -1105,6 +1108,11 @@ $script:GuiWork = @{
         if ($A.On) { $Sync.Status = 'Copiando Win Juicer a Program Files y creando la tarea…'; Register-JuicerUpkeep } else { Unregister-JuicerUpkeep }
         @{ Upkeep = (Test-JuicerUpkeep) }
     }
+    # Sizing the folders (without deleting anything) can take a few seconds: never on the UI thread.
+    CleanupPreview = {
+        $Sync.Status = 'Calculando cuánto se liberaría…'
+        @{ Lines = @(Format-JuicerCleanupPreview (Get-JuicerCleanupPreview)) }
+    }
     GamePage   = {
         $Sync.Status = "Leyendo $($A.Game.Name)…"
         @{ Page = (Get-JuicerGuiGamePage $A.Game) }
@@ -1125,6 +1133,8 @@ $script:GuiWork = @{
             'GpuOff' { $r = @(Undo-JuicerTweak ('juego:gpu:' + ([string]$g.Exe).ToLowerInvariant())) }
             'PrioOn' { $r = @(Invoke-JuicerTweak (New-JuicerPriorityTweak $g.Exe)) }
             'PrioOff' { $r = @(Undo-JuicerTweak "juego:prioridad:$exe") }
+            'Ocultar' { Set-JuicerGameHidden $g.Id $true; $g.Hidden = $true }
+            'Mostrar' { Set-JuicerGameHidden $g.Id $false; $g.Hidden = $false }
             'Exe' {
                 Set-JuicerGameExe $g.Id ([string]$A.Value)
                 $g.Exe = [string]$A.Value
@@ -2193,12 +2203,14 @@ function Start-JuicerGuiGames {
 # launcher (only their .exe name is known), and the cover each already has
 # on this PC.
 function Get-JuicerGuiGameList {
-    $games = @(Get-JuicerGames)
+    # Hidden ones come too (marked Hidden): the gallery decides whether to show them.
+    $games = @(Get-JuicerGames -IncludeHidden)
+    $hidden = @(Get-JuicerHiddenGameIds)
     $names = @($games | ForEach-Object { $_.ExeName })
     foreach ($exe in @(Get-JuicerUnlimitedGames) + @(Get-JuicerFpsLimits | ForEach-Object { $_.Exe })) {
         if (-not $exe -or $names -contains $exe) { continue }
         $names += $exe
-        $games += @{ Id = "medido:$exe"; Name = [IO.Path]::GetFileNameWithoutExtension($exe); Launcher = 'Medido o limitado'; Dir = ''; Exe = $exe; ExeName = $exe; New = $false }
+        $games += @{ Id = "medido:$exe"; Name = [IO.Path]::GetFileNameWithoutExtension($exe); Launcher = 'Medido o limitado'; Dir = ''; Exe = $exe; ExeName = $exe; New = $false; Hidden = [bool]($hidden -contains "medido:$exe") }
     }
     foreach ($g in $games) {
         try { $g.Cover = Get-JuicerCover $g -NoDownload } catch { Write-JuicerLog "Sin portada de $($g.Name): $_" }
@@ -2365,7 +2377,7 @@ function New-JuicerGuiTile {
         [void]$frame.Children.Add($b)
     }
     [void]$stack.Children.Add($frame)
-    [void]$stack.Children.Add((New-JuicerUi TextBlock @{ Text = $Game.Name; TextTrimming = 'CharacterEllipsis'; Margin = '2,5,2,0'; FontSize = 12 }))
+    [void]$stack.Children.Add((New-JuicerUi TextBlock @{ Text = $(if ($Game.Hidden) { "$($Game.Name) (oculto)" } else { $Game.Name }); TextTrimming = 'CharacterEllipsis'; Margin = '2,5,2,0'; FontSize = 12 }))
     $btn.Content = $stack
     $btn.Add_Click({ Open-JuicerGuiGame ([string]$this.Tag) })
     $script:Gui.Tiles[$Game.Id] = $frame
@@ -2380,12 +2392,18 @@ function Show-JuicerGuiGallery {
     $script:Gui.Sections = New-Object System.Collections.ArrayList
     $script:Gui.GalleryDirty = $false
     $c.GalleryPanel.Children.Clear()
-    $all = @($Games)
+    # Hidden games («no es un juego») stay in Gui.Games but only show when asked.
+    $hiddenAll = @($Games | Where-Object { $_.Hidden })
+    $all = @($Games | Where-Object { $script:Gui.ShowHidden -or -not $_.Hidden })
+    if ($hiddenAll.Count -eq 0) { $script:Gui.ShowHidden = $false; $all = @($Games) }
+    $c.BtnGamesShowHidden.Visibility = $(if ($hiddenAll.Count -gt 0) { 'Visible' } else { 'Collapsed' })
+    $c.BtnGamesShowHidden.Content = $(if ($script:Gui.ShowHidden) { 'Volver a ocultarlos' } else { "Mostrar ocultos ($($hiddenAll.Count))" })
     $done = @($all | Where-Object { $_.Fps })
     $new = @($all | Where-Object { $_.New })
-    $c.GamesNote.Text = if ($all.Count -eq 0) { 'No he encontrado juegos. Si tienes alguno, «Añadir un juego…» y elige su .exe.' } else {
+    $c.GamesNote.Text = if ($all.Count -eq 0 -and $hiddenAll.Count -gt 0) { 'Todos tus juegos están ocultos: pulsa «Mostrar ocultos» para verlos.' } elseif ($all.Count -eq 0) { 'No he encontrado juegos. Si tienes alguno, «Añadir un juego…» y elige su .exe.' } else {
         '{0} · {1}{2}. Pulsa un juego para ajustarlo, u «Optimizar todos».' -f (Format-JuicerCount $all.Count 'juego'), (Format-JuicerCount $done.Count 'optimizado'), $(if ($new.Count -gt 0) { ' · ' + (Format-JuicerCount $new.Count 'nuevo') } else { '' })
     }
+    if ($script:Gui.ShowHidden -and $hiddenAll.Count -gt 0) { $c.GamesNote.Text += ' Los ocultos llevan «(oculto)»: ábrelos y pulsa «Volver a mostrar».' }
     foreach ($grp in @(Get-JuicerGuiGameGroups $all)) {
         $head = New-JuicerUi TextBlock @{ Text = ('{0}  ·  {1}' -f $grp.Name, @($grp.Games).Count); Foreground = '#F5B400'; FontWeight = 'SemiBold'; FontSize = 15; Margin = '4,12,4,2' }
         $wrap = New-JuicerUi WrapPanel
@@ -2478,6 +2496,7 @@ function Get-JuicerGuiGamePage {
         Competitive = (Test-JuicerCompetitiveGame $exe); TwoGpus = ((Get-JuicerGpuCount) -ge 2)
         Last = $(if ($last) { @{ Date = $last.Date; AvgFps = $last.AvgFps; Low1 = $last.Low1; Steady = $last.Steady; JitterMs = $last.JitterMs; InputLatency = $last.InputLatency; Latency = $last.Latency } } else { $null })
         Chart = (Get-JuicerFrameChart $exe); Tips = $tips; Cover = $cover
+        CalAge = $(if ($g.CalFps) { Get-JuicerCalibrationAge $g.CalDate $g.CalFps } else { $null })
         Running = (Test-JuicerGameRunning $exe); Safe = (Get-JuicerGameSafe $exe); Minimal = [bool]$g.Minimal
         AntiCheat = $(if ($g.Dir) { Get-JuicerGameAntiCheat ([string]$g.Dir) } else { '' })
     }
@@ -2539,6 +2558,9 @@ function Show-JuicerGuiGamePage {
     $c.GameStatus.Text = '{0} · {1}' -f (Format-JuicerGuiStore $g.Launcher), (Format-JuicerGameStatus $g)
     $c.GameExe.Text = $g.Exe
     $c.GameExe.ToolTip = $g.Exe
+    $c.BtnGameHide.Content = $(if ($g.Hidden) { 'Volver a mostrar' } else { 'No es un juego: ocultar' })
+    $c.GameCalibAge.Text = $(if ($P.CalAge) { $P.CalAge.Sentence } else { '' })
+    $c.GameCalibAge.Visibility = $(if ($P.CalAge) { 'Visible' } else { 'Collapsed' })
     $c.GameCover.Child = New-JuicerGuiCoverVisual $g 230 345
     $engine = [bool]$P.Engine
     $script:Gui.SettingPage = $true
@@ -2602,11 +2624,13 @@ function Start-JuicerGuiGameAction {
     param([string]$Action, $Value)
     $g = $script:Gui.Game
     if (-not $g) { return }
-    $say = @{ Optimizar = 'Optimizando'; Quitar = 'Quitando lo de Win Juicer de'; Exe = 'Cambiando el .exe de' }[$Action]
+    $say = @{ Optimizar = 'Optimizando'; Quitar = 'Quitando lo de Win Juicer de'; Exe = 'Cambiando el .exe de'; Ocultar = 'Ocultando'; Mostrar = 'Mostrando' }[$Action]
     if (-not $say) { $say = 'Ajustando' }
     Start-JuicerGuiTask "$say $($g.Name)…" 'GameAction' @{ Game = $g.Clone(); Action = $Action; Value = $Value } {
         param($r)
         Show-JuicerGuiGamePage $r.Page
+        # Hidden just now: back to the gallery, where it no longer is (unless the hidden are shown).
+        if ($r.Page.Game.Hidden -and -not $script:Gui.ShowHidden -and (Test-JuicerGuiGameShown $r.Page.Game.Id)) { Close-JuicerGuiGame }
         # NoSeMantuvo: the driver took the value and did not keep it. A message
         # on a result that went through (NVIDIA's own cap lowered the rate) is
         # shown too: what was asked is not what was set.
@@ -2850,12 +2874,22 @@ function Register-JuicerGuiHandlers {
             Start-JuicerGuiLimiter -Forget
         }
         BtnGamesOptimize      = {
-            $games = @($script:Gui.Games)
+            $games = @($script:Gui.Games | Where-Object { -not $_.Hidden })
             if ($games.Count -eq 0) { Show-JuicerGuiMessage 'Todavía no hay juegos en la galería.' | Out-Null; return }
             if (-not (Confirm-JuicerGui "$(if ($games.Count -eq 1) { 'A tu juego' } else { "A tus $($games.Count) juegos" }): el frame pacer a la medida de tu monitor y, si tienes dos gráficas, la potente.`n`nSe aplica solo cada vez que abras cada juego, sin inyectar nada en él, y se puede deshacer. ¿Seguir?")) { return }
             Start-JuicerGuiGameSetup 'Recomendado' @{ Games = @($games | ForEach-Object { $_.Clone() }); Fps = 0 }
         }
         BtnGamesRefresh       = { Start-JuicerGuiGameSetup 'Refresh' }
+        BtnGamesShowHidden    = {
+            # Only redraws what is already in memory: nothing to wait for.
+            $script:Gui.ShowHidden = -not $script:Gui.ShowHidden
+            Show-JuicerGuiGallery $script:Gui.Games
+        }
+        BtnGameHide           = {
+            $g = $script:Gui.Game
+            if (-not $g) { return }
+            Start-JuicerGuiGameAction $(if ($g.Hidden) { 'Mostrar' } else { 'Ocultar' })
+        }
         BtnPacerOptions       = {
             $o = $script:Gui.C.PacerOptions
             $o.Visibility = $(if ($o.Visibility -eq 'Visible') { 'Collapsed' } else { 'Visible' })
@@ -3050,7 +3084,15 @@ function Register-JuicerGuiHandlers {
                 Show-JuicerGuiUndo
             }
         }
-        BtnCleanup            = { Start-JuicerModuleWindow 'Invoke-JuicerCleanup' 'Win Juicer: limpieza' }
+        BtnCleanup            = {
+            Start-JuicerGuiTask 'Calculando cuánto se liberaría…' 'CleanupPreview' @{} {
+                param($r)
+                if (Confirm-JuicerGui ("Esto se limpiaría ahora:`n`n" + (@($r.Lines) -join "`n") + "`n`nNo se puede deshacer, pero sólo borra lo que Windows regenera. ¿Seguir?")) {
+                    Start-JuicerModuleWindow 'Invoke-JuicerCleanup' 'Win Juicer: limpieza'
+                }
+                Set-JuicerGuiStatus 'Listo.'
+            }
+        }
         BtnOptimize           = {
             $warn = Get-JuicerOptimizeWarning
             if (-not $warn -or (Confirm-JuicerGui "$warn ¿Seguir?")) { Start-JuicerModuleWindow 'Invoke-JuicerDriveOptimize' 'Win Juicer: optimizar unidades' }
@@ -3076,7 +3118,7 @@ function Register-JuicerGuiHandlers {
         BtnUndoAll            = {
             $journal = Read-JuicerJournalSafe
             if ($journal.Count -eq 0) { return }
-            if (-not (Confirm-JuicerGui $(if ($journal.Count -eq 1) { '¿Deshacer el cambio de Win Juicer?' } else { "¿Deshacer los $($journal.Count) cambios de Win Juicer?" }))) { return }
+            if (-not (Confirm-JuicerGui (Format-JuicerUndoAllConfirm $journal))) { return }
             $ids = @($journal | ForEach-Object { $_.Id })
             [array]::Reverse($ids)
             Start-JuicerGuiTask 'Deshaciendo todo…' 'Run' @{ Undo = $ids } { param($r) Complete-JuicerGuiRun $r }
@@ -3301,7 +3343,7 @@ function Show-JuicerGuiHome {
         $c.BtnHomeOptimize.Content = $(if ($pending.Count -gt 0) { 'Optimizar ahora' } else { 'Todo aplicado ✓' })
         Set-JuicerGuiButton 'BtnHomeOptimize' ($pending.Count -gt 0)
     }
-    $games = @($script:Gui.Games)
+    $games = @($script:Gui.Games | Where-Object { -not $_.Hidden })
     if ($script:Gui.GamesLoaded -and $games.Count -gt 0) {
         $c.HomeGamesNote.Text = '{0}, {1}. Pulsa uno para elegir fluidez o latencia, o optimízalos todos de una vez.' -f (Format-JuicerCount $games.Count 'juego encontrado' 'juegos encontrados'), (Format-JuicerCount @($games | Where-Object { $_.Fps }).Count 'optimizado')
     }
@@ -3340,7 +3382,10 @@ function Show-JuicerGuiReady {
     $c.ReadyTitle.Text = $(if ($bad.Count -eq 0) { '✓ Listo para jugar' } else { "Listo para jugar: $(Format-JuicerCount $bad.Count 'cosa por mirar' 'cosas por mirar')" })
     foreach ($l in $lines) {
         $row = New-JuicerUi StackPanel @{ Margin = '0,2,0,2' }
-        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = ('{0} {1}' -f $(if ($l.Ok) { '✓' } else { '⚠' }), $l.Title); Foreground = $(if ($l.Ok) { '#4CC38A' } else { '#F5B400' }); TextWrapping = 'Wrap' }))
+        # Info lines (security by virtualization) are context, not a verdict: a neutral mark, never counted above.
+        $mark = $(if ($l.Info) { 'ℹ' } elseif ($l.Ok) { '✓' } else { '⚠' })
+        $markColor = $(if ($l.Info) { '#9A9AA5' } elseif ($l.Ok) { '#4CC38A' } else { '#F5B400' })
+        [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = ('{0} {1}' -f $mark, $l.Title); Foreground = $markColor; TextWrapping = 'Wrap' }))
         if ($l.Reason) { [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $l.Reason; Foreground = '#9A9AA5'; TextWrapping = 'Wrap'; Margin = '18,0,0,0' })) }
         [void]$c.ReadyPanel.Children.Add($row)
     }
@@ -3355,7 +3400,9 @@ function Invoke-JuicerGuiHomeOptimize {
         Show-JuicerGuiMessage 'Ya tienes aplicado todo lo que conviene a tu equipo.' | Out-Null
         return
     }
-    if (-not (Confirm-JuicerGui "$(if ($ids.Count -eq 1) { 'Se aplicará 1 ajuste que conviene' } else { "Se aplicarán $($ids.Count) ajustes que convienen" }) a tu equipo.`n`nAntes se crea un punto de restauración de Windows, y cada cambio se puede deshacer desde Win Juicer (Deshacer).`n`n¿Seguir?")) { return }
+    $catalog = @(Get-JuicerCatalog)
+    $tweaks = @($ids | ForEach-Object { $id = $_; $catalog | Where-Object { $_.Id -eq $id } | Select-Object -First 1 })
+    if (-not (Confirm-JuicerGui (Format-JuicerApplyConfirm $tweaks))) { return }
     Start-JuicerGuiTask 'Optimizando Windows…' 'Run' @{ Ids = $ids; RestorePoint = $true } { param($r) Complete-JuicerGuiRun $r }
 }
 
@@ -3457,7 +3504,7 @@ function Show-JuicerGui {
         Hw = @{ Cpu = @{}; Gpus = @() }; Advice = @{}; Snapshot = @{ States = @{}; Dns = @() }
         Installed = $null; Ready = $false; HwOk = $false; AuditRunning = $false; ChangesPending = $false; DebloatLoaded = $false; StartupLoaded = $false; GamesLoaded = $false; FineLoaded = $false; Findings = @(); Measure = @()
         Queue = (New-Object System.Collections.ArrayList)
-        Games = @(); Covers = @{}; CoverTried = @{}; Tiles = @{}; Sections = (New-Object System.Collections.ArrayList); Game = $null; Page = $null
+        Games = @(); ShowHidden = $false; Covers = @{}; CoverTried = @{}; Tiles = @{}; Sections = (New-Object System.Collections.ArrayList); Game = $null; Page = $null
         Off = @{}; Busy = $false; Pending = @(); PendingTimer = $null; Shield = $null; LastError = $null; Update = $null; ReadyLines = @()
     }
     foreach ($n in (Get-JuicerGuiNames)) { $script:Gui.C[$n] = $win.FindName($n) }

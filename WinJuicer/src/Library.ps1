@@ -204,9 +204,11 @@ function Get-JuicerPublisherGames {
 function Get-JuicerLibraryPath { Join-Path (Get-JuicerHome) 'juegos.json' }
 
 # Exe: the .exe worked out or chosen for each game id; Custom: games added by
-# hand; Known: ids already seen, to mark the new ones.
+# hand; Known: ids already seen, to mark the new ones; Hidden: ids the person
+# said are not games (a tool, a benchmark), kept out of the gallery and of the
+# automatic optimizing but still known, so showing them again is not «new».
 function Read-JuicerLibraryState {
-    $s = @{ Exe = @{}; Custom = @(); Known = @() }
+    $s = @{ Exe = @{}; Custom = @(); Known = @(); Hidden = @() }
     $p = Get-JuicerLibraryPath
     if (Test-Path -LiteralPath $p) {
         try {
@@ -214,6 +216,7 @@ function Read-JuicerLibraryState {
             if ($d.Exe -is [hashtable]) { $s.Exe = $d.Exe }
             $s.Custom = @($d.Custom | Where-Object { $_ -is [hashtable] })
             $s.Known = @($d.Known | Where-Object { $_ })
+            $s.Hidden = @($d.Hidden | Where-Object { $_ })
         } catch {
             Write-JuicerLog "juegos.json dañado, se ignora: $_"
         }
@@ -230,7 +233,7 @@ function Save-JuicerLibraryState {
 # launcher declares, or the best guess from its folder. Collectors can be
 # replaced (the tests); each launcher fails on its own.
 function Get-JuicerGames {
-    param([scriptblock[]]$Collectors, [scriptblock]$FindExe = ${function:Find-JuicerGameExe}, [switch]$KeepNew)
+    param([scriptblock[]]$Collectors, [scriptblock]$FindExe = ${function:Find-JuicerGameExe}, [switch]$KeepNew, [switch]$IncludeHidden)
     if (-not $Collectors) {
         $Collectors = @(${function:Get-JuicerSteamGames}, ${function:Get-JuicerEpicGames}, ${function:Get-JuicerGogGames}, ${function:Get-JuicerXboxGames}, ${function:Get-JuicerPublisherGames})
     }
@@ -264,6 +267,7 @@ function Get-JuicerGames {
         $state.Exe[$g.Id] = $g.Exe
         $g.ExeName = (Split-Path -Leaf $g.Exe).ToLowerInvariant()
         $g.New = $state.Known.Count -gt 0 -and $state.Known -notcontains $g.Id
+        $g.Hidden = [bool]($state.Hidden -contains $g.Id)
         $out += $g
     }
     # A collector that threw found nothing this run; forgetting its ids would
@@ -274,7 +278,22 @@ function Get-JuicerGames {
         $state.Known = $ids
     }
     Save-JuicerLibraryState $state
+    # Hidden after the ids are remembered: what is hidden is not new when it comes back.
+    if (-not $IncludeHidden) { $out = @($out | Where-Object { -not $_.Hidden }) }
     $out
+}
+
+# The ids hidden from the gallery (they stay on disk in juegos.json).
+function Get-JuicerHiddenGameIds { @((Read-JuicerLibraryState).Hidden) }
+
+# «No es un juego»: out of the gallery and of the automatic optimizing, or back in.
+# Nothing is deleted and nothing Win Juicer set on the game is touched.
+function Set-JuicerGameHidden {
+    param([Parameter(Mandatory)][string]$Id, [bool]$Hidden = $true)
+    $s = Read-JuicerLibraryState
+    $rest = @($s.Hidden | Where-Object { $_ -ne $Id })
+    $s.Hidden = $(if ($Hidden) { @($rest) + $Id } else { $rest })
+    Save-JuicerLibraryState $s
 }
 
 function Test-JuicerGameFile { param([string]$Path) [bool]($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) }
@@ -319,6 +338,9 @@ function Get-JuicerGameStatus {
         $g.Safe = [bool]($p -is [hashtable] -and $p.Safe)
         $g.Minimal = [bool]($p -is [hashtable] -and $p.Minimal)
         $g.Waiting = $pacer.Pending.ContainsKey([string]$g.ExeName)
+        $cal = $pacer.Calibrated[[string]$g.ExeName]
+        $g.CalFps = $(if ($cal -is [hashtable] -and [int]$cal.Fps -gt 0) { [int]$cal.Fps } else { 0 })
+        $g.CalDate = $(if ($cal -is [hashtable]) { [string]$cal.Date } else { '' })
         $g
     }
 }
@@ -327,6 +349,7 @@ function Format-JuicerGameStatus {
     param([hashtable]$Game)
     $p = @()
     if ($Game.Fps) { $p += '{0} FPS ({1:N2} ms)' -f $Game.Fps, (1000 / $Game.Fps) } elseif ($Game.Limited) { $p += 'frame pacer quitado fuera de Win Juicer' }
+    if ($Game.Fps -and $Game.CalFps) { $age = Get-JuicerCalibrationAge $Game.CalDate $Game.CalFps; if ($age) { $p += $age.Text } }
     if ($Game.Gpu) { $p += 'GPU dedicada' }
     if ($Game.Priority) { $p += 'prioridad por encima de lo normal' }
     if ($Game.Minimal -and $Game.Fps) { $p += 'modo prudente' }

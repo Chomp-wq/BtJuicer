@@ -974,6 +974,52 @@ function Undo-JuicerAll {
     foreach ($id in $ids) { Undo-JuicerTweak $id }
 }
 
+# --- What a confirmation shows before doing it -----------------------------------
+#
+# The first few titles, then «y N más»; those that only take effect after a restart or a new
+# sign-in are marked, and said once at the end. Pure text, shared by the window and the console.
+
+function Format-JuicerPreviewLines {
+    param([object[]]$Items, [int]$Max = 8)
+    $items = @($Items | Where-Object { $_ })
+    $lines = @(foreach ($i in ($items | Select-Object -First $Max)) {
+            $mark = switch ([string]$i.Reboot) { 'Reinicio' { ' (hay que reiniciar)' } 'Sesion' { ' (hay que volver a entrar)' } default { '' } }
+            "· $($i.Title)$mark"
+        })
+    if ($items.Count -gt $Max) { $lines += "y $($items.Count - $Max) más" }
+    $needs = @($items | Where-Object { [string]$_.Reboot -in 'Reinicio', 'Sesion' })
+    $note = ''
+    if ($needs.Count -gt 0) { $note = 'Los marcados no surten efecto hasta que reinicies Windows o vuelvas a iniciar sesión, como dice cada uno.' }
+    @{ Lines = $lines; Note = $note }
+}
+
+# Text of the question before applying these tweaks (the «Optimizar Windows» button).
+function Format-JuicerApplyConfirm {
+    param([object[]]$Tweaks, [switch]$NoQuestion)
+    $t = @($Tweaks | Where-Object { $_ })
+    $p = Format-JuicerPreviewLines $t
+    $head = if ($t.Count -eq 1) { 'Se aplicará 1 ajuste que conviene a tu equipo:' } else { "Se aplicarán $($t.Count) ajustes que convienen a tu equipo:" }
+    $out = "$head`n`n" + ($p.Lines -join "`n")
+    if ($p.Note) { $out += "`n`n$($p.Note)" }
+    $out + "`n`nAntes se crea un punto de restauración de Windows, y cada cambio se puede deshacer desde Win Juicer (Deshacer).$(if (-not $NoQuestion) { "`n`n¿Seguir?" })"
+}
+
+# What «Deshacer todo» will and will not do, from what the journal really holds: each entry
+# is put back as it was before Win Juicer first touched it (Undo-JuicerAll), most recent first.
+function Format-JuicerUndoAllConfirm {
+    param([object[]]$Journal, [switch]$NoQuestion)
+    $j = @($Journal | Where-Object { $_ })
+    $undo = @($j)
+    [array]::Reverse($undo)
+    $p = Format-JuicerPreviewLines $undo
+    $head = if ($j.Count -eq 1) { 'Se deshará este cambio de Win Juicer:' } else { "Se deshacerán estos $($j.Count) cambios de Win Juicer, el más reciente primero:" }
+    $out = "$head`n`n" + ($p.Lines -join "`n")
+    if ($p.Note) { $out += "`n`n$($p.Note)" }
+    $apps = @($j | Where-Object { [string]$_.Id -like 'app:*' })
+    if ($apps.Count -gt 0) { $out += "`n`nLas apps quitadas se reinstalan desde Microsoft Store con winget (hace falta internet); si alguna no tiene identificador en la Tienda, tendrás que reinstalarla tú." }
+    $out + "`n`nLo que Win Juicer no puede deshacer se queda como está: la protección contra contenido adulto (es para siempre), la limpieza y el resto de Mantenimiento (temporales borrados, restablecer la red o Windows Update) y los programas que instalaste con winget. Los puntos de restauración tampoco se borran.$(if (-not $NoQuestion) { "`n`n¿Seguir?" })"
+}
+
 # --- Toggles -----------------------------------------------------------------
 #
 # Preferences (dark theme, file extensions…) go both ways, and the way back

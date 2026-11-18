@@ -60,6 +60,33 @@ function Clear-JuicerFolder {
     $r
 }
 
+# Whether Windows is waiting for a restart to finish installing updates. The downloaded update
+# files are what that install still needs, so they are left alone until then.
+function Test-JuicerRebootPending {
+    foreach ($k in 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending',
+        'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
+        try { if (Test-JuicerRegKey $k) { return $true } } catch { Write-Verbose "Sin ${k}: $_" }
+    }
+    $false
+}
+
+# What Clear-JuicerFolder would free, without deleting anything: the same walk (never through
+# a link), the same age rule and the same path guard. A folder the guard refuses is reported
+# as refused, not counted.
+function Measure-JuicerFolder {
+    param([Parameter(Mandatory)][string]$Path, [int]$OlderThanHours = 24)
+    $r = @{ Bytes = [int64]0; Files = 0; Skipped = 0; Refused = $false }
+    if (-not $Path -or -not (Test-Path -LiteralPath $Path)) { return $r }
+    if (-not (Test-JuicerCleanupPath $Path)) { $r.Refused = $true; return $r }
+    $cutoff = (Get-Date).AddHours(-$OlderThanHours)
+    foreach ($f in (Get-JuicerTreeItems $Path).Files) {
+        if ($f.LastWriteTime -gt $cutoff) { $r.Skipped++; continue }
+        $r.Bytes += [int64]$f.Length
+        $r.Files++
+    }
+    $r
+}
+
 function Get-JuicerCleanupTargets {
     $wer = Join-Path $env:ProgramData 'Microsoft\Windows\WER'
     @(
@@ -72,9 +99,44 @@ function Get-JuicerCleanupTargets {
     )
 }
 
+# What a cleanup would free, per target and in total, before doing it. Targets: replaceable
+# for the tests. A target with Services (the update downloads) is left out while a restart
+# is pending, and says why.
+function Get-JuicerCleanupPreview {
+    param([object[]]$Targets = @(Get-JuicerCleanupTargets), [bool]$RebootPending = (Test-JuicerRebootPending))
+    $items = @(foreach ($t in $Targets) {
+            $skip = ''
+            $m = @{ Bytes = [int64]0; Files = 0; Skipped = 0; Refused = $false }
+            if (@($t.Services | Where-Object { $_ }).Count -gt 0 -and $RebootPending) {
+                $skip = 'hay un reinicio pendiente de Windows Update: no se toca hasta reiniciar'
+            } else {
+                try { $m = Measure-JuicerFolder -Path $t.Path -OlderThanHours $t.Hours } catch { Write-JuicerLog "No se pudo medir $($t.Path): $_" }
+                if ($m.Refused) { $skip = 'no parece una carpeta de temporales: no se toca' }
+            }
+            @{ Name = $t.Name; Path = $t.Path; Bytes = $m.Bytes; Skipped = $m.Skipped; Note = $skip }
+        })
+    @{ Items = $items; Total = [int64](($items | ForEach-Object { $_.Bytes } | Measure-Object -Sum).Sum) }
+}
+
+# The lines of the question before cleaning, for the window and the console alike.
+function Format-JuicerCleanupPreview {
+    param([hashtable]$Preview)
+    $lines = foreach ($i in $Preview.Items) {
+        if ($i.Note) { '· {0}: sin tocar ({1})' -f $i.Name, $i.Note }
+        else { '· {0}: {1}' -f $i.Name, (Format-JuicerBytes $i.Bytes) }
+    }
+    @($lines) + ('Total: {0}. Lo reciente o en uso no se toca, y la caché de shaders tampoco.' -f (Format-JuicerBytes $Preview.Total))
+}
+
 function Invoke-JuicerCleanup {
     $results = @()
+    $reboot = Test-JuicerRebootPending
     foreach ($t in (Get-JuicerCleanupTargets)) {
+        # The update downloads wait for the restart Windows is asking for.
+        if ($reboot -and @($t.Services | Where-Object { $_ }).Count -gt 0) {
+            $results += @{ Name = $t.Name; Freed = [int64]0; Skipped = 0; Note = 'sin tocar: hay un reinicio pendiente' }
+            continue
+        }
         $stopped = @()
         foreach ($s in @($t.Services)) {
             if (-not $s) { continue }
@@ -85,7 +147,7 @@ function Invoke-JuicerCleanup {
         }
         $r = Clear-JuicerFolder -Path $t.Path -OlderThanHours $t.Hours
         foreach ($s in $stopped) { try { Start-Service -Name $s -ErrorAction Stop } catch { Write-JuicerLog "No se pudo volver a arrancar ${s}: $_" } }
-        $results += @{ Name = $t.Name; Freed = $r.Freed; Skipped = $r.Skipped }
+        $results += @{ Name = $t.Name; Freed = $r.Freed; Skipped = $r.Skipped; Note = '' }
     }
 
     # Windows 10 1809 and later; looked up rather than called by name so older
@@ -94,7 +156,7 @@ function Invoke-JuicerCleanup {
     if ($doCache) {
         try {
             & $doCache -Force -ErrorAction Stop
-            $results += @{ Name = 'Caché de Optimización de distribución'; Freed = -1; Skipped = 0 }
+            $results += @{ Name = 'Caché de Optimización de distribución'; Freed = -1; Skipped = 0; Note = '' }
         } catch {
             Write-JuicerLog "No se pudo vaciar la caché de Optimización de distribución: $_"
         }

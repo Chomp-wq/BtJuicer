@@ -682,7 +682,7 @@ Describe 'Ajuste fino' {
         $x3d = Get-JuicerCpuTraits -Name 'AMD Ryzen 7 5700X3D 8-Core Processor' -Vendor 'AuthenticAMD'
         $g = Get-JuicerCpuTuneGuide $x3d
         $g.Key | Should -Be 'zen3x3d'
-        $g.Steps | Should -BeLike '*-15*-30*-40 mV*'
+        $g.Steps | Should -BeLike '*-15*-30*-0,04 V*'
         (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 7800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen4x3d'
         (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 7 9800X3D 8-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen5x3d'
         (Get-JuicerCpuTuneGuide (Get-JuicerCpuTraits -Name 'AMD Ryzen 5 7600X 6-Core Processor' -Vendor 'AuthenticAMD')).Key | Should -Be 'zen3plus'

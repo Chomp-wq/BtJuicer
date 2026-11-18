@@ -19,7 +19,7 @@
 
 # --- Processor -----------------------------------------------------------------
 
-$script:CpuTestHowTo = 'Prueba cada paso: OCCT (CPU, conjunto de datos variable) una hora y CoreCycler una noche para ir núcleo a núcleo. Si hay errores, cierres o pantallazos, sube el valor un escalón (menos negativo) en ese núcleo. Después, usa el equipo unos días: el diagnóstico de Win Juicer cuenta los errores WHEA desde que lo apuntaste.'
+$script:CpuTestHowTo = 'Prueba cada paso: OCCT (CPU, conjunto de datos variable) una hora y CoreCycler una noche para ir núcleo a núcleo. Si hay errores, cierres o pantallazos, sube el valor un escalón (menos negativo) en ese núcleo. Después, usa el equipo unos días: el diagnóstico de Win Juicer cuenta los errores WHEA desde que lo apuntaste. Las cifras de ganancia salen de reseñas, no de tu equipo: mídelas con «Antes y después» (o Juegos > Medir) antes de quedarte con el ajuste.'
 
 function Get-JuicerCpuTuneGuide {
     param([hashtable]$Cpu)
@@ -29,7 +29,7 @@ function Get-JuicerCpuTuneGuide {
     if ($n -match 'Ryzen [3579] 5\d{3}X3D') {
         return @{
             Key = 'zen3x3d'; Title = "Undervolt para tu $n"; Where = $co
-            Steps = 'Curve Optimizer «All Cores», signo negativo: empieza en -15 y baja de 5 en 5 hasta -30. Si tu BIOS no lo tiene (AGESA anterior a 1.2.0.8), actualízala; la alternativa es un offset de voltaje negativo de -0,03 a -0,05 V (tus -40 mV están ahí), menos fino que Curve Optimizer.'
+            Steps = 'Curve Optimizer «All Cores», signo negativo: empieza en -15 y baja de 5 en 5 hasta -30. Si tu BIOS no lo tiene (AGESA anterior a 1.2.0.8), actualízala; la alternativa es un offset de voltaje negativo de -0,03 a -0,05 V (-0,04 V es un punto de partida típico), menos fino que Curve Optimizer.'
             Gain = 'No sube la frecuencia máxima (está bloqueada), pero con 5-10 °C menos el procesador la sostiene más tiempo bajo carga: más FPS en juegos largos y menos ruido.'
             Test = $script:CpuTestHowTo
         }
@@ -111,7 +111,7 @@ $script:GpuTuneGuides = @{
     blackwell = @{
         Arch = 'Blackwell (RTX 50)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner: Core Clock +200 a +300 MHz (sube de 50 en 50) y Memory Clock +1000 a +2000 MHz (GDDR7 suele aguantar más, pero cada +1000 da muy poco). Para menos consumo con lo mismo, curva (Ctrl+F) plana a 0,90-0,95 V a la frecuencia que alcances.'
-        Gain = 'Las RTX 50 traen margen: en pruebas de prensa, un 10-13 % más con la frecuencia al máximo estable; la memoria aporta poco porque casi nunca limita.'
+        Gain = 'Las RTX 50 traen margen: según reseñas, un 10-13 % más con la frecuencia al máximo estable; la memoria aporta poco porque casi nunca limita.'
     }
     ada = @{
         Arch = 'Ada Lovelace (RTX 40)'; Tool = 'Afterburner'
@@ -121,22 +121,22 @@ $script:GpuTuneGuides = @{
     ampere = @{
         Arch = 'Ampere (RTX 30)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner, curva (Ctrl+F) plana a 850-900 mV y 1850-1950 MHz. Memoria +250 a +500 MHz: la GDDR6X corrige sus propios errores, así que pasada la frecuencia buena no se cuelga, rinde menos; mide FPS en cada paso.'
-        Gain = 'Es la generación que más gana con undervolt: el mismo rendimiento (o algo más, porque deja de tocar el límite de potencia) con un 20-25 % menos de consumo.'
+        Gain = 'Es la generación que más gana con undervolt: el mismo rendimiento (o algo más, porque deja de tocar el límite de potencia) con un 20-25 % menos de consumo, según reseñas.'
     }
     turing = @{
         Arch = 'Turing (RTX 20 / GTX 16)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner, curva plana a unos 900 mV y 1850-1900 MHz, o +75 a +125 MHz de núcleo. Memoria +500 a +800 MHz.'
-        Gain = 'Un 3-6 % con el núcleo y la memoria, o lo mismo con menos ruido usando la curva.'
+        Gain = 'Según reseñas, un 3-6 % con el núcleo y la memoria, o lo mismo con menos ruido usando la curva.'
     }
     pascal = @{
         Arch = 'Pascal (GTX 10)'; Tool = 'Afterburner'
         Steps = 'En MSI Afterburner, límite de potencia al máximo, +75 a +150 MHz de núcleo y +300 a +500 MHz de memoria; o curva a unos 900 mV y 1850-1900 MHz para que no baje de frecuencia por temperatura.'
-        Gain = 'Un 4-8 %, sobre todo si la tarjeta bajaba frecuencia por temperatura.'
+        Gain = 'Según reseñas, un 4-8 %, sobre todo si la tarjeta bajaba frecuencia por temperatura.'
     }
     rdna4 = @{
         Arch = 'RDNA 4 (RX 9000)'; Tool = 'Adrenalin'
         Steps = 'En AMD Software > Rendimiento > Ajuste: «Voltage Offset» de -30 a -80 mV (cada chip es distinto: algunos fallan ya a -40) y «Power Limit» +10 %. Memoria a 2700 MHz con «Fast Timing» al final, si sobra.'
-        Gain = 'El límite de potencia es lo que sube la frecuencia; el undervolt la hace alcanzable sin subir consumo ni temperatura. En foros, un 5-10 % con chips buenos.'
+        Gain = 'El límite de potencia es lo que sube la frecuencia; el undervolt la hace alcanzable sin subir consumo ni temperatura. Según reseñas y foros, un 5-10 % con chips buenos.'
     }
     rdna3 = @{
         Arch = 'RDNA 3 (RX 7000)'; Tool = 'Adrenalin'
@@ -146,17 +146,17 @@ $script:GpuTuneGuides = @{
     rdna1 = @{
         Arch = 'RDNA 1 (RX 5000)'; Tool = 'Adrenalin'
         Steps = 'En AMD Software > Rendimiento > Ajuste: baja el voltaje del núcleo de unos 1200 mV a 1100-1150 mV, deja la frecuencia como está y «Power Limit» +20 %. Memoria +20 a +40 MHz sobre la de fábrica como mucho: en estas tarjetas se pasa de estable sin avisar.'
-        Gain = 'Sobre todo menos temperatura y ruido con el mismo rendimiento; el overclock da poco (un 2-4 %).'
+        Gain = 'Sobre todo menos temperatura y ruido con el mismo rendimiento; el overclock da poco (según reseñas, un 2-4 %).'
     }
     rdna2 = @{
         Arch = 'RDNA 2 (RX 6000)'; Tool = 'Adrenalin'
         Steps = 'En AMD Software > Rendimiento > Ajuste: voltaje de 1150-1200 a 1075-1100 mV, «Power Limit» +15 % y memoria a 2100-2150 MHz con «Fast Timing».'
-        Gain = 'Un 3-6 % con el límite de potencia y la memoria, con menos temperatura gracias al undervolt.'
+        Gain = 'Según reseñas, un 3-6 % con el límite de potencia y la memoria, con menos temperatura gracias al undervolt.'
     }
     arc = @{
         Arch = 'Intel Arc'; Tool = 'Intel'
         Steps = 'En Intel Graphics Software > Rendimiento: «Power Limit» al máximo y «GPU Performance Boost» de 10 en 10 hasta que falle, y vuelve dos pasos atrás. Comprueba antes que Resizable BAR está activo: en Arc es lo que más cuenta.'
-        Gain = 'Un 5-10 % con el límite de potencia y la frecuencia; sin Resizable BAR, nada compensa.'
+        Gain = 'Según reseñas, un 5-10 % con el límite de potencia y la frecuencia; sin Resizable BAR, nada compensa.'
     }
 }
 
@@ -176,7 +176,7 @@ function Get-JuicerGpuTuneGuide {
     $g
 }
 
-$script:GpuTestHowTo = 'Prueba con lo que juegas, no sólo con un benchmark: 3DMark Time Spy o Steel Nomad en bucle 20 minutos y una hora de tu juego más exigente. Mide FPS antes y después con Juegos > Medir. Si el driver se reinicia o el juego se cierra, vuelve un paso atrás: el diagnóstico cuenta esos cuelgues desde que apuntaste el ajuste.'
+$script:GpuTestHowTo = 'Prueba con lo que juegas, no sólo con un benchmark: 3DMark Time Spy o Steel Nomad en bucle 20 minutos y una hora de tu juego más exigente. Mide FPS antes y después con Juegos > Medir (las cifras de ganancia salen de reseñas, no de tu equipo: lo que cuenta es lo que midas). Si el driver se reinicia o el juego se cierra, vuelve un paso atrás: el diagnóstico cuenta esos cuelgues desde que apuntaste el ajuste.'
 
 function Get-JuicerTuneGuideFindings {
     param([hashtable]$Cpu, [object[]]$Gpus = @(), [bool]$Laptop)
