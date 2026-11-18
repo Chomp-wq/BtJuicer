@@ -14,6 +14,9 @@
 # ASCII only and no BOM: Windows PowerShell 5.1 reads what irm downloads as
 # Windows-1252, and a UTF-8 dash contains the byte of a quote.
 
+# Old sibling folders are removed only after 7 days. A running Win Juicer reads its
+# files once at start (nothing stays locked), so age is the only safe signal: a
+# session open for a week is the price of never deleting a folder in use.
 # Runs as administrator (or from a test). It is also pasted as text into the
 # command of the elevated process, which has a short limit: so no comments or
 # double quotes inside, and every statement ends with a semicolon (the lines
@@ -21,6 +24,7 @@
 function Install-WinJuicerPackage {
     param([string]$Zip, [string]$Sha256, [string]$Version, [string]$Root);
     $ErrorActionPreference = 'Stop';
+    Write-Host 'Preparando Win Juicer...';
     New-Item -ItemType Directory -Path $Root -Force | Out-Null;
     $dir = Join-Path $Root ($Version + '-' + [guid]::NewGuid().ToString('N').Substring(0, 8));
     New-Item -ItemType Directory -Path $dir | Out-Null;
@@ -31,7 +35,7 @@ function Install-WinJuicerPackage {
     if ($got -ne $Sha256) { Remove-Item -LiteralPath $dir -Recurse -Force; throw ('La descarga no coincide con la publicada (SHA256 ' + $got + '). No se ejecuta nada: vuelve a intentarlo en unos minutos.'); };
     Expand-Archive -LiteralPath $own -DestinationPath $dir -Force;
     Remove-Item -LiteralPath $own -Force;
-    Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $dir -and $_.LastWriteTime -lt (Get-Date).AddDays(-1) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue;
+    Get-ChildItem -LiteralPath $Root -Directory -ErrorAction SilentlyContinue | Where-Object { $_.FullName -ne $dir -and $_.LastWriteTime -lt (Get-Date).AddDays(-7) } | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue;
     Join-Path $dir 'WinJuicer.ps1'
 }
 

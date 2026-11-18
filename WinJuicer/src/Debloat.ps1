@@ -146,16 +146,16 @@ function New-JuicerOneDriveTweak {
                     Get-Process -Name OneDrive -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
                     $setup = Get-JuicerOneDriveSetup
                     if ($setup) {
-                        $r = Invoke-JuicerNative $setup @('/uninstall')
+                        $r = Invoke-JuicerNative $setup @('/uninstall') -TimeoutSec 0
                     } else {
-                        $r = Invoke-JuicerNative 'winget.exe' @('uninstall', '--id', 'Microsoft.OneDrive', '-e', '--silent', '--accept-source-agreements', '--disable-interactivity')
+                        $r = Invoke-JuicerNative 'winget.exe' @('uninstall', '--id', 'Microsoft.OneDrive', '-e', '--silent', '--accept-source-agreements', '--disable-interactivity') -TimeoutSec 0
                     }
                     if ($r.Code -ne 0) { throw "No se pudo desinstalar OneDrive ($($r.Code)): $($r.Output)" }
                 }
                 Restore = {
                     param($s)
                     if (-not $s.Installed -or (Get-JuicerOneDriveState).Installed) { return }
-                    $r = Invoke-JuicerNative 'winget.exe' @('install', '--id', 'Microsoft.OneDrive', '-e', '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity')
+                    $r = Invoke-JuicerNative 'winget.exe' @('install', '--id', 'Microsoft.OneDrive', '-e', '--source', 'winget', '--silent', '--accept-package-agreements', '--accept-source-agreements', '--disable-interactivity') -TimeoutSec 0
                     if ($r.Code -ne 0) { throw "No se pudo reinstalar OneDrive ($($r.Code)); descárgalo de onedrive.com. $($r.Output)" }
                 }
             }

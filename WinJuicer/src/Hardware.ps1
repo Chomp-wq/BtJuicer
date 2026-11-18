@@ -102,17 +102,26 @@ function Get-JuicerMemoryPlan {
     $plan
 }
 
+# True when Windows says the PC runs on battery (false on a desktop, unplugged-less
+# or unreadable). One place so that tests can mock it.
+function Test-JuicerOnBattery {
+    if (-not (Test-JuicerWindows)) { return $false }
+    try { return (@(Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Where-Object { $_.PowerOnline -eq $false }).Count -gt 0) } catch { Write-Verbose "Sin batería: $_"; return $false }
+}
+
 # --- Graphics --------------------------------------------------------------
 
 function Get-JuicerGpuTraits {
     param([string]$Name = '')
-    $g = @{ Name = $Name.Trim(); Vendor = 'Otro'; Discrete = $false; Series = $null; Rtx = $false; FrameGen = $false; Hags = $null; Arc = $false }
+    $g = @{ Name = $Name.Trim(); Vendor = 'Otro'; Discrete = $false; Series = $null; Rtx = $false; FrameGen = $false; Hags = $null; Arc = $false; Legacy = $false }
     if ($Name -match 'NVIDIA|GeForce|Quadro|RTX|Tesla') {
         $g.Vendor = 'NVIDIA'; $g.Discrete = $true
         $g.Rtx = $Name -match 'RTX'
         if ($Name -match '(?:RTX|GTX|GT|MX)\s*(\d{1,2})(\d{2})\b') { $g.Series = [int]$Matches[1] }
         # Hardware scheduling: GTX 10 and later. Frame generation: RTX 40 and later.
         if ($null -ne $g.Series) { $g.Hags = $g.Series -ge 10 -and $Name -notmatch '\bMX\s*\d'; $g.FrameGen = $g.Rtx -and $g.Series -ge 40 }
+        # Maxwell, Pascal and older (GTX 10 and below) are on NVIDIA's legacy branch: no regular drivers.
+        if ($null -ne $g.Series -and $g.Series -le 10) { $g.Legacy = $true }
     } elseif ($Name -match 'AMD|Radeon|ATI') {
         $g.Vendor = 'AMD'
         # «Radeon(TM) RX Vega 11 Graphics» is an APU's integrated GPU despite the RX.
@@ -126,6 +135,8 @@ function Get-JuicerGpuTraits {
         $g.Vendor = 'Intel'
         if ($Name -match 'Arc(?:\(TM\))?\s*[AB]\d{3}') { $g.Discrete = $true; $g.Arc = $true; $g.Hags = $true }
     }
+    # Polaris (RX 400/500), Vega and Radeon VII no longer get regular driver releases either.
+    if ($g.Vendor -eq 'AMD' -and $g.Discrete -and ($g.Series -eq 0 -or $Name -match '\bVega\b|Radeon\s*VII\b|\bR[579]\s*\d{3}\b')) { $g.Legacy = $true }
     $g
 }
 
@@ -327,6 +338,13 @@ function Get-JuicerGpuMemoryRanges {
 
 $script:HardwareProfile = $null
 
+# Hands a profile read elsewhere (the window's first task) to this runspace, so the
+# later tasks do not read the hardware again. A profile without a CPU is a stub and ignored.
+function Set-JuicerHardwareProfileCache {
+    param($HardwareProfile)
+    if ($HardwareProfile -is [System.Collections.IDictionary] -and $HardwareProfile.Cpu -and @($HardwareProfile.Cpu.Keys).Count -gt 0 -and $HardwareProfile.Contains('Gpus')) { $script:HardwareProfile = $HardwareProfile }
+}
+
 # Everything the advisor and the review need, gathered in one go. Each part
 # fails on its own: a machine without WMI still gets a profile.
 function Get-JuicerHardwareProfile {
@@ -354,7 +372,7 @@ function Get-JuicerHardwareProfile {
             Write-Verbose "Sin memoria: $_"
         }
         if ($hw.Laptop) {
-            try { $hw.OnBattery = @(Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Where-Object { $_.PowerOnline -eq $false }).Count -gt 0 } catch { Write-Verbose "Sin batería: $_" }
+            $hw.OnBattery = Test-JuicerOnBattery
         }
         $hw.SystemDisk = Get-JuicerDriveMedia $env:SystemDrive
         $hw.Printers = @(Get-JuicerPhysicalPrinters)

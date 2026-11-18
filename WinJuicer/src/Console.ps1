@@ -1377,8 +1377,17 @@ function Show-JuicerReady {
 
 function Show-JuicerMainMenu {
     $script:UpdateNotice = Get-JuicerUpdateNotice
+    # Said once, before the first menu: it does not change while the program runs.
+    $mismatch = $null
+    try { $mismatch = Get-JuicerUserMismatch } catch { Write-JuicerLog "No se pudo comparar usuarios: $_" }
+    $warnedUser = $false
     while ($true) {
         Write-JuicerHeader
+        if ($mismatch -and -not $warnedUser) {
+            $warnedUser = $true
+            Write-JuicerWrapped (Get-JuicerUserMismatchText $mismatch) 2 'Yellow'
+            Write-Host ''
+        }
         Write-JuicerMenu @(
             @('1', 'Diagnóstico', 'hardware, overclock y BIOS: qué frena a este equipo'),
             @('2', 'Recomendado', 'lo que conviene a este equipo, según su hardware'),

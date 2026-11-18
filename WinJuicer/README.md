@@ -55,7 +55,7 @@ el zip baja a `%TEMP%`, pero el proceso ya elevado lo copia a una carpeta de
 `Archivos de programa` (`WinJuicer-descarga`), vuelve a calcular su SHA256 sobre
 esa copia y sólo entonces lo descomprime y lo ejecuta; si alguien cambia el zip
 entre medias, no coincide y no se ejecuta nada. Si cancelas la ventana de
-permisos (UAC) lo dice y borra lo descargado, y la descarga tiene tiempo máximo. La release la publica el CI
+permisos (UAC) lo dice y borra lo descargado, y la descarga tiene tiempo máximo. Las carpetas de versiones anteriores sólo se borran pasados 7 días. La release la publica el CI
 desde la rama principal, con todas las pruebas en verde.
 
 **O sin internet**: descarga la carpeta `WinJuicer` (o el `WinJuicer.zip` de la
@@ -254,7 +254,9 @@ Windows guarda las pruebas, y Win Juicer las lee:
   potencia.
 - **La edad del driver de la gráfica**: avisa a los seis meses en una NVIDIA, una
   AMD dedicada o una Intel Arc (sacan drivers para los juegos nuevos cada pocas
-  semanas) y al año en una integrada, con la web de descarga del fabricante
+  semanas) y al año en una integrada; para tarjetas que el fabricante ya sólo
+  mantiene (NVIDIA GTX 10 y anteriores, AMD Polaris y Vega) no lo da por aviso, sólo
+  como dato: su último driver puede ser el actual. Con la web de descarga del fabricante
   (nvidia.com/drivers, amd.com/support, intel.com/content/www/us/en/support/detect.html).
 - **El plan de energía**: si limita el procesador por debajo del 100 % o tiene
   el turbo desactivado, cosa que algunas guías recomiendan y cuesta mucho.
@@ -265,7 +267,8 @@ Windows guarda las pruebas, y Win Juicer las lee:
 - **Ryzen X3D de dos CCD**: que estén el driver «3D V-Cache Performance
   Optimizer», Game Bar, el modo juego y el plan Equilibrado.
 - **La gráfica**: límite de potencia bajado o subido (Afterburner), funcionando
-  con menos líneas PCIe de las que tiene, Resizable BAR en NVIDIA, AMD e Intel
+  con menos líneas PCIe de las que tiene, Resizable BAR en NVIDIA RTX 30 o
+  posterior, AMD RX 6000 o posterior e Intel Arc (en las demás no se puede, así que no se juzga)
   (en una Arc sin ReBAR, aviso grave), y qué ajustes del panel de NVIDIA o AMD
   sí merecen la pena.
 - **Red**: sólo por wifi, o un cable que enlaza a 100 Mb/s.
@@ -922,18 +925,29 @@ No cambia nada:
 - **Modo juego** (en Windows 11 está activado mientras nadie lo apague).
 - **Programación de GPU acelerada por hardware (HAGS)**: configurada y activa.
   Windows no la usa hasta reiniciar, así que si Win Juicer la puso después del
-  último arranque lo dice («configurada, pero aún no activa»). Si el driver
+  último arranque (la última vez que la aplicó) lo dice («configurada, pero aún no activa»). Si el driver
   decide solo, o la gráfica no la admite, no aparece.
 - **Optimizaciones para juegos en ventana** (el modelo de presentación moderno;
-  con él la VRR también funciona en ventana o sin bordes).
-- **Resizable BAR**, si se puede ver: NVIDIA por `nvidia-smi`, el resto por los
-  rangos de memoria que Windows dio a la tarjeta.
+  con él la VRR también funciona en ventana o sin bordes). Si Windows no tiene
+  escrita la opción, usa la suya por defecto y no se puede ver: no aparece.
+- **Resizable BAR**, si se puede ver y la tarjeta lo admite (NVIDIA RTX 30 o
+  posterior, AMD RX 6000 o posterior, Intel Arc): NVIDIA por `nvidia-smi`, el
+  resto por los rangos de memoria que Windows dio a la tarjeta.
 - **Plan de energía** (y si limita el procesador por debajo del 100 %), y si un
   portátil está **con batería** o enchufado.
 - **El monitor**, a su frecuencia máxima o por debajo.
 
 Lo que no se puede leer **no aparece**: no se da por bueno ni por malo. Se calcula
 en segundo plano al abrir la ventana, y de nuevo al aplicar algo.
+
+Al abrir la ventana, Empezar se dibuja en cuanto se lee el hardware y el estado de los
+ajustes; la comprobación de versiones, la protección, lo pendiente de los juegos, esta
+tarjeta y el diagnóstico completo siguen después en segundo plano, sin bloquear los
+botones (lo que pulses entre medias espera su turno y la ventana lo indica). Cada
+programa externo que Win Juicer lanza (`powercfg`, `nvidia-smi`…) tiene un tiempo máximo,
+salvo los que tardan de verdad (`dism`, `winget`). Si Win Juicer corre como otra
+cuenta de administrador que la de la sesión, Empezar y la consola avisan: los
+ajustes de usuario se aplicarían a esa otra cuenta.
 
 ### Qué ha cambiado: lo que Windows deshace
 
@@ -1062,7 +1076,9 @@ el equipo sin vuelta atrás.
   fichero. Si `diario.json` se daña, el error lo dice y se restaura con
   `-RestaurarDiario` (o desde **Deshacer** en la consola): aparta el dañado como
   `diario.dañado.json`, sin borrarlo, y pone la copia. La copia es un paso más
-  antigua: si el diario actual se lee bien, pregunta antes (con `-Si`, no).
+  antigua: si el diario actual se lee bien, pregunta antes (con `-Si`, no). La ventana,
+al abrirla con el diario dañado, lo explica y ofrece restaurar la copia (si la hay);
+si no, sigue con «Deshacer» vacío y no aplica cambios nuevos hasta recuperarlo.
 
 La ventana y la consola usan el mismo diario: lo que hagas en una se deshace en
 la otra. El registro de lo que se hizo, con fecha, queda en

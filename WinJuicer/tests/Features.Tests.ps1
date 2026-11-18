@@ -178,13 +178,13 @@ Describe 'Copia del diario' {
         [IO.File]::WriteAllText((Get-JuicerJournalPath), '{ esto no es json')
         $none = try { Read-JuicerJournal; '' } catch { "$_" }
         $none | Should -BeLike '*dañado*'
-        $none | Should -Not -BeLike '*RestaurarDiario*'
+        $none | Should -Not -BeLike '*se puede restaurar*'
         Save-JuicerJournal @(@{ Id = 'a'; Title = 'A'; Actions = @() })
         Save-JuicerJournal @(@{ Id = 'a'; Title = 'A'; Actions = @() }, @{ Id = 'b'; Title = 'B'; Actions = @() })
         [IO.File]::WriteAllText((Get-JuicerJournalPath), '{ esto no es json')
         $msg = try { Read-JuicerJournal; '' } catch { "$_" }
         $msg | Should -BeLike '*dañado*'
-        $msg | Should -BeLike '*se puede restaurar*-RestaurarDiario*'
+        $msg | Should -BeLike '*se puede restaurar*recuperarlo*'
     }
 
     It 'restaurar aparta el dañado y deja la copia como diario' {
@@ -432,5 +432,213 @@ Describe 'Antigüedad del driver de la gráfica' {
         Get-JuicerDriverAgeFinding 'NVIDIA GeForce RTX 4070' -1 | Should -BeNullOrEmpty
         Get-JuicerDriverAgeFinding 'Microsoft Basic Display Adapter' 900 | Should -BeNullOrEmpty
         Get-JuicerDriverAgeFinding '' 900 | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Programas externos con tiempo máximo' {
+    BeforeAll {
+        $script:Pwsh = (Get-Process -Id $PID).Path
+        # Not exported: called from inside the module.
+        function Invoke-TestNative {
+            param([string]$File, [string[]]$Arguments, [int]$TimeoutSec = 30)
+            & (Get-Module WinJuicer) { param($f, $a, $t) Invoke-WinNative $f $a -TimeoutSec $t } $File $Arguments $TimeoutSec
+        }
+    }
+
+    It 'convierte los argumentos como los espera CreateProcess' {
+        ConvertTo-JuicerArgumentString @('a', 'b c', '') | Should -Be 'a "b c" ""'
+        ConvertTo-JuicerArgumentString @('x"y') | Should -Be '"x\"y"'
+        ConvertTo-JuicerArgumentString @('C:\mi carpeta\') | Should -Be '"C:\mi carpeta\\"'
+        ConvertTo-JuicerArgumentString @() | Should -Be ''
+    }
+
+    It 'devuelve código y salida (stdout y stderr, sin líneas vacías)' {
+        $r = Invoke-TestNative $script:Pwsh @('-NoProfile', '-Command', "'hola'; [Console]::Error.WriteLine('fallo'); exit 3")
+        $r.Code | Should -Be 3
+        $r.Output | Should -BeLike '*hola*'
+        $r.Output | Should -BeLike '*fallo*'
+        $r.Output | Should -Not -Match "(?m)^\s*$"
+    }
+
+    It 'mata lo que no acaba a tiempo y lo cuenta con código -1' {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $r = Invoke-TestNative $script:Pwsh @('-NoProfile', '-Command', 'Start-Sleep -Seconds 30') 2
+        $sw.Stop()
+        $r.Code | Should -Be -1
+        $r.Output | Should -BeLike '*tiempo de espera*'
+        $sw.Elapsed.TotalSeconds | Should -BeLessThan 20
+    }
+
+    It '0 es sin límite: lo que tarda un poco acaba con su salida' {
+        $r = Invoke-TestNative $script:Pwsh @('-NoProfile', '-Command', 'Start-Sleep -Seconds 1; ''listo''') 0
+        $r.Code | Should -Be 0
+        $r.Output | Should -Be 'listo'
+    }
+}
+
+Describe 'Permisos de la carpeta de Win Juicer' -Skip:([Environment]::OSVersion.Platform -ne 'Win32NT') {
+    BeforeAll {
+        function New-TestHomeAcl {
+            param([bool]$Protected = $true, [string]$OwnerSid = 'S-1-5-32-544', [string]$UserRights = 'ReadAndExecute', [string]$UserSid = 'S-1-5-32-545')
+            $sidType = [Security.Principal.SecurityIdentifier]
+            $acl = New-Object Security.AccessControl.DirectorySecurity
+            $acl.SetAccessRuleProtection($Protected, $false)
+            $acl.SetOwner((New-Object $sidType $OwnerSid))
+            $inherit = [Security.AccessControl.InheritanceFlags]'ContainerInherit,ObjectInherit'
+            $none = [Security.AccessControl.PropagationFlags]::None
+            $allow = [Security.AccessControl.AccessControlType]::Allow
+            foreach ($f in 'S-1-5-32-544', 'S-1-5-18') { $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule ((New-Object $sidType $f), 'FullControl', $inherit, $none, $allow))) }
+            $acl.AddAccessRule((New-Object Security.AccessControl.FileSystemAccessRule ((New-Object $sidType $UserSid), $UserRights, $inherit, $none, $allow)))
+            $acl
+        }
+    }
+
+    It 'reconoce un ACL que ya es el bueno y no lo vuelve a fijar' {
+        Test-JuicerHomeAcl (New-TestHomeAcl) | Should -BeTrue
+    }
+
+    It 'lo cambia si hereda, si el dueño no es administrador o si Users puede escribir' {
+        Test-JuicerHomeAcl (New-TestHomeAcl -Protected $false) | Should -BeFalse
+        Test-JuicerHomeAcl (New-TestHomeAcl -OwnerSid 'S-1-5-32-545') | Should -BeFalse
+        Test-JuicerHomeAcl (New-TestHomeAcl -UserRights 'Modify') | Should -BeFalse
+        Test-JuicerHomeAcl (New-TestHomeAcl -UserRights 'Write') | Should -BeFalse
+        Test-JuicerHomeAcl (New-TestHomeAcl -UserRights 'Modify' -UserSid 'S-1-5-11') | Should -BeFalse
+    }
+}
+
+Describe 'Resizable BAR y drivers antiguos' {
+    It 'sólo juzga las gráficas que lo admiten' {
+        foreach ($n in 'NVIDIA GeForce RTX 3070', 'NVIDIA GeForce RTX 4090', 'AMD Radeon RX 6700 XT', 'AMD Radeon RX 7900 XTX', 'Intel(R) Arc(TM) A770 Graphics') {
+            Test-JuicerRebarCapable (Get-JuicerGpuTraits $n) | Should -BeTrue -Because $n
+        }
+        foreach ($n in 'NVIDIA GeForce GTX 1080', 'NVIDIA GeForce RTX 2070', 'NVIDIA GeForce GTX 1660 Ti', 'AMD Radeon RX 580', 'AMD Radeon RX 5700 XT', 'AMD Radeon RX Vega 64', 'Intel(R) UHD Graphics 770', 'Microsoft Basic Display Adapter') {
+            Test-JuicerRebarCapable (Get-JuicerGpuTraits $n) | Should -BeFalse -Because $n
+        }
+        Test-JuicerRebarCapable $null | Should -BeFalse
+    }
+
+    It 'un driver viejo de una tarjeta en la rama antigua es un dato, no un aviso' {
+        foreach ($n in 'NVIDIA GeForce GTX 1060 6GB', 'NVIDIA GeForce GTX 970', 'AMD Radeon RX 580 Series', 'AMD Radeon RX Vega 56') {
+            $f = Get-JuicerDriverAgeFinding $n 400
+            $f.Severity | Should -Be 'Info' -Because $n
+            $f.Title | Should -BeLike '*400 días*'
+            $f.Detail | Should -BeLike '*último*'
+        }
+        # A current card keeps its warning.
+        (Get-JuicerDriverAgeFinding 'NVIDIA GeForce RTX 4070' 400).Severity | Should -Be 'Medio'
+        (Get-JuicerDriverAgeFinding 'AMD Radeon RX 6800' 400).Severity | Should -Be 'Medio'
+        # Not old enough: nothing, legacy or not.
+        Get-JuicerDriverAgeFinding 'NVIDIA GeForce GTX 1060' 100 | Should -BeNullOrEmpty
+    }
+}
+
+Describe 'Optimizaciones de ventana y HAGS' {
+    BeforeAll { $script:DxKey = 'HKCU\Software\Microsoft\DirectX\UserGpuPreferences' }
+    BeforeEach { $script:M = New-FakeMachine }
+
+    It 'sin la marca en el registro es desconocido, no «desactivadas»' {
+        Get-JuicerWindowedState | Should -BeNullOrEmpty
+        Write-JuicerReg $script:DxKey 'DirectXUserGlobalSettings' 'String' 'VRROptimizeEnable=0;'
+        Get-JuicerWindowedState | Should -BeNullOrEmpty
+        Write-JuicerReg $script:DxKey 'DirectXUserGlobalSettings' 'String' 'SwapEffectUpgradeEnable=0;'
+        Get-JuicerWindowedState | Should -BeFalse
+        Write-JuicerReg $script:DxKey 'DirectXUserGlobalSettings' 'String' 'VRROptimizeEnable=0;SwapEffectUpgradeEnable=1;'
+        Get-JuicerWindowedState | Should -BeTrue
+    }
+
+    It 'HAGS espera al reinicio según la última vez que se aplicó, no la primera' {
+        $boot = [datetime]'2026-06-01T10:00:00'
+        Test-JuicerAppliedAfterBoot @{ AppliedAt = '2026-05-01T09:00:00' } $boot | Should -BeFalse
+        # Applied first long ago, again after the boot: waits.
+        Test-JuicerAppliedAfterBoot @{ AppliedAt = '2026-05-01T09:00:00'; LastAppliedAt = '2026-06-01T11:00:00' } $boot | Should -BeTrue
+        # Entries from before LastAppliedAt existed use AppliedAt.
+        Test-JuicerAppliedAfterBoot @{ AppliedAt = '2026-06-01T11:00:00' } $boot | Should -BeTrue
+        Test-JuicerAppliedAfterBoot $null $boot | Should -BeFalse
+        Test-JuicerAppliedAfterBoot @{ AppliedAt = '2026-06-01T11:00:00' } $null | Should -BeFalse
+    }
+
+    It 'cada «Aplicado» actualiza LastAppliedAt y AppliedAt no se mueve' {
+        Clear-FeatureJournal
+        try {
+            [void](Invoke-JuicerTweak (Find-JuicerTweak 'juegos.modo'))
+            $j = Read-JuicerJournal
+            $e = Get-JuicerJournalEntry $j 'juegos.modo'
+            $e.LastAppliedAt | Should -Not -BeNullOrEmpty
+            $e.AppliedAt = '2020-01-01T00:00:00'
+            $e.LastAppliedAt = '2020-01-01T00:00:00'
+            Save-JuicerJournal $j
+            # Windows puts it back; applying it again moves only LastAppliedAt.
+            Write-JuicerReg 'HKCU\Software\Microsoft\GameBar' 'AutoGameModeEnabled' 'DWord' 0
+            (Invoke-JuicerTweak (Find-JuicerTweak 'juegos.modo')).Outcome | Should -Be 'Aplicado'
+            $e = Get-JuicerJournalEntry (Read-JuicerJournal) 'juegos.modo'
+            ([datetime]$e.AppliedAt).Year | Should -Be 2020
+            ([datetime]$e.LastAppliedAt) | Should -BeGreaterThan ([datetime]'2025-01-01')
+        } finally { Clear-FeatureJournal }
+    }
+}
+
+Describe 'Lo que Windows ha deshecho, con portátil y estados ya leídos' {
+    BeforeEach { Clear-FeatureJournal }
+    AfterEach { Clear-FeatureJournal }
+
+    It 'el modo de energía por fuente no cuenta como deshecho con la batería puesta' {
+        $overlay = @{ State = 'Pendiente'; Reason = $null; Undoable = $true; Pending = @(@{ Type = 'Custom'; Key = 'overlay'; Label = 'Modo' }) }
+        Mock -ModuleName WinJuicer Get-JuicerTweakState { $overlay }.GetNewClosure()
+        $journal = [System.Collections.ArrayList]@(@{ Id = 'energia.modo'; Title = 'Modo'; Actions = @() })
+        Mock -ModuleName WinJuicer Test-JuicerOnBattery { $true }
+        @(Get-JuicerDrift $journal).Count | Should -Be 0
+        Mock -ModuleName WinJuicer Test-JuicerOnBattery { $false }
+        @(Get-JuicerDrift $journal).Count | Should -Be 1
+    }
+
+    It 'usa los estados ya leídos en lugar de leerlos otra vez' {
+        Mock -ModuleName WinJuicer Get-JuicerTweakState { throw 'no debería leerse' }
+        $journal = [System.Collections.ArrayList]@(@{ Id = 'juegos.modo'; Title = 'Modo juego'; Actions = @() })
+        $states = @{ 'juegos.modo' = @{ State = 'Pendiente'; Reason = $null; Undoable = $true; Pending = @(@{ Type = 'Registry' }) } }
+        @(Get-JuicerDrift $journal -States $states).Count | Should -Be 1
+        Should -Invoke -ModuleName WinJuicer Get-JuicerTweakState -Times 0
+    }
+}
+
+Describe 'Diario dañado en la ventana, usuario distinto y caché del hardware' {
+    BeforeEach { Clear-FeatureJournal }
+    AfterEach { Clear-FeatureJournal }
+
+    It 'la lectura segura da una lista vacía y guarda el motivo, sin tirar el diario' {
+        [IO.File]::WriteAllText((Get-JuicerJournalPath), '{ esto no es json')
+        $j = Read-JuicerJournalSafe
+        $j.Count | Should -Be 0
+        (& (Get-Module WinJuicer) { $script:JournalReadError }) | Should -BeLike '*dañado*'
+        Test-Path -LiteralPath (Get-JuicerJournalPath) | Should -BeTrue
+        Save-JuicerJournal @(@{ Id = 'a'; Title = 'A'; Actions = @() })
+        (Read-JuicerJournalSafe).Count | Should -Be 1
+        (& (Get-Module WinJuicer) { $script:JournalReadError }) | Should -BeNullOrEmpty
+    }
+
+    It 'avisa si Win Juicer corre con otra cuenta que la de la sesión, y sólo entonces' {
+        Mock -ModuleName WinJuicer Test-JuicerWindows { $true }
+        Mock -ModuleName WinJuicer Get-JuicerSessionUser { @{ Domain = 'OTRO'; User = 'persona' } }
+        $m = Get-JuicerUserMismatch -Me 'PC\yo'
+        $m.Me | Should -Be 'PC\yo'
+        $m.Session | Should -Be 'OTRO\persona'
+        Get-JuicerUserMismatchText $m | Should -BeLike '*se aplicarán a la cuenta*'
+        Mock -ModuleName WinJuicer Get-JuicerSessionUser { @{ Domain = 'PC'; User = 'yo' } }
+        Get-JuicerUserMismatch -Me 'PC\yo' | Should -BeNullOrEmpty
+        Mock -ModuleName WinJuicer Get-JuicerSessionUser { $null }
+        Get-JuicerUserMismatch -Me 'PC\yo' | Should -BeNullOrEmpty
+    }
+
+    It 'el perfil de hardware leído una vez se reutiliza sin volver a leerlo' {
+        $mod = Get-Module WinJuicer
+        try {
+            & $mod { $script:HardwareProfile = $null }
+            $hw = @{ Cpu = @{ Name = 'CPU de prueba' }; Gpus = @(); Modules = @() }
+            Set-JuicerHardwareProfileCache $hw
+            (Get-JuicerHardwareProfile).Cpu.Name | Should -Be 'CPU de prueba'
+            # A stub with no CPU (the read failed) is not kept.
+            & $mod { $script:HardwareProfile = $null }
+            Set-JuicerHardwareProfileCache @{ Cpu = @{}; Gpus = @(); Modules = @() }
+            (& $mod { $script:HardwareProfile }) | Should -BeNullOrEmpty
+        } finally { & $mod { $script:HardwareProfile = $null } }
     }
 }

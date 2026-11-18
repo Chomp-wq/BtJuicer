@@ -237,17 +237,69 @@ function Start-WinService {
     Start-Service -Name $Name -ErrorAction Stop -WarningAction SilentlyContinue
 }
 
+# One argument as CreateProcess wants it: .NET Framework (Windows PowerShell
+# 5.1) has no ProcessStartInfo.ArgumentList, so quote by hand.
+function ConvertTo-JuicerArgumentString {
+    param([string[]]$Arguments = @())
+    $parts = foreach ($a in @($Arguments)) {
+        if ($null -eq $a) { $a = '' }
+        if ($a -ne '' -and $a -notmatch '[\s"]') { $a; continue }
+        # Backslashes only matter in front of a quote; double them, escape the quote.
+        $q = $a -replace '(\\*)"', '$1$1\"'
+        $q = $q -replace '(\\+)$', '$1$1'
+        '"' + $q + '"'
+    }
+    $parts -join ' '
+}
+
+# Runs a program and returns @{ Code; Output } (stdout then stderr, blank lines
+# dropped). A tool that hangs (nvidia-smi on a broken driver, winget waiting on
+# a source) must not freeze Win Juicer forever, so it is killed after
+# -TimeoutSec and reported as Code -1. 0 means no limit: for dism, winget
+# installs and other tools that legitimately take minutes.
 function Invoke-WinNative {
-    param([string]$File, [string[]]$Arguments = @())
-    # Windows PowerShell turns native stderr into terminating errors under
-    # 'Stop'; tools like bcdedit write warnings there.
-    $ErrorActionPreference = 'Continue'
-    # stderr lines arrive as ErrorRecords; an empty one would print as its type
-    # name, so take the message and drop the blanks.
-    $out = & $File @Arguments 2>&1 | ForEach-Object {
-        if ($_ -is [System.Management.Automation.ErrorRecord]) { $_.Exception.Message } else { "$_" }
-    } | Where-Object { $_ -match '\S' }
-    [pscustomobject]@{ Code = $LASTEXITCODE; Output = (@($out) -join "`n") }
+    param([string]$File, [string[]]$Arguments = @(), [int]$TimeoutSec = 30)
+    $cmd = Get-Command -Name $File -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    $path = if ($cmd) { $cmd.Source } else { $File }
+    $psi = New-Object System.Diagnostics.ProcessStartInfo
+    $psi.FileName = $path
+    $psi.Arguments = ConvertTo-JuicerArgumentString $Arguments
+    $psi.UseShellExecute = $false
+    $psi.CreateNoWindow = $true
+    $psi.RedirectStandardOutput = $true
+    $psi.RedirectStandardError = $true
+    # Closed at once: a tool that asks a question gets end-of-input instead of
+    # waiting for a keyboard nobody is watching.
+    $psi.RedirectStandardInput = $true
+    # Same decoding PowerShell applies to native output (the OEM code page).
+    try {
+        $enc = [Console]::OutputEncoding
+        if ($enc) { $psi.StandardOutputEncoding = $enc; $psi.StandardErrorEncoding = $enc }
+    } catch { Write-Verbose "Sin codificación de consola: $_" }
+    $p = New-Object System.Diagnostics.Process
+    $p.StartInfo = $psi
+    [void]$p.Start()
+    try { $p.StandardInput.Close() } catch { Write-Verbose "stdin ya cerrada: $_" }
+    # Read both pipes on their own so a full buffer cannot block the child.
+    $outTask = $p.StandardOutput.ReadToEndAsync()
+    $errTask = $p.StandardError.ReadToEndAsync()
+    $exited = if ($TimeoutSec -gt 0) { $p.WaitForExit($TimeoutSec * 1000) } else { $p.WaitForExit(); $true }
+    if (-not $exited) {
+        try { $p.Kill($true) } catch { try { $p.Kill() } catch { Write-Verbose "No se pudo cerrar ${File}: $_" } }
+        [void]$p.WaitForExit(3000)
+        $p.Dispose()
+        return [pscustomobject]@{ Code = -1; Output = "Se agotó el tiempo de espera ($TimeoutSec s) y Win Juicer cerró «$File»." }
+    }
+    # Pipes can stay open if the tool left a child behind: do not wait forever.
+    [void]$outTask.Wait(5000)
+    [void]$errTask.Wait(5000)
+    $text = ''
+    if ($outTask.IsCompleted) { $text += $outTask.Result }
+    if ($errTask.IsCompleted -and $errTask.Result) { $text += "`n" + $errTask.Result }
+    $code = $p.ExitCode
+    $p.Dispose()
+    $lines = @($text -split "`r?`n" | Where-Object { $_ -match '\S' })
+    [pscustomobject]@{ Code = $code; Output = ($lines -join "`n") }
 }
 
 function Get-WinDefenderExclusions {
@@ -283,7 +335,7 @@ function Invoke-WinPowerShell {
     }
     $full = $prefix + "@(`n$Script`n) | ConvertTo-Json -Depth 4 -Compress"
     $exe = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $r = Invoke-WinNative $exe @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($full)))
+    $r = Invoke-WinNative $exe @('-NoProfile', '-NonInteractive', '-EncodedCommand', [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($full))) -TimeoutSec 300
     if ($r.Code -ne 0) { throw "Windows PowerShell: $($r.Output)" }
     $json = @($r.Output -split "`n" | Where-Object { $_ -match '^\s*[\[{]' })[-1]
     ConvertFrom-JuicerWinPsJson $json
@@ -347,7 +399,7 @@ function Add-WinAppx {
     if (-not $StoreId) { throw "$Name no tiene identificador de Microsoft Store: reinstálala desde la Tienda." }
     if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'winget no está disponible: instala «Instalador de aplicación» desde Microsoft Store.' }
     $script:AppxCache = $null
-    $r = Invoke-WinNative 'winget.exe' @('install', '--id', $StoreId, '--source', 'msstore', '--accept-package-agreements', '--accept-source-agreements', '--silent', '--disable-interactivity')
+    $r = Invoke-WinNative 'winget.exe' @('install', '--id', $StoreId, '--source', 'msstore', '--accept-package-agreements', '--accept-source-agreements', '--silent', '--disable-interactivity') -TimeoutSec 0
     if ($r.Code -ne 0) { throw "winget no pudo reinstalar $Name ($($r.Code)): $($r.Output)" }
 }
 
@@ -575,7 +627,8 @@ function Set-WinFeature {
     param([string]$Name, [bool]$Enabled)
     $script:FeatureCache = $null
     $arguments = if ($Enabled) { @('/Online', '/English', '/Enable-Feature', "/FeatureName:$Name", '/All', '/NoRestart') } else { @('/Online', '/English', '/Disable-Feature', "/FeatureName:$Name", '/NoRestart') }
-    $r = Invoke-WinNative 'dism.exe' $arguments
+    # DISM can take many minutes: no limit.
+    $r = Invoke-WinNative 'dism.exe' $arguments -TimeoutSec 0
     # 3010: done, a restart finishes it.
     if ($r.Code -notin 0, 3010) { throw "dism no pudo cambiar ${Name} ($($r.Code)): $($r.Output)" }
     $p = Get-WinPendingFeatures
@@ -908,7 +961,9 @@ function New-JuicerMemoryBackend {
         SvcStop     = { param($Name) $script:Mem.Services[$Name].Running = $false }
         SvcStart    = { param($Name) $script:Mem.Services[$Name].Running = $true }
         Run         = {
-            param($File, $Arguments)
+            # The timeout is for the real backend; a fake run never hangs.
+            param($File, $Arguments, $TimeoutSec)
+            $null = $TimeoutSec
             [void]$script:Mem.Calls.Add(($File + ' ' + ($Arguments -join ' ')).Trim())
             & $script:Mem.Run $File $Arguments
         }
@@ -1085,4 +1140,5 @@ function Remove-JuicerReg { param([string]$Path, [string]$Name) & (Get-JuicerBac
 function Test-JuicerRegKey { param([string]$Path) & (Get-JuicerBackend).KeyExists $Path }
 function Get-JuicerRegChildren { param([string]$Path) & (Get-JuicerBackend).KeyChildren $Path }
 function Get-JuicerRegValueNames { param([string]$Path) & (Get-JuicerBackend).KeyValues $Path }
-function Invoke-JuicerNative { param([string]$File, [string[]]$Arguments = @()) & (Get-JuicerBackend).Run $File $Arguments }
+# -TimeoutSec: seconds before the tool is killed (default 30, 0 = no limit).
+function Invoke-JuicerNative { param([string]$File, [string[]]$Arguments = @(), [int]$TimeoutSec = 30) & (Get-JuicerBackend).Run $File $Arguments $TimeoutSec }
