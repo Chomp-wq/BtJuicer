@@ -194,7 +194,8 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Mantener                              # lo que hace esa tarea: optimizar los juegos nuevos y recalcular el frame pacer
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # frame pacer al ritmo recomendado, solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o al tuyo
-.\WinJuicer.ps1 -CalibrarJuego cs2.exe                  # lo mide con su ritmo y lo ajusta a lo que sostiene
+.\WinJuicer.ps1 -CalibrarJuego cs2.exe                  # lo mide con su ritmo y propone el que sostiene; lo aplica si dices que sí
+.\WinJuicer.ps1 -CalibrarJuego cs2.exe -Si              # y aplica la propuesta sin preguntar
 .\WinJuicer.ps1 -CalibrarJuego cs2.exe -Prioridad Latencia  # para competitivos: por encima de los Hz si da para ello
 .\WinJuicer.ps1 -MotorPacer rtss                        # RivaTuner en vez del driver (admite décimas)
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
@@ -533,7 +534,9 @@ si tienes dos. Se aplica solo cada vez que abras el juego.
   competitivos, y lo dice en los que lo son: CS2, VALORANT, Fortnite, Apex…).
   **Ritmo**: *automático* (el recomendado o el calibrado para tu PC) o *elegido
   por ti*, que se respeta aunque cambies de monitor o de modo. **Calibrar**,
-  con los pasos explicados antes de empezar. Sin NVIDIA ni RivaTuner, un botón
+  con los pasos explicados antes de empezar y la duración a elegir (60, 90 o
+  120 segundos): propone un ritmo (de tal a cual y por qué) y hasta que aceptas
+  no cambia nada; después, **Verificar (45 s)**. Sin NVIDIA ni RivaTuner, un botón
   para instalar RivaTuner. **Modo prudente**: sólo el límite de FPS, sin tocar
   la sincronización vertical ni la cola de fotogramas, para un juego que se
   porta mal con lo demás.
@@ -544,9 +547,11 @@ si tienes dos. Se aplica solo cada vez que abras el juego.
 - **Medir**: tu última medida con su gráfica de frametimes, y un botón para
   medir este juego en concreto.
 - **Calibración**: cuántos días hace y a cuántos FPS («calibrado hace 12 días a
-  141 FPS»); pasados 30 días, una pista apagada: «puede haber cambiado (parche,
-  ajustes): vuelve a calibrar». También en la lista de juegos y en el menú del
-  frame pacer de la consola.
+  141 FPS»); pasados 30 días, o si ha cambiado el driver de la gráfica, la
+  gráfica, la versión del juego o la de Windows desde que se calibró, una pista
+  apagada: «ha cambiado el driver de la gráfica desde que se calibró: vuelve a
+  calibrar» (o «puede haber cambiado (parche, ajustes)»). También en la lista
+  de juegos y en el menú del frame pacer de la consola.
 - **No es un juego: ocultar**, para una herramienta o un benchmark que Win Juicer
   ha tomado por juego. Lo saca de la galería y de «Optimizar todos» (y de la
   optimización automática); no borra nada ni toca lo que ya tuviera puesto. En
@@ -626,7 +631,8 @@ la herramienta de Intel que usan las reviews y CapFrameX: se descarga de su
 release de GitHub la primera vez y, cada vez antes de ejecutarlo, se comprueba
 que lleva la firma de Intel.
 
-Pulsas «Medir», vuelves al juego en 10 segundos y juegas 30, 60 o 120
+Eliges tu escena más exigente y habitual (no un menú), sin Alt-Tab durante toda
+la medida; pulsas «Medir», vuelves al juego en 10 segundos y juegas 30, 60 o 120
 segundos. Al acabar dice:
 
 - **Media, 1 % bajo y 0,1 % bajo** (los FPS del 1 % y el 0,1 % de fotogramas
@@ -638,19 +644,42 @@ segundos. Al acabar dice:
 - **Qué limita**: si la gráfica va al máximo (para más FPS, calidad o
   DLSS/FSR/XeSS: ningún ajuste de Windows sube eso) o si **el procesador es el
   límite** y la gráfica espera (bajar gráficos no sirve; sí cerrar lo que gaste
-  CPU, la RAM con XMP, el plan de energía y el frame pacer).
+  CPU, la RAM con XMP, el plan de energía y el frame pacer). Con un límite de
+  FPS puesto la gráfica descansa parte de cada fotograma, y eso no es culpa del
+  procesador: sólo se dice que limita el procesador o la gráfica si el más
+  ocupado de los dos llena el 85 % del fotograma en el 95 % de los fotogramas;
+  si no, «limitado por el ritmo, hay margen», y los consejos del juego no
+  recomiendan «Boost» de Reflex ni bajar nada.
 - **Qué gastaba CPU en segundo plano** mientras jugabas: navegador, lanzadores,
-  Defender o Windows Update trabajando justo entonces.
+  Defender o Windows Update trabajando justo entonces. Se guarda con la medida.
 - **Cómo llega la imagen a la pantalla**: directa (Independent Flip), compuesta
   por el escritorio (un fotograma más de latencia) o copiada con el modelo
   antiguo (lo arregla «Optimizaciones para juegos en ventana»).
 - Si pasas de los Hz de tu pantalla, la sincronización vertical, la generación
-  de fotogramas y, con NVIDIA, la temperatura y si la gráfica bajó de frecuencia.
+  de fotogramas y, con NVIDIA, la temperatura, si la gráfica bajó de frecuencia
+  (se pregunta cada segundo a `nvidia-smi` por la temperatura, el uso, el reloj,
+  la memoria usada, la potencia y por qué se frenan los relojes; los campos que
+  la tarjeta no da, «[N/A]», se ignoran) y la **VRAM llena** (95 % o más: las
+  texturas pasan a la RAM y vienen los tirones). Con VRR en uso, avisa si el
+  juego pasa por el escritorio (el VRR no actúa: pantalla completa exclusiva o
+  G-SYNC para ventana, `NvVrrMode`) o si la V-Sync del propio juego está activa
+  por debajo de los Hz (desactívala: la del driver ya hace ese papel).
+- **El juego, entre varias cadenas de intercambio**: si un programa presenta
+  fotogramas en más de una (un overlay, un vídeo de carga), se mide la que más
+  fotogramas presentó, por proceso y cadena, no la suma.
 - **Comparado con la medida anterior del mismo juego**: así ves si el último
   cambio dio FPS o sólo lo parecía. También el ritmo (qué parte de los
   fotogramas cae en su sitio y cuánto cambia uno del siguiente), la latencia
   y la cola delante de la gráfica: mide sin frame pacer, pónselo y vuelve a
-  medir, y verás lo que gana.
+  medir, y verás lo que gana. La comparación dice si cada medida se hizo **con o
+  sin frame pacer** (y a cuántos FPS), porque comparar una con límite y otra
+  sin él no compara tu PC.
+- **Con qué se midió**, guardado en cada medida (las últimas 10 de cada juego):
+  el límite que tenía, el motor, los Hz y el modo del monitor, la prioridad, el
+  driver de la gráfica, la versión de PresentMon, si la gráfica se frenó o
+  llegó a 85 °C, la VRAM y qué gastaba procesador. El ritmo recomendado sólo
+  usa medidas de esta misma pantalla y modo, de menos de 60 días y sin la
+  gráfica frenada.
 - **La gráfica de frametimes** de toda la medida, con el objetivo del frame
   pacer como línea discontinua (en la consola, una línea de barras). Cada
   punto es el fotograma más lento de su tramo, para que ningún pico se pierda.
@@ -768,8 +797,13 @@ con Win Juicer cerrado:
   bajar el ritmo) o el «Modo de baja latencia: Ultra» del panel de NVIDIA
   para ese juego. Win Juicer no lo pone solo: ese ajuste no tiene un
   identificador público.
-- **Calibrar** (un juego de la lista, o `-CalibrarJuego`): lo mide 60 segundos
-  con su ritmo y lo ajusta a lo que sostiene de verdad. Si el 5 % más lento de
+- **Calibrar** (un juego de la lista, o `-CalibrarJuego`): lo mide 60, 90 o 120
+  segundos (a elegir) con su ritmo y **te propone** el que sostiene de verdad: de
+  tal a cual, y por qué. No cambia nada hasta que aceptas (en la ventana, un
+  cuadro con Aplicar o Descartar; en la consola, S/N; con `-CalibrarJuego`,
+  sólo con `-Si`, y si no, pregunta, y sin respuesta no cambia nada). Antes de
+  empezar dice cómo hacerlo: tu escena más exigente y habitual (no un menú), sin
+  Alt-Tab, durante toda la medida. Si el 5 % más lento de
   los fotogramas no llega, lo baja a ese ritmo menos un 3 % de margen, sin salir
   nunca del rango VRR.
   Si lo sostiene pero con cola delante de la gráfica, lo baja **por latencia**
@@ -785,7 +819,32 @@ con Win Juicer cerrado:
   sigan iguales; «Olvidar calibraciones» vuelve al ritmo recomendado. «Calibrado
   hace N días» sólo sale cuando esa calibración es la que manda ahora (mismo
   monitor y modo, y sin un ritmo tuyo por encima); si es de otro monitor o
-  modo, lo dice así.
+  modo, lo dice así. Cada monitor (su firma: Hz, modo y monitor) tiene su
+  calibración, y volver a uno encuentra la suya (se guardan las cuatro más
+  recientes por juego; las de antes pasan solas a su firma). Con cada una se
+  guarda con qué PC se hizo (la gráfica, su driver, la versión del juego, que sale
+  del `buildid` de Steam o, si no, de la versión del `.exe`, y la de Windows): si
+  alguna cambia, o pasan 30 días, sugiere repetirla.
+- **Calibrar no se fía de cualquier medida.** No cambia nada, y dice «parece un
+  menú o una pantalla de carga: repite en partida», si el procesador y la
+  gráfica trabajaron menos del 25 % del fotograma y menos de 2 ms, o si la media
+  fue menos del 55 % de la medida anterior de ese juego (que no estuviera por
+  encima del límite). Un múltiplo de los Hz de la prioridad *Latencia* nunca pasa
+  de 1,1 veces lo mejor que se vio de ese juego sin límite. Y no baja el ritmo,
+  sino que dice «repite la medida: …», si la gráfica se frenó, llegó a 85 °C o
+  algo (Defender, un navegador) gastaba el 12 % del procesador o más: bajarlo
+  por eso sería bajarlo sin motivo.
+- **Verificar (45 s).** Después de aplicar una propuesta, mide el juego otros 45
+  segundos con el ritmo ya puesto (el juego tiene que haber arrancado con él: si
+  estaba abierto, ciérralo y ábrelo; con la consola, la letra V; en la ventana, el
+  botón que aparece junto a Calibrar). Si una bajada aún no llega, propone bajar
+  otro poco, y se acepta igual. Una subida sólo se queda si la media coincide con
+  el ritmo nuevo en un 3 % y se sostiene: si no, se vuelve al ritmo de antes (o
+  baja a medias, si hasta ahí llegaba).
+- **Un VRR que no llega a los Hz.** Si el monitor va a 165 Hz pero su rango VRR
+  termina en 144, por encima de 144 el VRR se apaga: el ritmo se calcula con los
+  144 (138 FPS) y lo dice («tu pantalla va a 165 Hz pero su VRR llega a 144»),
+  también en la página del monitor. Calibrar nunca sube por encima.
 - **Prioridad por juego: fluidez o latencia mínima.** Con fluidez (la de
   siempre), el ritmo más estable dentro de lo que el monitor enseña entero.
   Con **latencia**, pensada para competitivos: igual hasta que lo calibras;
@@ -1413,9 +1472,12 @@ las confirmaciones con detalle, las opciones no válidas de los menús (y que si
 entrada salen), la grabación y VBS de «Listo para jugar», los juegos ocultos, la
 edad de la calibración y la vista previa de la limpieza sobre carpetas temporales.
 `Pacer.Tests.ps1`, el frame pacer: qué limita a un juego según la medida (Reflex, «Ultra»,
-algo externo), los archivos de Reflex y de generación de fotogramas, el límite propio de
-Unreal, los ritmos atrasados, los límites que borra el driver y la edad de la calibración,
-todo sobre la máquina en memoria y carpetas temporales.
+algo externo, el procesador, la gráfica o el propio ritmo), los archivos de Reflex y de
+generación de fotogramas, el límite propio de Unreal, los ritmos atrasados, los límites
+que borra el driver, la edad de la calibración, las propuestas de calibrar (la escena, la
+gráfica frenada, la verificación), el historial por juego, una calibración por monitor con
+su huella, la versión del juego y el rango del VRR, todo sobre la máquina en memoria y
+carpetas temporales.
 
 Las pruebas de `Windows.Tests.ps1` cambian de verdad la configuración del equipo,
 nivel Extremo incluido, y luego la devuelven. Están pensadas para una máquina

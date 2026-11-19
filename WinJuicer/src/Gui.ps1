@@ -784,9 +784,15 @@ $script:GuiXaml = @'
                       <Button x:Name="BtnGameFpsSet" Content="Usar"/>
                     </StackPanel>
                     <WrapPanel Margin="0,8,0,0">
-                      <Button x:Name="BtnGameCalibrate" Content="Calibrar (empieza en 10 s)" ToolTip="Mide el juego 60 s con su ritmo y lo ajusta a lo que sostiene de verdad: lo baja si no llega o si la gráfica va al límite, lo sube si sobra margen"/>
+                      <Button x:Name="BtnGameCalibrate" Content="Calibrar (empieza en 10 s)" ToolTip="Mide el juego con su ritmo y te propone el que sostiene de verdad: bajarlo si no llega o si la gráfica va al límite, subirlo si sobra margen. No cambia nada hasta que aceptes"/>
+                      <ComboBox x:Name="GameCalSeconds" Width="120" Margin="3" SelectedIndex="0" ToolTip="Cuánto dura la medida: más tiempo, más fiable">
+                        <ComboBoxItem Content="60 segundos" Tag="60"/>
+                        <ComboBoxItem Content="90 segundos" Tag="90"/>
+                        <ComboBoxItem Content="120 segundos" Tag="120"/>
+                      </ComboBox>
+                      <Button x:Name="BtnGameVerify" Content="Verificar (45 s)" Visibility="Collapsed" ToolTip="Mide el juego 45 s con el ritmo ya aplicado y comprueba que lo sostiene. Si no llega, te propone bajarlo otro poco; si era una subida y no se confirma, se vuelve al ritmo de antes"/>
                     </WrapPanel>
-                    <TextBlock Style="{StaticResource Note}" Text="Calibrar: abre el juego, pulsa y vuelve a él antes de 10 segundos; juega con normalidad un minuto y el ritmo se ajusta a lo que tu PC sostiene de verdad."/>
+                    <TextBlock Style="{StaticResource Note}" Text="Calibrar: elige tu escena más exigente y habitual (no un menú), sin Alt-Tab, durante toda la medida. Abre el juego, pulsa y vuelve a él antes de 10 segundos; juega con normalidad y Win Juicer te propone un ritmo. Hasta que aceptes, no se cambia nada."/>
                     <TextBlock x:Name="GameCalibAge" Style="{StaticResource Note}" Visibility="Collapsed"/>
                   </StackPanel>
 
@@ -795,7 +801,7 @@ $script:GuiXaml = @'
                   <CheckBox x:Name="GamePrioOn" Content="Darle prioridad por encima de lo normal en el procesador" ToolTip="Ayuda si otros programas compiten por el procesador mientras juegas. No «alta»: con alta el equipo puede congelarse"/>
 
                   <TextBlock Text="Medir" Style="{StaticResource Head}" FontSize="16"/>
-                  <TextBlock Style="{StaticResource Note}" Text="Abre el juego, pulsa y vuelve a él: mide un minuto de partida y te dice FPS, tirones, latencia y qué limita. Cada medida se compara con la anterior."/>
+                  <TextBlock Style="{StaticResource Note}" Text="Elige tu escena más exigente y habitual (no un menú), sin Alt-Tab, durante toda la medida. Abre el juego, pulsa y vuelve a él: mide la duración que elijas junto a «Calibrar» y te dice FPS, tirones, latencia y qué limita. Cada medida se compara con la anterior."/>
                   <Button x:Name="BtnGameMeasure" Content="Medir este juego (empieza en 10 s)" HorizontalAlignment="Left"/>
                   <StackPanel x:Name="GameMeasurePanel"/>
 
@@ -1149,12 +1155,24 @@ $script:GuiWork = @{
         }
     }
     GameMeasure = {
-        $f = @(Invoke-JuicerFrameCapture -Seconds 60 -Delay 10 -Process $A.Game.ExeName -OnStatus { param($t) $Sync.Status = $t })
+        $f = @(Invoke-JuicerFrameCapture -Seconds $(if ($A.Seconds) { [int]$A.Seconds } else { 60 }) -Delay 10 -Process $A.Game.ExeName -OnStatus { param($t) $Sync.Status = $t })
         @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
     }
+    # Measures and proposes: the proposal is in the findings, and nothing is applied until the person accepts (GameCalApply).
     GameCalibrate = {
-        $f = @(Invoke-JuicerPacerCalibration -Exe $A.Game.ExeName -Seconds 60 -Delay 10 -OnStatus { param($t) $Sync.Status = $t })
+        $f = @(Invoke-JuicerPacerCalibration -Exe $A.Game.ExeName -Seconds $(if ($A.Seconds) { [int]$A.Seconds } else { 60 }) -Delay 10 -OnStatus { param($t) $Sync.Status = $t })
         @{ Findings = $f; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
+    }
+    GameCalApply = {
+        $Sync.Mutating = $true
+        try { $f = @(Save-JuicerPacerCalibration $A.Proposal) } finally { $Sync.Mutating = $false }
+        @{ Findings = $f; Proposal = $A.Proposal; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
+    }
+    # The game measured at the new cap: it may put the old one back (a raise that did not hold), so it counts as a change.
+    GameVerify = {
+        $Sync.Mutating = $true
+        try { $v = Invoke-JuicerPacerVerify $A.Proposal -Seconds 45 -Delay 10 -OnStatus { param($t) $Sync.Status = $t } } finally { $Sync.Mutating = $false }
+        @{ Findings = @($v.Findings); Decision = $v.Decision; Next = $v.NextProposal; Page = (Get-JuicerGuiGamePage $A.Game); Pending = @(Get-JuicerPacerPending) }
     }
     # Turning the content protection on, raising it or blocking a site for
     # good: there is no work item that turns it off, lowers it or unblocks.
@@ -2502,7 +2520,7 @@ function Get-JuicerGuiGamePage {
         Competitive = (Test-JuicerCompetitiveGame $exe); TwoGpus = ((Get-JuicerGpuCount) -ge 2)
         Last = $(if ($last) { @{ Date = $last.Date; AvgFps = $last.AvgFps; Low1 = $last.Low1; Steady = $last.Steady; JitterMs = $last.JitterMs; InputLatency = $last.InputLatency; Latency = $last.Latency } } else { $null })
         Chart = (Get-JuicerFrameChart $exe); Tips = $tips; Cover = $cover
-        CalAge = $(if ($g.CalFps -and $g.CalState -eq 'Activa') { Get-JuicerCalibrationAge $g.CalDate $g.CalFps } elseif ($g.CalFps -and $g.CalState -eq 'OtroMonitor') { @{ Sentence = 'Calibración de otro monitor o modo: no se usa ahora.' } } else { $null })
+        CalAge = $(if ($g.CalFps -and $g.CalState -eq 'Activa') { Get-JuicerCalibrationAge $g.CalDate $g.CalFps -Changes @($g.CalChanges) } elseif ($g.CalFps -and $g.CalState -eq 'OtroMonitor') { @{ Sentence = 'Calibración de otro monitor o modo: no se usa ahora.' } } else { $null })
         MeasureWarn = (Get-JuicerFrameGenMeasureWarning $exe)
         Running = (Test-JuicerGameRunning $exe); Safe = (Get-JuicerGameSafe $exe); Minimal = [bool]$g.Minimal
         AntiCheat = $(if ($g.Dir) { Get-JuicerGameAntiCheat ([string]$g.Dir) } else { '' })
@@ -2560,6 +2578,8 @@ function Show-JuicerGuiGamePage {
     # A page that is no longer on screen only updates the gallery.
     if (-not (Test-JuicerGuiGameShown $g.Id)) { return }
     $script:Gui.Game = $g
+    # «Verificar» is for the game that was just calibrated.
+    $c.BtnGameVerify.Visibility = $(if ($script:Gui.Verify -and $script:Gui.Verify.GameId -eq $g.Id) { 'Visible' } else { 'Collapsed' })
     $script:Gui.Page = $P
     $c.GameTitle.Text = $g.Name
     $c.GameStatus.Text = '{0} · {1}' -f (Format-JuicerGuiStore $g.Launcher), (Format-JuicerGameStatus $g)
@@ -2653,15 +2673,25 @@ function Start-JuicerGuiGameAction {
     } -First
 }
 
+# How long the measurement lasts: what is chosen next to «Calibrar» (60, 90 or 120 s).
+function Get-JuicerGuiGameSeconds {
+    $item = $script:Gui.C.GameCalSeconds.SelectedItem
+    $n = 0
+    if ($item -and [int]::TryParse([string]$item.Tag, [ref]$n) -and $n -in 60, 90, 120) { return $n }
+    60
+}
+
 # Measuring or calibrating: long, so it says what to do while it waits.
 function Start-JuicerGuiGameMeasure {
     param([string]$Work)
     $g = $script:Gui.Game
     if (-not $g) { return }
     $what = if ($Work -eq 'GameCalibrate') { 'calibrar' } else { 'medir' }
+    $secs = Get-JuicerGuiGameSeconds
     $fgWarn = if ($script:Gui.GameMeasureWarn) { "`n`n$($script:Gui.GameMeasureWarn)" } else { '' }
-    if (-not (Confirm-JuicerGui "Para $what $($g.Name):`n`n1. Ten el juego abierto, ya jugando (no en un menú).`n2. Pulsa Sí y vuelve al juego antes de 10 segundos.`n3. Juega con normalidad un minuto.$fgWarn`n`nWin Juicer te avisará al terminar. ¿Empezar?")) { return }
-    Start-JuicerGuiTask "Vuelve a $($g.Name): empieza en 10 s…" $Work @{ Game = $g.Clone() } {
+    $tail = if ($Work -eq 'GameCalibrate') { 'Win Juicer te propondrá un ritmo y no cambiará nada hasta que aceptes.' } else { 'Win Juicer te avisará al terminar.' }
+    if (-not (Confirm-JuicerGui "Para $what $($g.Name):`n`n1. Ten el juego abierto, ya jugando, en tu escena más exigente y habitual (no un menú) y sin Alt-Tab durante toda la medida.`n2. Pulsa Sí y vuelve al juego antes de 10 segundos.`n3. Juega con normalidad $secs segundos.$fgWarn`n`n$tail ¿Empezar?")) { return }
+    Start-JuicerGuiTask "Vuelve a $($g.Name): empieza en 10 s…" $Work @{ Game = $g.Clone(); Seconds = $secs } {
         param($r)
         Show-JuicerGuiGamePage $r.Page
         if (Test-JuicerGuiGameShown $r.Page.Game.Id) {
@@ -2672,6 +2702,59 @@ function Start-JuicerGuiGameMeasure {
         Show-JuicerGuiUndo
         Update-JuicerGuiPendingWatch $r.Pending
         Set-JuicerGuiStatus 'Terminado: el resultado está en la página del juego, en «Medir».'
+        # A calibration only proposes: it is applied here, when the person says so.
+        $proposal = Get-JuicerCalibrationProposal @($r.Findings)
+        if ($proposal) { Invoke-JuicerGuiCalibrationProposal $proposal $r.Page.Game }
+    }
+}
+
+# What a calibration found, to accept or drop: nothing has changed yet. Yes applies it (and offers to
+# verify it); No drops it.
+function Invoke-JuicerGuiCalibrationProposal {
+    param([hashtable]$Proposal, [hashtable]$Game)
+    $text = "Propuesta para $($Game.Name): de $($Proposal.Old) a $($Proposal.New) FPS.`n`n$($Proposal.Why)`n`nTodavía no se ha cambiado nada. Sí = Aplicar, No = Descartar. ¿Aplicar $($Proposal.New) FPS?"
+    if (-not (Confirm-JuicerGui $text)) { Set-JuicerGuiStatus 'Propuesta descartada: no se ha cambiado nada.'; return }
+    Start-JuicerGuiTask "Aplicando $($Proposal.New) FPS a $($Game.Name)…" 'GameCalApply' @{ Game = $Game.Clone(); Proposal = $Proposal } {
+        param($r)
+        $script:Gui.Verify = @{ GameId = $r.Page.Game.Id; Proposal = $r.Proposal }
+        Show-JuicerGuiGamePage $r.Page
+        if (Test-JuicerGuiGameShown $r.Page.Game.Id) {
+            $p = $script:Gui.C.GameMeasurePanel
+            $i = 0
+            foreach ($f in @($r.Findings)) { $p.Children.Insert($i, (New-JuicerFindingCard $f)); $i++ }
+        }
+        Show-JuicerGuiUndo
+        Show-JuicerGuiHome
+        Update-JuicerGuiPendingWatch $r.Pending
+        Set-JuicerGuiStatus 'Calibrado. Pulsa «Verificar (45 s)» cuando el juego esté abierto con el ritmo nuevo.'
+        Show-JuicerGuiMessage "Ritmo aplicado: $($r.Proposal.New) FPS.`n`nPara comprobarlo: si el juego estaba abierto, ciérralo y ábrelo (el ritmo nuevo se pone al cerrarlo), vuelve a tu escena exigente y pulsa «Verificar (45 s)» en esta página." | Out-Null
+    } -First
+}
+
+# Verifying what was just applied: 45 s at the new rate. A step down (it still misses) comes back as a new proposal.
+function Start-JuicerGuiGameVerify {
+    $g = $script:Gui.Game
+    $v = $script:Gui.Verify
+    if (-not $g -or -not $v -or $v.GameId -ne $g.Id) { return }
+    if (-not (Confirm-JuicerGui "Para verificar $($g.Name) a $($v.Proposal.New) FPS:`n`n1. El juego tiene que haber arrancado con el ritmo nuevo: si estaba abierto al aplicarlo, ciérralo y ábrelo.`n2. Ponte en la misma escena exigente de antes (no un menú), sin Alt-Tab.`n3. Pulsa Sí y vuelve al juego antes de 10 segundos; juega con normalidad 45 segundos.`n`n¿Empezar?")) { return }
+    Start-JuicerGuiTask "Vuelve a $($g.Name): verifica en 10 s…" 'GameVerify' @{ Game = $g.Clone(); Proposal = $v.Proposal } {
+        param($r)
+        Show-JuicerGuiGamePage $r.Page
+        if (Test-JuicerGuiGameShown $r.Page.Game.Id) {
+            $p = $script:Gui.C.GameMeasurePanel
+            $i = 0
+            foreach ($f in @($r.Findings)) { $p.Children.Insert($i, (New-JuicerFindingCard $f)); $i++ }
+        }
+        # Settled (kept, or put back): nothing more to verify. Still without a result: it stays to try again.
+        if ($r.Decision.Action -in 'Confirmado', 'Revertir', 'Bajar') {
+            $script:Gui.Verify = $null
+            $script:Gui.C.BtnGameVerify.Visibility = 'Collapsed'
+        }
+        Show-JuicerGuiUndo
+        Show-JuicerGuiHome
+        Update-JuicerGuiPendingWatch $r.Pending
+        Set-JuicerGuiStatus 'Verificación terminada: el resultado está en la página del juego, en «Medir».'
+        if ($r.Next) { Invoke-JuicerGuiCalibrationProposal $r.Next $r.Page.Game }
     }
 }
 
@@ -2714,7 +2797,7 @@ function Start-JuicerGuiGameSetup {
 function Get-JuicerGuiLimiter {
     $m = $null
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
-    $cap = if ($m) { Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) @() ([double]$m.Display.ExactHz) } else { $null }
+    $cap = if ($m) { Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) @() ([double]$m.Display.ExactHz) (Get-JuicerVrrTop $m) } else { $null }
     $pacer = Read-JuicerPacer
     $limits = @(Get-JuicerFpsLimits)
     $state = $null
@@ -2931,6 +3014,7 @@ function Register-JuicerGuiHandlers {
             Start-JuicerGuiGameAction 'Fps' ([int]$t)
         }
         BtnGameCalibrate      = { Start-JuicerGuiGameMeasure 'GameCalibrate' }
+        BtnGameVerify         = { Start-JuicerGuiGameVerify }
         BtnGameMeasure        = { Start-JuicerGuiGameMeasure 'GameMeasure' }
         BtnGameInstallRtss    = {
             if (-not (Test-JuicerWinget)) { Show-JuicerGuiMessage 'Para instalarlo desde aquí hace falta winget: instala o actualiza «Instalador de aplicación» desde Microsoft Store. También puedes descargarlo de guru3d.com.' 'Warning' | Out-Null; return }
@@ -3288,7 +3372,7 @@ function Save-JuicerGuiPlacement {
 
 # What changes the system: closing the window in the middle of it would
 # leave the change half done.
-$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore', 'PacerPending', 'GameCalibrate', 'Shield')
+$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore', 'PacerPending', 'GameCalibrate', 'GameCalApply', 'GameVerify', 'Shield')
 
 # Keys: Esc goes back from a game's page, Ctrl+F searches in the tab that
 # has a search box, F5 reads the tab again.

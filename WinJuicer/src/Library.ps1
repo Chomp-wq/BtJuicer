@@ -30,12 +30,49 @@ $script:NotGameExe = '^(' + (@(
 function ConvertFrom-JuicerAcf {
     param([string]$Text)
     $v = @{}
-    foreach ($k in 'appid', 'name', 'installdir') {
+    foreach ($k in 'appid', 'name', 'installdir', 'buildid') {
         $m = [regex]::Match($Text, '"' + $k + '"\s+"((?:[^"\\]|\\.)*)"', 'IgnoreCase')
         if ($m.Success) { $v[$k] = $m.Groups[1].Value -replace '\\\\', '\' }
     }
     if (-not $v.installdir) { return $null }
-    @{ AppId = [string]$v.appid; Name = [string]$v.name; InstallDir = [string]$v.installdir }
+    @{ AppId = [string]$v.appid; Name = [string]$v.name; InstallDir = [string]$v.installdir; BuildId = [string]$v.buildid }
+}
+
+# The build of a game, to tell when an update has made an old calibration stale: «steam:<buildid>» from
+# the library's appmanifest when the game sits in a Steam library (steamapps\common\<dir>), else
+# «exe:<file version>» of its executable, else ''. Path is the executable (or the game's folder);
+# without it, the running process of that name is looked at.
+function Get-JuicerGameBuild {
+    param([string]$Exe, [string]$Path)
+    if (-not $Path -and $Exe) {
+        try {
+            $p = @(Get-Process -Name ([IO.Path]::GetFileNameWithoutExtension($Exe)) -ErrorAction Stop | Where-Object { $_.Path } | Select-Object -First 1)
+            if ($p.Count -gt 0) { $Path = [string]$p[0].Path }
+        } catch { Write-Verbose "Sin proceso de ${Exe}: $_" }
+    }
+    if (-not $Path) { return '' }
+    # Up the folders until one is steamapps\common\<installdir>.
+    $dir = if (Test-Path -LiteralPath $Path -PathType Leaf) { Split-Path -Parent $Path } else { $Path }
+    for ($i = 0; $dir -and $i -lt 8; $i++) {
+        $common = Split-Path -Parent $dir
+        if ($common -and (Split-Path -Leaf $common) -eq 'common') {
+            $lib = Split-Path -Parent $common
+            foreach ($acf in @(Get-ChildItem -LiteralPath $lib -Filter 'appmanifest_*.acf' -ErrorAction SilentlyContinue)) {
+                try { $a = ConvertFrom-JuicerAcf ([IO.File]::ReadAllText($acf.FullName)) } catch { continue }
+                if ($a -and $a.BuildId -and [string]$a.InstallDir -eq (Split-Path -Leaf $dir)) { return "steam:$($a.BuildId)" }
+            }
+            break
+        }
+        $dir = $common
+    }
+    if (Test-Path -LiteralPath $Path -PathType Leaf) {
+        try {
+            $v = [Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+            $ver = if ($v.FileVersion) { [string]$v.FileVersion } else { [string]$v.ProductVersion }
+            if ($ver) { return "exe:$ver" }
+        } catch { Write-Verbose "Sin versión de ${Path}: $_" }
+    }
+    ''
 }
 
 function Test-JuicerNotAGame { param([string]$Name) [bool]($Name -match $script:NotGameNames) }
@@ -506,17 +543,27 @@ function Get-JuicerGameStatus {
         $g.Safe = [bool]($p -is [hashtable] -and $p.Safe)
         $g.Minimal = [bool]($p -is [hashtable] -and $p.Minimal)
         $g.Waiting = $pacer.Pending.ContainsKey([string]$g.ExeName)
-        $cal = $pacer.Calibrated[[string]$g.ExeName]
-        $g.CalFps = $(if ($cal -is [hashtable] -and [int]$cal.Fps -gt 0) { [int]$cal.Fps } else { 0 })
-        $g.CalDate = $(if ($cal -is [hashtable]) { [string]$cal.Date } else { '' })
-        # Whether it is in force on this monitor: its age says nothing otherwise.
-        $g.CalState = ''
-        if ($g.CalFps) {
+        $per = $pacer.Calibrated[[string]$g.ExeName]
+        $cal = $null
+        if ($per -is [hashtable] -and $per.Count -gt 0) {
             if (-not $calRead) {
                 $calRead = $true
                 try { $calMonitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
             }
+            # The one for this monitor setup, else the latest of another (which is not used, and says so).
+            $cal = Select-JuicerCalibration $per $calMonitor
+        }
+        $g.CalFps = $(if ($cal -is [hashtable] -and [int]$cal.Fps -gt 0) { [int]$cal.Fps } else { 0 })
+        $g.CalDate = $(if ($cal -is [hashtable]) { [string]$cal.Date } else { '' })
+        # Whether it is in force on this monitor: its age says nothing otherwise.
+        $g.CalState = ''
+        $g.CalChanges = @()
+        if ($g.CalFps) {
             $g.CalState = Get-JuicerCalibrationState ([string]$g.ExeName) $cal $calMonitor $pacer
+            # What the PC runs now that it did not when it was calibrated (driver, game build, card, Windows).
+            if ($g.CalState -eq 'Activa' -and $cal.Fingerprint -is [hashtable]) {
+                try { $g.CalChanges = @(Get-JuicerCalibrationChanges $cal.Fingerprint (Get-JuicerCalibrationFingerprint ([string]$g.ExeName) ([string]$g.Exe))) } catch { Write-JuicerLog "Sin huella de $($g.ExeName): $_" }
+            }
         }
         $g
     }
@@ -528,7 +575,7 @@ function Format-JuicerGameStatus {
     if ($Game.Fps) { $p += '{0} FPS ({1:N2} ms)' -f $Game.Fps, (1000 / $Game.Fps) } elseif ($Game.Limited) { $p += 'frame pacer quitado fuera de Win Juicer' }
     # The age of a calibration only when it is the one in force; made for another screen it says so.
     if ($Game.Fps -and $Game.CalFps) {
-        if ($Game.CalState -eq 'Activa') { $age = Get-JuicerCalibrationAge $Game.CalDate $Game.CalFps; if ($age) { $p += $age.Text } }
+        if ($Game.CalState -eq 'Activa') { $age = Get-JuicerCalibrationAge $Game.CalDate $Game.CalFps -Changes @($Game.CalChanges); if ($age) { $p += $age.Text; if ($age.Changes.Count -gt 0) { $p += $age.Hint } } }
         elseif ($Game.CalState -eq 'OtroMonitor') { $p += 'calibración de otro monitor o modo' }
     }
     if ($Game.Gpu) { $p += 'GPU dedicada' }

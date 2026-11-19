@@ -82,8 +82,12 @@ function Get-JuicerGameTips {
     $name = if ($tip) { $tip.Name } elseif ($Title) { $Title } else { $ExeName }
     $area = "Consejos: $name"
     $out = @()
-    $cpuBound = $Measured -and $null -ne $Measured.GpuBound -and $Measured.GpuBound -lt 50
-    $gpuBound = $Measured -and $null -ne $Measured.GpuBound -and $Measured.GpuBound -ge 80
+    # Who limits, from the measurement as a whole: under a cap the card is idle part of every frame, which
+    # is the cap and not the processor (Get-JuicerFrameLimit tells that apart).
+    $limit = if ($Measured) { Get-JuicerFrameLimit $Measured } else { '' }
+    $cpuBound = $limit -eq 'CPU'
+    $gpuBound = $limit -eq 'GPU'
+    $paceBound = $limit -eq 'Ritmo'
 
     # Latency: what the game offers for it.
     # Reflex by the table of known games, or because the folder has its files
@@ -153,6 +157,8 @@ function Get-JuicerGameTips {
         $out += New-JuicerFinding $area 'Medio' "Tu última medida: el procesador limita (la gráfica espera el $(100 - $Measured.GpuBound) % del tiempo)" 'Lo que más le quita trabajo: distancia de visión y de detalle, densidad de multitudes, vegetación u objetos, y físicas. Bajar texturas o resolución no ayuda; subirlas sale gratis.'
     } elseif ($gpuBound) {
         $out += New-JuicerFinding $area 'Info' "Tu última medida: la gráfica limita (al máximo el $($Measured.GpuBound) % del tiempo)" 'DLSS, FSR o XeSS en «Calidad» dan un 30-50 % más con poca pérdida de nitidez; después, sombras, reflejos e iluminación volumétrica son lo que más cuesta.'
+    } elseif ($paceBound) {
+        $out += New-JuicerFinding $area 'Info' 'Tu última medida: limitado por el ritmo, hay margen' 'Ni el procesador ni la gráfica iban al límite: lo que marcaba los fotogramas era el límite de FPS. Si quieres más FPS, sube el ritmo (Calibrar lo hace si tu PC da para más); si ya estás en los Hz de tu pantalla, ese margen es latencia baja y no hace falta tocar nada, ni gráficos ni Boost de Reflex.'
     } elseif (-not $Measured) {
         $out += New-JuicerFinding $area 'Info' 'Mídelo para afinar más' 'Juegos > Medir FPS y frametimes: sabrás si limita el procesador o la gráfica, y estos consejos dirán qué bajar.'
     }

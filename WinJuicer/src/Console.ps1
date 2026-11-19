@@ -691,7 +691,7 @@ function Show-JuicerLimiter {
         $backend = Get-JuicerFpsBackend
         Write-JuicerWrapped ('Marca el ritmo con: ' + (Format-JuicerFpsBackend $backend) + '.' + $(if (-not $backend) { ' Instálalo desde «Instalar programas» (9) del menú principal.' } else { '' })) 2 'Gray'
         if ($m) {
-            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) @() ([double]$m.Display.ExactHz)
+            $cap = Get-JuicerFpsCap ([int]$m.Display.Hz) (Resolve-JuicerMonitorUse $m) $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) @() ([double]$m.Display.ExactHz) (Get-JuicerVrrTop $m)
             Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + '. Cómo la usas: ' + (Get-JuicerMonitorModes)[$m.Mode] + ". Ritmo recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
         }
         $limits = @(Get-JuicerFpsLimits)
@@ -700,10 +700,13 @@ function Show-JuicerLimiter {
         foreach ($g in $limits) {
             $n++
             $fps = if ($g.Exact -gt 0 -and $g.Backend -eq 'rtss') { '{0:N2} FPS' -f $g.Exact } elseif ($g.Fps) { "$($g.Fps) FPS" } else { 'sin ritmo ahora' }
-            $cal = $pacer.Calibrated[$g.Exe]
+            # The one for this monitor setup (else the latest of another, which is not used).
+            $cal = Select-JuicerCalibration $pacer.Calibrated[$g.Exe] $m
             # Its age only when it is the calibration in force on this monitor, used this way, with no rate of yours over it.
             $calState = Get-JuicerCalibrationState $g.Exe $cal $m $pacer
-            $age = $(if ($calState -eq 'Activa') { Get-JuicerCalibrationAge ([string]$cal.Date) ([int]$cal.Fps) } else { $null })
+            $changes = @()
+            if ($calState -eq 'Activa' -and $cal.Fingerprint -is [hashtable]) { try { $changes = @(Get-JuicerCalibrationChanges $cal.Fingerprint (Get-JuicerCalibrationFingerprint $g.Exe)) } catch { Write-JuicerLog "Sin huella de $($g.Exe): $_" } }
+            $age = $(if ($calState -eq 'Activa') { Get-JuicerCalibrationAge ([string]$cal.Date) ([int]$cal.Fps) -Changes $changes } else { $null })
             $calText = if ($age) { " ($($age.Text))" } elseif ($calState -eq 'OtroMonitor') { ' (calibración de otro monitor o modo)' } elseif ($calState -eq 'Activa') { ' (calibrado)' } else { '' }
             Write-Host ('  {0,2}. {1}: {2}{3}{4}' -f $n, $g.Exe, $fps, $calText, $(if ((Get-JuicerPacerPriority $g.Exe) -eq 'Latencia') { ' [latencia]' } else { '' }))
             if ($age -and $age.Stale) { Write-JuicerWrapped $age.Hint 6 'DarkGray' }
@@ -717,7 +720,7 @@ function Show-JuicerLimiter {
         Write-JuicerMenu @(
             @('A', 'Añadir un juego', 'por nombre del .exe, con el ritmo recomendado o el tuyo'),
             @('M', 'Añadir los juegos medidos', (@(Get-JuicerUnlimitedGames) -join ', ')),
-            @('C', 'Calibrar un juego', 'lo mide 60 s con su ritmo y lo ajusta a lo que sostiene'),
+            @('C', 'Calibrar un juego', 'lo mide 60, 90 o 120 s con su ritmo, te propone otro y, si aceptas, lo ajusta'),
             @('P', 'Prioridad de un juego', 'fluidez, o latencia mínima (por encima de los Hz al calibrar)'),
             @('Q', 'Quitar el frame pacer a un juego', 'por número'),
             @('U', 'Cómo usas tu monitor', 'VRR, ELMB/DyAc u otro estroboscopio, o frecuencia fija'),
@@ -737,11 +740,15 @@ function Show-JuicerLimiter {
             'C' {
                 $q = Read-JuicerChoice 'Número del juego'
                 if (-not ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count)) { continue }
-                Write-JuicerWrapped 'Abre el juego y prepara una escena exigente que puedas repetir. Tienes 10 segundos para volver al juego; juega con normalidad 60 segundos.' 2 'Gray'
+                $calExe = $limits[[int]$q - 1].Exe
+                Write-JuicerWrapped $script:CalibrateAdvice 2 'Gray'
+                $secs = Read-JuicerCalibrateSeconds
                 try {
-                    $f = @(Invoke-JuicerPacerCalibration -Exe $limits[[int]$q - 1].Exe -OnStatus ${function:Write-JuicerStatusLine} -Monitor $m)
+                    $f = @(Invoke-JuicerPacerCalibration -Exe $calExe -Seconds $secs -OnStatus ${function:Write-JuicerStatusLine} -Monitor $m)
                     Write-Host ''
                     Write-JuicerFindings $f
+                    $proposal = Get-JuicerCalibrationProposal $f
+                    if ($proposal) { Invoke-JuicerConsoleCalibration $proposal $m }
                 } catch {
                     Write-Host ''
                     Write-JuicerWrapped "No se pudo calibrar: $_" 2 'Yellow'
@@ -799,6 +806,38 @@ function Show-JuicerLimiter {
     }
 }
 
+# What to do before a calibration or a measurement starts, said wherever one starts.
+$script:CalibrateAdvice = 'Abre el juego y elige tu escena más exigente y habitual (no un menú), sin Alt-Tab, durante toda la medida. Tienes 10 segundos para volver al juego; juega con normalidad hasta que acabe.'
+
+# 60, 90 or 120 seconds: more is steadier (a longer scene, more spikes seen).
+function Read-JuicerCalibrateSeconds {
+    $s = Read-JuicerChoice 'Duración de la medida: 1 = 60 s, 2 = 90 s, 3 = 120 s (Intro = 60)'
+    switch ($s) { '2' { 90 } '3' { 120 } default { 60 } }
+}
+
+# What follows a calibration that proposes a new rate: nothing is changed until it is accepted; then
+# the person may verify it (45 s at the new rate), and if it still misses a lower one is proposed,
+# to accept the same way. At most four rounds.
+function Invoke-JuicerConsoleCalibration {
+    param([hashtable]$Proposal, [hashtable]$Monitor)
+    $p = $Proposal
+    for ($round = 0; $round -lt 4 -and $p; $round++) {
+        Write-Host ''
+        Write-JuicerWrapped ('Propuesta: {0} → {1} FPS. Hasta que aceptes, no se cambia nada.' -f $p.Old, $p.New) 2 'Cyan'
+        if (-not (Confirm-JuicerAction "¿Aplicar $($p.New) FPS a $($p.Exe)?")) { Write-JuicerWrapped 'No se ha cambiado nada.' 2 'Gray'; return }
+        $applied = @(Save-JuicerPacerCalibration $p $Monitor)
+        Write-Host ''
+        Write-JuicerFindings $applied
+        if (-not $script:Interactive) { return }
+        $a = Read-JuicerChoice 'Verificar (45 s): con el juego ya arrancado con el ritmo nuevo (si estaba abierto, ciérralo y ábrelo), escribe V; Intro para dejarlo así'
+        if ($a.ToUpperInvariant() -ne 'V') { return }
+        $v = Invoke-JuicerPacerVerify $p -OnStatus ${function:Write-JuicerStatusLine} -Monitor $Monitor
+        Write-Host ''
+        Write-JuicerFindings @($v.Findings)
+        $p = $v.NextProposal
+    }
+}
+
 # One line that rewrites itself: a countdown, not a scrolling list.
 function Write-JuicerStatusLine {
     param([string]$Text)
@@ -807,7 +846,7 @@ function Write-JuicerStatusLine {
 
 function Show-JuicerFrameMeasure {
     Write-JuicerHeader 'Medir FPS y frametimes'
-    Write-JuicerWrapped 'Abre el juego y prepara una escena que puedas repetir. Al empezar tienes 10 segundos para volver al juego; juega con normalidad hasta que acabe. La primera vez descarga PresentMon, de Intel.' 2 'Gray'
+    Write-JuicerWrapped ($script:CalibrateAdvice + ' La primera vez descarga PresentMon, de Intel.') 2 'Gray'
     Write-Host ''
     $s = Read-JuicerChoice 'Segundos de medida (Intro = 60)'
     $secs = 60
@@ -1780,9 +1819,19 @@ function Start-Juicer {
         try {
             $fgWarn = Get-JuicerFrameGenMeasureWarning (ConvertTo-JuicerExeName $CalibrarJuego)
             if ($fgWarn) { Write-JuicerWrapped $fgWarn 2 'Yellow'; Write-Host '' }
+            Write-JuicerWrapped $script:CalibrateAdvice 2 'Gray'
             $f = @(Invoke-JuicerPacerCalibration -Exe $CalibrarJuego -Seconds $(if ($MedirJuego) { $MedirJuego } else { 60 }) -OnStatus ${function:Write-JuicerStatusLine} -Monitor $monitor -NoFrameGenWarning)
             Write-Host ''
             Write-JuicerFindings $f
+            # It proposes; it changes the rate only with -Si, or when it is accepted (a closed input is a no).
+            $proposal = Get-JuicerCalibrationProposal $f
+            if ($proposal) {
+                if (Confirm-JuicerAction ('¿Aplicar {0} → {1} FPS a {2}?' -f $proposal.Old, $proposal.New, $proposal.Exe)) {
+                    Write-JuicerFindings @(Save-JuicerPacerCalibration $proposal $monitor)
+                } else {
+                    Write-Host '  No se ha cambiado nada. Con -Si se aplica sin preguntar.'
+                }
+            }
             return 0
         } catch {
             Write-Host "  No se pudo calibrar: $_" -ForegroundColor Yellow

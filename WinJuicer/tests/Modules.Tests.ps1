@@ -1484,9 +1484,17 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
         Mock -ModuleName WinJuicer Invoke-JuicerFrameCapture { New-JuicerFinding 'Juego: cs2.exe' 'Info' 'medida' }
         Mock -ModuleName WinJuicer Get-JuicerPreviousFrameResult { $slow }.GetNewClosure()
         $f = @(Invoke-JuicerPacerCalibration 'cs2.exe' -Monitor $Mon)
-        $f[-1].Title | Should -Be 'Calibrado: de 171 a 127 FPS'
+        # It proposes, and nothing has changed yet.
+        $f[-1].Title | Should -Be 'Propuesta: de 171 a 127 FPS'
+        $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 171
+        (Read-JuicerPacer).Calibrated.ContainsKey('cs2.exe') | Should -BeFalse
+        $p = Get-JuicerCalibrationProposal $f
+        $p.Old | Should -Be 171
+        $p.New | Should -Be 127
+        $r = @(Save-JuicerPacerCalibration $p $Mon)
+        $r[-1].Title | Should -Be 'Calibrado: de 171 a 127 FPS'
         $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 127
-        (Read-JuicerPacer).Calibrated['cs2.exe'].Fps | Should -Be 127
+        (Read-JuicerPacer).Calibrated['cs2.exe'][(Get-JuicerLimitSignature $Mon)].Fps | Should -Be 127
         # Recalculating keeps it while the monitor is the same...
         @(Update-JuicerFpsLimits $Mon) | Out-Null
         $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 127
@@ -2048,6 +2056,7 @@ Describe 'Mantener los juegos optimizados' {
         @(Invoke-JuicerUpkeep -Quiet).Count | Should -Be 0
         # The monitor goes to 240 Hz: the limit follows.
         $script:Mon.Display.Hz = 240
+        $script:Mon.Vrr = @{ Min = 48; Max = 240; Kind = 'FreeSync' }
         [void](Invoke-JuicerUpkeep -Quiet)
         $M.Backend.State.FpsLimits['nuevo.exe'] | Should -Be 224
         (Read-JuicerUpkeepState).Signature | Should -BeLike '240|*'
