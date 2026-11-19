@@ -650,17 +650,34 @@ function Get-WinRtssDir {
 }
 
 $script:NvApiOk = $null
+$script:NvApiFailedAt = $null
+$script:FpsBackendAt = $null
+
+# How long a failure is remembered before trying again: NVAPI can fail for a
+# moment (the driver restarting, a display mode change, the PC just resumed),
+# and remembering that for the whole life of the process would leave the frame
+# pacer without its NVIDIA engine until Win Juicer is reopened.
+$script:NvApiRetrySeconds = 30
+
+# Whether a failure noted At is still recent enough not to look again.
+function Test-JuicerFailureCached {
+    param($At, [datetime]$Now = (Get-Date), [int]$Seconds = $script:NvApiRetrySeconds)
+    if ($null -eq $At) { return $false }
+    ($Now - [datetime]$At).TotalSeconds -lt $Seconds
+}
 
 function Test-WinNvApi {
-    if ($null -eq $script:NvApiOk) {
-        $script:NvApiOk = $false
-        try {
-            Initialize-JuicerNvApi
-            $script:NvApiOk = [WinJuicer.NvDrs]::Available()
-        } catch {
-            Write-JuicerLog "NVAPI no disponible: $_"
-        }
+    # A success is kept; a failure only for a short while.
+    if ($script:NvApiOk -eq $true) { return $true }
+    if ($null -ne $script:NvApiOk -and (Test-JuicerFailureCached $script:NvApiFailedAt)) { return $false }
+    $script:NvApiOk = $false
+    try {
+        Initialize-JuicerNvApi
+        $script:NvApiOk = [WinJuicer.NvDrs]::Available()
+    } catch {
+        Write-JuicerLog "NVAPI no disponible: $_"
     }
+    if (-not $script:NvApiOk) { $script:NvApiFailedAt = Get-Date }
     $script:NvApiOk
 }
 
@@ -669,14 +686,58 @@ function Get-WinFpsEngines {
 }
 
 # The driver's when there is one, RivaTuner otherwise, unless the frame
-# pacer was told to use one of them (and it is there).
+# pacer was told to use one of them (and it is there). The choice is kept,
+# except while NVAPI is failing: then whatever was picked without it (RivaTuner,
+# or nothing) is only kept for a moment, so the driver comes back when it answers.
 function Get-WinFpsBackend {
-    if ($null -eq $script:FpsBackendName) {
-        $engines = @(Get-WinFpsEngines)
-        $want = Get-JuicerPacerEngine
-        $script:FpsBackendName = if ($engines -contains $want) { $want } elseif ($engines.Count -gt 0) { $engines[0] } else { '' }
-    }
+    $name = $script:FpsBackendName
+    if ($null -ne $name -and ($script:NvApiOk -eq $true -or (Test-JuicerFailureCached $script:FpsBackendAt))) { return $name }
+    $engines = @(Get-WinFpsEngines)
+    $want = Get-JuicerPacerEngine
+    $script:FpsBackendName = if ($engines -contains $want) { $want } elseif ($engines.Count -gt 0) { $engines[0] } else { '' }
+    $script:FpsBackendAt = Get-Date
     $script:FpsBackendName
+}
+
+# NVAPI's status codes (nvapi_lite_common.h and nvapi.h), the ones that show up
+# with the driver's profile store, in words. -160, -163, -166 and -167 are the
+# ones Native.ps1 already tests for. Anything else keeps its number only.
+$script:NvApiErrors = @{
+    -1 = 'el driver de NVIDIA devolvió un error sin más detalle: reinicia el equipo o actualiza el driver'
+    -2 = 'no se encuentra la biblioteca del driver de NVIDIA (nvapi64.dll): instala o repara el driver'
+    -3 = 'este driver de NVIDIA no tiene la función que hace falta: actualízalo'
+    -4 = 'el driver de NVIDIA no responde: reinicia el equipo o actualiza el driver'
+    -5 = 'el driver de NVIDIA rechazó el valor que se le pasó: actualiza el driver'
+    -6 = 'no hay una gráfica NVIDIA activa con su driver: comprueba que esté instalado y que el equipo no la tenga desactivada'
+    -9 = 'la versión del driver de NVIDIA no encaja con la de Win Juicer: actualiza el driver y Win Juicer'
+    -137 = 'hace falta ejecutar Win Juicer como administrador para cambiar los perfiles de NVIDIA'
+    -160 = 'ese ajuste no existe en este driver de NVIDIA: actualízalo'
+    -163 = 'el perfil del juego no existe en el driver de NVIDIA'
+    -166 = 'el juego no está en ningún perfil del driver de NVIDIA'
+    -167 = 'el juego ya está en otro perfil del driver de NVIDIA'
+}
+
+# The message of an NVAPI failure («NVAPI Initialize: código -4») in Spanish,
+# with the code kept at the end so the log and a bug report still have it. A
+# message with no code, or one that is not known, goes back as it came.
+function Convert-JuicerNvApiError {
+    param([string]$Message)
+    if ($Message -notmatch 'NVAPI\s+(?<what>[^:]+):\s*código\s+(?<code>-?\d+)') { return $Message }
+    $code = [int]$Matches.code
+    $text = $script:NvApiErrors[$code]
+    if (-not $text) { return $Message }
+    $out = $text.Substring(0, 1).ToUpperInvariant() + $text.Substring(1)
+    "$out (NVAPI $($Matches.what.Trim()), código $code)."
+}
+
+# The text to throw for an NVAPI failure caught: in words, with the original
+# (and its code) in the log. A message that is not NVAPI's goes back as it came.
+function Get-WinNvApiFailure {
+    param($ErrorRecord)
+    $raw = "$($ErrorRecord.Exception.Message)"
+    $nice = Convert-JuicerNvApiError $raw
+    if ($nice -ne $raw) { Write-JuicerLog "NVAPI: $raw" }
+    $nice
 }
 
 function Get-WinRtssProfile { param([string]$Exe) Join-Path (Join-Path (Get-WinRtssDir) 'Profiles') "$Exe.cfg" }
@@ -686,7 +747,7 @@ function Read-WinFpsLimit {
     switch ($(if ($Backend) { $Backend } else { Get-WinFpsBackend })) {
         'nvidia' {
             if (-not (Test-WinNvApi)) { return $null }
-            $v = [WinJuicer.NvDrs]::GetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId)
+            try { $v = [WinJuicer.NvDrs]::GetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId) } catch { throw (Get-WinNvApiFailure $_) }
             return @{ Backend = 'nvidia'; Fps = $(if ($v -gt 0) { $v } else { $null }); Existed = ($v -ge 0) }
         }
         'rtss' {
@@ -708,7 +769,10 @@ function Set-WinFpsLimit {
     param([string]$Exe, $Fps, [string]$Backend, [switch]$Remove, [double]$Exact = 0)
     $n = if ($Fps) { [int]$Fps } else { 0 }
     switch ($Backend) {
-        'nvidia' { Initialize-JuicerNvApi; [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } else { -1 })) }
+        'nvidia' {
+            Initialize-JuicerNvApi
+            try { [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } else { -1 })) } catch { throw (Get-WinNvApiFailure $_) }
+        }
         'rtss' {
             $f = Get-WinRtssProfile $Exe
             if ($Remove) { Remove-Item -LiteralPath $f -Force -ErrorAction SilentlyContinue; Update-WinRtssProfiles; return }
@@ -799,7 +863,7 @@ namespace WinJuicer {
 function Read-WinNvSetting {
     param([string]$Exe, [uint32]$Id)
     if (-not (Test-WinNvApi)) { return $null }
-    $v = [WinJuicer.NvDrs]::GetInfo($Exe, $Id)
+    try { $v = [WinJuicer.NvDrs]::GetInfo($Exe, $Id) } catch { throw (Get-WinNvApiFailure $_) }
     @{ Value = $(if ($v[0] -ge 0) { [uint32]$v[0] } else { $null }); Predefined = $(if ($v[1] -ge 0) { [uint32]$v[1] } else { $null }) }
 }
 
@@ -832,10 +896,48 @@ function Read-WinAppIncidents {
     , $out
 }
 
+# NVIDIA keeps every profile (its own, the games', the user's) in a pair of
+# files, nvdrsdb0.bin and nvdrsdb1.bin, in ProgramData. Win Juicer writes to
+# them through the driver; these two copy the files out and back, so that a
+# profile store a change left in a bad state can be put back whole. Both take
+# the folder to use and return the file names copied (callers wrap them in @()).
+function Get-WinNvDrsDir {
+    if (-not $env:ProgramData) { return $null }
+    Join-Path $env:ProgramData 'NVIDIA Corporation\Drs'
+}
+
+function Backup-WinNvProfiles {
+    param([string]$Dest)
+    $src = Get-WinNvDrsDir
+    if (-not $src -or -not (Test-Path -LiteralPath $src -PathType Container)) { return @() }
+    $names = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $src -Filter 'nvdrsdb*.bin' -File -ErrorAction Stop)) {
+        Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $Dest $f.Name) -Force -ErrorAction Stop
+        $names += $f.Name
+    }
+    $names
+}
+
+# The driver reads these files when it starts and writes them as it saves: a
+# restore only takes hold after its service restarts, which in practice means
+# restarting the PC.
+function Restore-WinNvProfiles {
+    param([string]$Source)
+    $dst = Get-WinNvDrsDir
+    if (-not $dst) { throw 'No se encuentra la carpeta de perfiles de NVIDIA.' }
+    if (-not (Test-Path -LiteralPath $dst -PathType Container)) { New-Item -ItemType Directory -Path $dst -Force | Out-Null }
+    $names = @()
+    foreach ($f in @(Get-ChildItem -LiteralPath $Source -Filter 'nvdrsdb*.bin' -File -ErrorAction Stop)) {
+        Copy-Item -LiteralPath $f.FullName -Destination (Join-Path $dst $f.Name) -Force -ErrorAction Stop
+        $names += $f.Name
+    }
+    $names
+}
+
 function Set-WinNvSetting {
     param([string]$Exe, [uint32]$Id, $Value)
     Initialize-JuicerNvApi
-    [WinJuicer.NvDrs]::SetDword($Exe, $Id, $(if ($null -ne $Value) { [long]$Value } else { -1 }))
+    try { [WinJuicer.NvDrs]::SetDword($Exe, $Id, $(if ($null -ne $Value) { [long]$Value } else { -1 })) } catch { throw (Get-WinNvApiFailure $_) }
 }
 
 function New-JuicerWindowsBackend {
@@ -888,6 +990,8 @@ function New-JuicerWindowsBackend {
         FpsWrite     = ${function:Set-WinFpsLimit}
         NvRead       = ${function:Read-WinNvSetting}
         NvWrite      = ${function:Set-WinNvSetting}
+        NvBackup     = ${function:Backup-WinNvProfiles}
+        NvRestore    = ${function:Restore-WinNvProfiles}
         ProcRunning  = ${function:Test-WinProcessRunning}
         AppIncidents = ${function:Read-WinAppIncidents}
         PacerState   = ${function:Get-WinPacerState}
@@ -923,6 +1027,7 @@ function New-JuicerMemoryBackend {
         FpsLimits = @{}   # exe -> fps; an entry with 0 is a profile without a limit
         NvSettings = @{}  # 'exe|id' -> value, the user values of NVIDIA profiles
         NvPredefined = @{}  # 'exe|id' -> value NVIDIA ships for that game
+        NvDrsFiles = @{}    # nvdrsdb*.bin name -> content: the driver's profile store, for the backup
         Running  = New-Object System.Collections.ArrayList   # .exe names open now
         Incidents = New-Object System.Collections.ArrayList  # @{ Exe; Kind; Time; Module }
         DnsDown  = New-Object System.Collections.ArrayList   # DNS servers that do not answer
@@ -1078,6 +1183,26 @@ function New-JuicerMemoryBackend {
             param($Exe, $Id, $Value)
             $k = '{0}|{1}' -f $Exe, [uint32]$Id
             if ($null -eq $Value) { $script:Mem.NvSettings.Remove($k) } else { $script:Mem.NvSettings[$k] = [uint32]$Value }
+        }
+        NvBackup    = {
+            param($Dest)
+            [void]$script:Mem.Calls.Add("nv-backup $Dest")
+            $names = @()
+            foreach ($n in @($script:Mem.NvDrsFiles.Keys | Sort-Object)) {
+                [IO.File]::WriteAllText((Join-Path $Dest $n), [string]$script:Mem.NvDrsFiles[$n])
+                $names += $n
+            }
+            $names
+        }
+        NvRestore   = {
+            param($Source)
+            [void]$script:Mem.Calls.Add("nv-restore $Source")
+            $names = @()
+            foreach ($f in @(Get-ChildItem -LiteralPath $Source -Filter 'nvdrsdb*.bin' -File)) {
+                $script:Mem.NvDrsFiles[$f.Name] = [IO.File]::ReadAllText($f.FullName)
+                $names += $f.Name
+            }
+            $names
         }
         PacerState  = { $script:Mem.Pacer }
         ProcRunning = { param($Exe) $script:Mem.Running -contains (ConvertTo-JuicerExeName $Exe) }

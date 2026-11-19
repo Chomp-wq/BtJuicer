@@ -97,11 +97,25 @@ function ConvertFrom-JuicerEdidInfo {
 function Get-JuicerVrrRange {
     param([hashtable]$Info)
     if (-not $Info) { return $null }
-    if ($Info.FreeSync -and $Info.FreeSyncMax -gt $Info.FreeSyncMin -and $Info.FreeSyncMin -gt 0) { return @{ Min = $Info.FreeSyncMin; Max = $Info.FreeSyncMax; Kind = 'FreeSync' } }
+    if ($Info.FreeSync -and $Info.FreeSyncMax -gt $Info.FreeSyncMin -and $Info.FreeSyncMin -gt 0) { return @{ Min = $Info.FreeSyncMin; Max = $Info.FreeSyncMax; Kind = 'FreeSync'; Trusted = $true } }
     if ($Info.HdmiVrrMax -gt $Info.HdmiVrrMin -and $Info.HdmiVrrMin -gt 0) { return @{ Min = $Info.HdmiVrrMin; Max = $Info.HdmiVrrMax; Kind = 'HDMI 2.1 VRR' } }
     if ($Info.FreeSync -and $Info.RangeMax -gt $Info.RangeMin) { return @{ Min = $Info.RangeMin; Max = $Info.RangeMax; Kind = 'FreeSync' } }
     if ($Info.FreeSync) { return @{ Min = 0; Max = 0; Kind = 'FreeSync' } }
     $null
+}
+
+# The VRR top to cap the frame pacer with, or 0. Only the range from AMD's
+# FreeSync block is trusted for that: the HDMI Forum block's offsets are not
+# verified and the generic range limits often stop below modes a monitor does
+# run with VRR, and a wrong top would lower every game's rate. A top far below
+# the refresh (under 60 %) is taken as a misread, not as the range.
+function Get-JuicerVrrTop {
+    param([hashtable]$Monitor)
+    if (-not $Monitor -or -not $Monitor.Vrr -or -not $Monitor.Vrr.Trusted) { return 0 }
+    $max = [int]$Monitor.Vrr.Max
+    $hz = if ($Monitor.Display) { [int]$Monitor.Display.Hz } else { 0 }
+    if ($max -le 0 -or ($hz -gt 0 -and $max -lt 0.6 * $hz)) { return 0 }
+    $max
 }
 
 # --- How each monitor is used --------------------------------------------
@@ -280,7 +294,7 @@ function Get-JuicerMonitorFindings {
         $hz = [int]$d.MaxHz
         $use = Resolve-JuicerMonitorUse $m
         $rates = @($d.RefreshRates | Where-Object { $_ })
-        $cap = Get-JuicerFpsCap $hz $use $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) $rates
+        $cap = Get-JuicerFpsCap $hz $use $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) $rates 0 (Get-JuicerVrrTop $m)
         $strobe = if ($script:StrobeNames.Contains($i.Brand)) { $script:StrobeNames[$i.Brand] } else { 'el estroboscopio' }
         $vrrHow = switch ($GpuVendor) {
             'NVIDIA' { "En el Panel de control de NVIDIA > Configurar G-SYNC, actívalo «para pantalla completa y en ventana» (si sale «no validado», actívalo igualmente). Después, en Administrar la configuración 3D: Sincronización vertical «Activada» y, en los juegos, desactivada. En juegos con NVIDIA Reflex, actívalo (On; On + Boost si limita el procesador)." }
@@ -318,6 +332,9 @@ function Get-JuicerMonitorFindings {
             $out += New-JuicerFinding 'Monitor' 'Bajo' "Por debajo de $($m.Vrr.Min) FPS se pierde la frecuencia variable" "Su rango ($($m.Vrr.Min)–$($m.Vrr.Max) Hz) no llega para duplicar fotogramas (LFC): si un juego baja de ahí vuelven los tirones. Ajusta la calidad para mantenerte por encima."
         }
 
+        if ($m.Vrr -and $use -in 'VRR', 'EstroboSync' -and (Get-JuicerVrrTop $m) -gt 0 -and $m.Vrr.Max -lt $hz) {
+            $out += New-JuicerFinding 'Monitor' 'Medio' "Tu pantalla va a $hz Hz pero su VRR llega a $($m.Vrr.Max)" "Por encima de $($m.Vrr.Max) FPS la frecuencia variable se apaga y vuelven los cortes o la espera de la sincronización vertical. Win Juicer calcula el ritmo con $($m.Vrr.Max) Hz ($($cap.Fps) FPS), no con los $hz. Si el monitor tiene un modo «Overclock» o un perfil con otro rango, mira si el VRR llega a más con él."
+        }
         if (-not $oled -and $hz -ge 120 -and $use -in 'VRR', 'Fijo' -and $script:StrobeNames.Contains($i.Brand)) {
             $holds = @($Games | Where-Object { $_.Low1 -ge $hz })
             $tail = if ($holds.Count -gt 0) { " En tus medidas, $(($holds | ForEach-Object { $_.Application }) -join ', ') no baja de $hz FPS: ahí te serviría." } else { '' }

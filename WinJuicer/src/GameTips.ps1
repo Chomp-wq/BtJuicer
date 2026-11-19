@@ -82,8 +82,12 @@ function Get-JuicerGameTips {
     $name = if ($tip) { $tip.Name } elseif ($Title) { $Title } else { $ExeName }
     $area = "Consejos: $name"
     $out = @()
-    $cpuBound = $Measured -and $null -ne $Measured.GpuBound -and $Measured.GpuBound -lt 50
-    $gpuBound = $Measured -and $null -ne $Measured.GpuBound -and $Measured.GpuBound -ge 80
+    # Who limits, from the measurement as a whole: under a cap the card is idle part of every frame, which
+    # is the cap and not the processor (Get-JuicerFrameLimit tells that apart).
+    $limit = if ($Measured) { Get-JuicerFrameLimit $Measured } else { '' }
+    $cpuBound = $limit -eq 'CPU'
+    $gpuBound = $limit -eq 'GPU'
+    $paceBound = $limit -eq 'Ritmo'
 
     # Latency: what the game offers for it.
     # Reflex by the table of known games, or because the folder has its files
@@ -153,6 +157,8 @@ function Get-JuicerGameTips {
         $out += New-JuicerFinding $area 'Medio' "Tu última medida: el procesador limita (la gráfica espera el $(100 - $Measured.GpuBound) % del tiempo)" 'Lo que más le quita trabajo: distancia de visión y de detalle, densidad de multitudes, vegetación u objetos, y físicas. Bajar texturas o resolución no ayuda; subirlas sale gratis.'
     } elseif ($gpuBound) {
         $out += New-JuicerFinding $area 'Info' "Tu última medida: la gráfica limita (al máximo el $($Measured.GpuBound) % del tiempo)" 'DLSS, FSR o XeSS en «Calidad» dan un 30-50 % más con poca pérdida de nitidez; después, sombras, reflejos e iluminación volumétrica son lo que más cuesta.'
+    } elseif ($paceBound) {
+        $out += New-JuicerFinding $area 'Info' 'Tu última medida: limitado por el ritmo, hay margen' 'Ni el procesador ni la gráfica iban al límite: lo que marcaba los fotogramas era el límite de FPS. Si quieres más FPS, sube el ritmo (Calibrar lo hace si tu PC da para más); si ya estás en los Hz de tu pantalla, ese margen es latencia baja y no hace falta tocar nada, ni gráficos ni Boost de Reflex.'
     } elseif (-not $Measured) {
         $out += New-JuicerFinding $area 'Info' 'Mídelo para afinar más' 'Juegos > Medir FPS y frametimes: sabrás si limita el procesador o la gráfica, y estos consejos dirán qué bajar.'
     }
@@ -188,7 +194,27 @@ function Get-JuicerMainGpuVendor {
 # Update-JuicerGameTech keeps it. Files mean the game is capable, not that it
 # is on, and without them nothing is known, so the note says so.
 # The cap is rounded down, the same way Get-JuicerFpsCap does it.
+# VSyncForced is false in prudent mode, where Win Juicer leaves V-Sync as the
+# game has it: Reflex only caps with G-SYNC and V-Sync both on, so the note then
+# says «if you have V-Sync on» instead of stating it as a fact.
 function Get-JuicerReflexCapNote {
+    param([string]$ExeName, [int]$Fps, [int]$Hz, [string]$Use, [string]$GpuVendor, [hashtable]$Tech, [bool]$VSyncForced = $true)
+    $r = Get-JuicerReflexCapSource $ExeName $Fps $Hz $Use $GpuVendor $Tech
+    if (-not $r) { return $null }
+    $cap = $r.Cap
+    $lead = if ($r.ByTable) { 'Con NVIDIA Reflex activado en el juego y G-SYNC' } else { 'La carpeta de este juego trae los archivos de NVIDIA Reflex (puede usarlo); si lo tienes activado en el juego y usas G-SYNC' }
+    if (-not $VSyncForced) {
+        return "$lead, si además tienes la V-Sync activada (en modo prudente Win Juicer no la fuerza), el propio juego se queda en $cap FPS: es el tope de Reflex para tus $Hz Hz y manda el más bajo. Sin V-Sync, ese tope no se aplica. Para pasar de ahí con V-Sync tendrías que apagar Reflex en el juego (pierdes latencia)."
+    }
+    "$lead, el propio juego se queda en $cap FPS: es el tope de Reflex para tus $Hz Hz y manda el más bajo. Es también lo recomendado. Para pasar de ahí tendrías que apagar Reflex en el juego (pierdes latencia)."
+}
+
+# Whether a rate would be capped by Reflex, and at what: @{ Cap; ByTable } or
+# $null. The conditions the note and the effective-rate estimate share: NVIDIA
+# (the vendor must be known), variable refresh, a game that has Reflex (the
+# table, or files in its folder), and a rate above the Reflex cap and up to
+# the refresh.
+function Get-JuicerReflexCapSource {
     param([string]$ExeName, [int]$Fps, [int]$Hz, [string]$Use, [string]$GpuVendor, [hashtable]$Tech)
     if ($GpuVendor -ne 'NVIDIA' -or $Use -notin 'VRR', 'EstroboSync' -or $Hz -le 0 -or $Fps -le 0) { return $null }
     $tip = Find-JuicerGameTip $ExeName
@@ -197,8 +223,7 @@ function Get-JuicerReflexCapNote {
     if (-not ($byTable -or $byFiles)) { return $null }
     $cap = Get-JuicerVrrCap $Hz
     if ($Fps -le $cap -or $Fps -gt $Hz) { return $null }
-    $lead = if ($byTable) { 'Con NVIDIA Reflex activado en el juego y G-SYNC' } else { 'La carpeta de este juego trae los archivos de NVIDIA Reflex (puede usarlo); si lo tienes activado en el juego y usas G-SYNC' }
-    "$lead, el propio juego se queda en $cap FPS: es el tope de Reflex para tus $Hz Hz y manda el más bajo. Es también lo recomendado. Para pasar de ahí tendrías que apagar Reflex en el juego (pierdes latencia)."
+    @{ Cap = $cap; ByTable = $byTable }
 }
 
 # Measuring a game that has frame generation while RivaTuner paces it: RivaTuner
@@ -222,7 +247,7 @@ function Get-JuicerReflexCapNoteHere {
     if ($manual -le 0) { return $null }
     if (-not $Monitor) { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-Verbose "Sin monitor: $_" } }
     if (-not $Monitor -or -not $Monitor.Display) { return $null }
-    Get-JuicerReflexCapNote $ExeName $manual ([int]$Monitor.Display.Hz) (Resolve-JuicerMonitorUse $Monitor) (Get-JuicerMainGpuVendor) (Get-JuicerGameTech $ExeName)
+    Get-JuicerReflexCapNote $ExeName $manual ([int]$Monitor.Display.Hz) (Resolve-JuicerMonitorUse $Monitor) (Get-JuicerMainGpuVendor) (Get-JuicerGameTech $ExeName) (-not (Test-JuicerPacerMinimal $ExeName))
 }
 
 function Get-JuicerGameTipsHere {

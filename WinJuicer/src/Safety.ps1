@@ -197,20 +197,93 @@ function Repair-JuicerGameSetups {
     $out
 }
 
-# Anti-cheats a game ships in its own folder. Only to say so where it
-# matters: RivaTuner hooks into the game to pace it, and although most
-# anti-cheats accept it, a game that closes or kicks with it is better
-# paced by its own limit.
+# Anti-cheats a game ships in its own folder, or that its launcher installs
+# for it. Only to say so where it matters: RivaTuner hooks into the game to
+# pace it, and an anti-cheat treats a hook as a cheat's injection: some close
+# the game or kick the player, a few ban. So a game with one is paced by the
+# NVIDIA driver (nothing is injected) or by its own limit, never by RivaTuner
+# (see Test-JuicerRtssBlocked). Only what is reliable is marked; each table
+# says how sure the marker is.
+
+# Folder names (one level under the game's) that only an anti-cheat ships.
+# Reliable: they are the vendor's own install folders.
 $script:AntiCheatMarks = [ordered]@{
     'EasyAntiCheat' = 'Easy Anti-Cheat'; 'EasyAntiCheat_EOS' = 'Easy Anti-Cheat'; 'BattlEye' = 'BattlEye'
-    'EAAntiCheat' = 'EA Anti-Cheat'; 'GameGuard' = 'nProtect GameGuard'; 'XIGNCODE' = 'XIGNCODE3'
+    'EAAntiCheat' = 'EA Anti-Cheat (Javelin)'; 'GameGuard' = 'nProtect GameGuard'; 'XIGNCODE' = 'XIGNCODE3'
+    'AntiCheatExpert' = 'Anti-Cheat Expert (Tencent ACE)'
 }
 
+# File names (the game's folder and one level under it), wildcards allowed.
+# EAAntiCheat.GameServiceLauncher.exe is EA's Javelin: reliable. mhyprot2.sys is
+# HoYoverse's driver, NeacSafe64.sys NetEase's, ACE-BASE.sys Tencent's ACE: all
+# ship in the game's folder, but I know them from memory of installs, not a
+# spec. atvi-randgrid_sy.sys is Call of Duty's Ricochet driver (same caveat).
+# faceit* is a guess: FACEIT AC normally lives in Program Files, so this only
+# catches a copy dropped next to the game; the service check below is the one
+# that counts for it. RobloxPlayerBeta.exe is the client that embeds Hyperion
+# (Byfron): reliable.
+$script:AntiCheatFiles = [ordered]@{
+    'EAAntiCheat*.exe' = 'EA Anti-Cheat (Javelin)'
+    'mhyprot*' = 'mhyprot (HoYoverse)'
+    'NeacSafe*' = 'NetEase Anti-Cheat'
+    'ACE-*' = 'Anti-Cheat Expert (Tencent ACE)'
+    'atvi-randgrid*' = 'Ricochet (Call of Duty)'
+    'RobloxPlayerBeta.exe' = 'Hyperion (Roblox)'
+    'faceit*' = 'FACEIT Anti-Cheat'
+}
+
+# Games whose anti-cheat is not in their folder, by .exe name (regex). Ricochet
+# is built into Call of Duty's own executables (the names change with each
+# release: uncertain, hence the driver file above as well). Vanguard comes with
+# Riot's games (VALORANT, and League of Legends since 2024).
+$script:AntiCheatExes = [ordered]@{
+    '^(cod\d*(-cod)?|modernwarfare\d*|blackopscoldwar|blackops\d|warzone)\.exe$' = 'Ricochet (Call of Duty)'
+    '^robloxplayerbeta\.exe$' = 'Hyperion (Roblox)'
+}
+$script:RiotExes = '^(valorant(-win64-shipping)?|league of legends)\.exe$'
+# FACEIT's client matters for the games it covers (CS2/CS:GO); the service is
+# «FACEIT» (reliable), but it exists for everything on the PC, so it only counts
+# with those executables.
+$script:FaceitExes = '^(cs2|csgo)\.exe$'
+
+# The anti-cheat of a game, or ''. Dir is the game's folder; ExeName (optional)
+# adds what its name says, and the services Windows has (Vanguard's «vgc»,
+# FACEIT's) are looked at only for the games they belong to.
 function Get-JuicerGameAntiCheat {
-    param([string]$Dir)
-    if (-not $Dir -or -not (Test-Path -LiteralPath $Dir -PathType Container)) { return '' }
-    $names = @(Get-ChildItem -LiteralPath $Dir -Directory -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
-    foreach ($k in $script:AntiCheatMarks.Keys) { if ($names -contains $k) { return $script:AntiCheatMarks[$k] } }
-    if (@(Get-ChildItem -LiteralPath $Dir -Filter 'EAAntiCheat*.exe' -File -ErrorAction SilentlyContinue).Count -gt 0) { return 'EA Anti-Cheat' }
+    param([string]$Dir, [string]$ExeName = '')
+    $exe = if ($ExeName) { (ConvertTo-JuicerExeName $ExeName) } else { '' }
+    if ($Dir -and (Test-Path -LiteralPath $Dir -PathType Container)) {
+        $names = @(Get-ChildItem -LiteralPath $Dir -Directory -Depth 1 -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+        foreach ($k in $script:AntiCheatMarks.Keys) { if ($names -contains $k) { return $script:AntiCheatMarks[$k] } }
+        $files = @(Get-ChildItem -LiteralPath $Dir -File -Depth 1 -ErrorAction SilentlyContinue | Select-Object -First 5000 | ForEach-Object { $_.Name })
+        foreach ($k in $script:AntiCheatFiles.Keys) { if (@($files | Where-Object { $_ -like $k }).Count -gt 0) { return $script:AntiCheatFiles[$k] } }
+    }
+    if ($exe) {
+        foreach ($k in $script:AntiCheatExes.Keys) { if ($exe -match $k) { return $script:AntiCheatExes[$k] } }
+        $b = Get-JuicerBackend
+        # Vanguard: its service (vgc) is there once Riot's client installed it, and only Riot's games use it.
+        $riot = $exe -match $script:RiotExes -or ($Dir -and $Dir -match '(?i)[\\/]Riot Games[\\/]')
+        if ($riot -and ((& $b.SvcRead 'vgc') -or (& $b.SvcRead 'vgk'))) { return 'Riot Vanguard' }
+        if ($exe -match $script:FaceitExes -and (& $b.SvcRead 'FACEIT')) { return 'FACEIT Anti-Cheat' }
+    }
     ''
+}
+
+# Whether this game must not be paced by RivaTuner: an anti-cheat that treats
+# its hook as an injection. The NVIDIA driver's limiter is never in question.
+function Test-JuicerRtssBlocked {
+    param([hashtable]$Game)
+    if (-not $Game) { return '' }
+    $dir = if ($Game.Dir) { [string]$Game.Dir } else { '' }
+    $exe = if ($Game.ExeName) { [string]$Game.ExeName } elseif ($Game.Exe) { [string]$Game.Exe } else { '' }
+    Get-JuicerGameAntiCheat $dir $exe
+}
+
+# What to tell the user about it (null when there is none, or when the engine is
+# not RivaTuner and nothing is injected).
+function Get-JuicerAntiCheatNote {
+    param([string]$AntiCheat, [string]$Engine)
+    if (-not $AntiCheat) { return $null }
+    if ($Engine -eq 'rtss') { return "Este juego usa $AntiCheat. RivaTuner se inyecta en el juego para marcar el ritmo y un antitrampas puede tomarlo por un truco: el juego se cierra, te expulsa o, en el peor caso, te sanciona. Win Juicer no le pone el frame pacer con RivaTuner; usa el límite de FPS del propio juego (o, con una gráfica NVIDIA, el motor del driver)." }
+    "Este juego usa $AntiCheat. El frame pacer va por el driver de NVIDIA, que no se inyecta en el juego: es la opción segura con un antitrampas."
 }
