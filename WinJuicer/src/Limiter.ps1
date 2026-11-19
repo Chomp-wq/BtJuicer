@@ -800,7 +800,9 @@ function Get-JuicerEffectiveCap {
         if ($live -and $live.Fps) { $Requested = [int]$live.Fps }
     }
     if ($Requested -le 0) { $Requested = Get-JuicerPacerFps $exe }
-    if ($Requested -le 0) { try { $rec = Get-JuicerRecommendedFps $exe $Monitor; if ($rec) { $Requested = [int]$rec.Fps } } catch { Write-JuicerLog "Sin ritmo recomendado para ${exe}: $_" } }
+    # Without a monitor there is no rate to work out (and asking for one would
+    # go and read the real screen).
+    if ($Requested -le 0 -and $Monitor) { try { $rec = Get-JuicerRecommendedFps $exe $Monitor; if ($rec) { $Requested = [int]$rec.Fps } } catch { Write-JuicerLog "Sin ritmo recomendado para ${exe}: $_" } }
     if ($Requested -le 0) { return $null }
 
     $hz = if ($Monitor -and $Monitor.Display) { [int]$Monitor.Display.Hz } else { 0 }

@@ -393,7 +393,8 @@ Describe 'NVAPI: mensajes y reintentos' {
     It 'el fallo capturado sale en palabras y deja el código en el registro' {
         $err = InModuleScope WinJuicer { try { throw 'NVAPI SetSetting: código -137' } catch { Get-WinNvApiFailure $_ } }
         $err | Should -BeLike '*administrador*'
-        Get-Content -LiteralPath (Join-Path (Get-JuicerHome) 'registro.log') -ErrorAction SilentlyContinue | Out-String | Should -BeLike '*NVAPI: NVAPI SetSetting: código -137*'
+        # UTF-8 explicitly: Windows PowerShell 5.1 would read the log as ANSI.
+        Get-Content -LiteralPath (Join-Path (Get-JuicerHome) 'registro.log') -Encoding UTF8 -ErrorAction SilentlyContinue | Out-String | Should -BeLike '*NVAPI: NVAPI SetSetting: código -137*'
         $other = InModuleScope WinJuicer { try { throw 'algo raro' } catch { Get-WinNvApiFailure $_ } }
         $other | Should -Be 'algo raro'
     }
