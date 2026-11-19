@@ -191,6 +191,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Juegos                                 # los juegos instalados y lo que tiene cada uno
 .\WinJuicer.ps1 -OptimizarJuegos                        # frame pacer para tu monitor (y GPU dedicada) a todos
 .\WinJuicer.ps1 -MantenerJuegos Activar                 # optimizar solos los juegos nuevos al iniciar sesión
+.\WinJuicer.ps1 -Mantener                              # lo que hace esa tarea: optimizar los juegos nuevos y recalcular el frame pacer
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # frame pacer al ritmo recomendado, solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o al tuyo
 .\WinJuicer.ps1 -CalibrarJuego cs2.exe                  # lo mide con su ritmo y lo ajusta a lo que sostiene
@@ -203,6 +204,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
+.\WinJuicer.ps1 -Aplicar juegos.ventana -SinPuntoDeRestauracion -Si  # sin intentar crear el punto de restauración
 .\WinJuicer.ps1 -QuitarApps Microsoft.BingNews,Clipchamp.Clipchamp
 .\WinJuicer.ps1 -Dns Cloudflare
 .\WinJuicer.ps1 -ProteccionAdultos Activar               # para siempre: estricta (o -NivelProteccion Equilibrado)
@@ -214,12 +216,25 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Exportar C:\mi-config.json             # lo que Win Juicer cambió aquí
 .\WinJuicer.ps1 -Importar C:\mi-config.json -Simular    # en otro PC: qué haría
 .\WinJuicer.ps1 -Deshacer ui.menu
+.\WinJuicer.ps1 -Deshacer ui.menu -Simular            # qué volvería, sin deshacer nada
 .\WinJuicer.ps1 -DeshacerTodo
+.\WinJuicer.ps1 -DeshacerTodo -Simular                  # lo que se deshará, sin tocar nada
+.\WinJuicer.ps1 -Consola                                # el menú de texto en lugar de la ventana
 ```
+
+`-Simular` enseña qué cambiaría sin cambiar nada con `-Recomendado`, `-Perfil`,
+`-Aplicar`, `-QuitarApps`, `-Dns`, `-Importar`, `-Revisar`, `-Deshacer` y
+`-DeshacerTodo`. Con cualquier otra acción que cambie algo o escriba un archivo
+(`-LimitarFps`, `-OptimizarJuegos`, `-Instalar`, `-ProteccionAdultos`, `-Exportar`…)
+se niega antes de hacer nada («-Simular no vale con -X: no puede enseñarse sin
+hacerlo») y sale con 2.
 
 Los ajustes del nivel Extremo y las apps marcadas «con cuidado» se confirman
 siempre uno a uno; sin preguntas, sólo con `-AceptoRiesgos`. Código de salida:
 0 si todo fue bien, 1 si algún ajuste falló, 2 si un argumento no es válido.
+Estos códigos valen desde una consola de administrador: desde una que no lo es,
+Win Juicer se vuelve a abrir con permisos elevados en otra ventana y la
+original sale con 0 sin esperar el resultado.
 
 ## Recomendado para este equipo
 

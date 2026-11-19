@@ -1670,8 +1670,26 @@ function Start-Juicer {
     $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $PantallaOled -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
+    # -Simular promises «sin cambiar nada». Only the actions that can show what they would do
+    # (the tweak sets, -Revisar and the undo actions) honour it; every other mutating action
+    # would just run, so it is refused up front, before anything (even the copy below) happens.
+    if ($Simular -and $cli) {
+        $noSim = [ordered]@{
+            Informe = [bool]$Informe; Exportar = [bool]$Exportar; Medir = [bool]$Medir; NuevaMedida = [bool]$NuevaMedida
+            MedirJuego = [bool]$MedirJuego; CalibrarJuego = [bool]$CalibrarJuego; ApuntarAjuste = [bool]$ApuntarAjuste
+            OlvidarAjuste = [bool]$OlvidarAjuste; LimitarFps = ($LimitarFps.Count -gt 0); MotorPacer = [bool]$MotorPacer
+            ModoMonitor = [bool]$ModoMonitor; PantallaOled = [bool]$PantallaOled; OptimizarJuegos = [bool]$OptimizarJuegos
+            Mantener = [bool]$Mantener; MantenerJuegos = [bool]$MantenerJuegos; BloquearWeb = ($PSBoundParameters.ContainsKey('BloquearWeb') -and $BloquearWeb.Count -gt 0)
+            ProteccionAdultos = [bool]$ProteccionAdultos; Instalar = ($Instalar.Count -gt 0); RestaurarDiario = [bool]$RestaurarDiario
+        }
+        $blocked = @($noSim.Keys | Where-Object { $noSim[$_] }) | Select-Object -First 1
+        if ($blocked) {
+            Write-Host "  -Simular no vale con -${blocked}: no puede enseñarse sin hacerlo." -ForegroundColor Yellow
+            return 2
+        }
+    }
     # The protected copy the sign-in task runs follows this version.
-    if ((Test-JuicerWindows) -and -not $Mantener -and -not $ProteccionAdultos) { Update-JuicerCopy }
+    if ((Test-JuicerWindows) -and -not $Mantener -and -not $ProteccionAdultos -and -not $Simular) { Update-JuicerCopy }
     if (-not $cli) {
         $script:Screen = $true
         $script:Interactive = $true
@@ -1820,8 +1838,24 @@ function Start-Juicer {
     }
 
     $results = @()
-    if ($DeshacerTodo) { $results += @(Undo-JuicerAll) }
-    foreach ($id in $Deshacer) { $results += Undo-JuicerTweak $id }
+    if ($Simular -and ($DeshacerTodo -or $Deshacer.Count -gt 0)) {
+        # Only say what would go back; the journal and the machine stay as they are.
+        # Assigned as it comes: the journal is returned as one list, and @() would wrap it.
+        $journal = Read-JuicerJournal
+        if ($DeshacerTodo) {
+            if ($journal.Count -eq 0) { Write-Host '  No hay cambios de Win Juicer que deshacer.' }
+            else { Write-JuicerWrapped (Format-JuicerUndoAllConfirm $journal -NoQuestion) 2 'Gray' }
+        }
+        $picked = @()
+        foreach ($id in $Deshacer) {
+            $e = Get-JuicerJournalEntry $journal $id
+            if ($e) { $picked += $e } else { Write-Host "  ${id}: no hay cambios de Win Juicer guardados para este ajuste." }
+        }
+        if ($picked.Count -gt 0 -and -not $DeshacerTodo) { Write-JuicerWrapped (Format-JuicerUndoAllConfirm $picked -NoQuestion) 2 'Gray' }
+    } else {
+        if ($DeshacerTodo) { $results += @(Undo-JuicerAll) }
+        foreach ($id in $Deshacer) { $results += Undo-JuicerTweak $id }
+    }
 
     $tweaks = New-Object System.Collections.ArrayList
     $add = { param($t) if (-not ($tweaks | Where-Object { $_.Id -eq $t.Id })) { [void]$tweaks.Add($t) } }

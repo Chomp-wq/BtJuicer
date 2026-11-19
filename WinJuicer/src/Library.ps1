@@ -328,7 +328,9 @@ function Get-JuicerGames {
         $g.ExeName = (Split-Path -Leaf $g.Exe).ToLowerInvariant()
         $wasKnown = $state.Known -contains $g.Id -or @($g.Merged | Where-Object { $state.Known -contains $_ }).Count -gt 0
         $g.New = $state.Known.Count -gt 0 -and -not $wasKnown
-        $g.Hidden = [bool]($state.Hidden -contains $g.Id)
+        # Hidden carries over from the ids this one absorbed: hiding the registry entry of a
+        # game that later merged into its store entry must not bring it back to the gallery.
+        $g.Hidden = [bool]($state.Hidden -contains $g.Id) -or @($g.Merged | Where-Object { $_ -and $state.Hidden -contains $_ }).Count -gt 0
         $out += $g
     }
     # A collector that threw found nothing this run; forgetting its ids would

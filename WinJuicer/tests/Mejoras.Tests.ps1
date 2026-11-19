@@ -163,6 +163,21 @@ Describe 'Juegos ocultos' {
         @($back | Where-Object { $_.New }).Count | Should -Be 0
     }
 
+    It 'lo oculto pasa al juego en que se fundió: si un id absorbido estaba oculto, el juego lo está' {
+        $d = $HideDir
+        $col = { @((New-JuicerGame 'Steam' '5' 'Cinco' $d (Join-Path $d 'A.exe')), (New-JuicerGame 'EA' '9' 'Cinco (EA)' $d '')) }.GetNewClosure()
+        $find = { param($Folder, $Name) '' }
+        $one = @(Get-JuicerGames -Collectors @($col) -FindExe $find -IncludeHidden)
+        $one.Count | Should -Be 1
+        $one[0].Merged | Should -Contain 'ea:9'
+        $one[0].Hidden | Should -BeFalse
+        Set-JuicerGameHidden 'ea:9' $true
+        $hid = @(Get-JuicerGames -Collectors @($col) -FindExe $find -IncludeHidden)
+        $hid.Count | Should -Be 1
+        $hid[0].Hidden | Should -BeTrue
+        @(Get-JuicerGames -Collectors @($col) -FindExe $find).Count | Should -Be 0
+    }
+
     It 'queda en juegos.json y un archivo dañado no rompe nada' {
         Set-JuicerGameHidden 'gog:7' $true
         (Get-Content -LiteralPath (Get-JuicerLibraryPath) -Raw) | Should -BeLike '*gog:7*'
@@ -271,6 +286,21 @@ Describe 'Limpieza: vista previa' {
         $pending.Total | Should -Be 2000
         ((Format-JuicerCleanupPreview $pending) -join "`n") | Should -BeLike '*Descargas de Windows Update: sin tocar*'
         (Get-ChildItem -LiteralPath $CleanRoot -Recurse -File).Count | Should -Be 4
+    }
+
+    It 'enseña la caché de Optimización de distribución, que la limpieza vacía, sin inventar su tamaño' {
+        $targets = @(@{ Name = 'Temporales'; Path = (Join-Path $CleanRoot 'temp'); Hours = 24 })
+        $with = Get-JuicerCleanupPreview -Targets $targets -RebootPending $false -DeliveryCache $true
+        $with.Items.Count | Should -Be 2
+        $with.Items[1].Name | Should -Be 'Caché de Optimización de distribución'
+        $with.Total | Should -Be 2000
+        $text = (Format-JuicerCleanupPreview $with) -join "`n"
+        $text | Should -BeLike '*· Caché de Optimización de distribución: Windows la vacía; tamaño no medido*'
+        $text | Should -BeLike '*Total:*sin contar lo no medido*'
+        # Without the cmdlet the real cleanup skips it, and so does the preview.
+        $without = Get-JuicerCleanupPreview -Targets $targets -RebootPending $false -DeliveryCache $false
+        $without.Items.Count | Should -Be 1
+        ((Format-JuicerCleanupPreview $without) -join "`n") | Should -Not -BeLike '*Optimización de distribución*'
     }
 
     It 'sabe cuándo Windows espera un reinicio' {

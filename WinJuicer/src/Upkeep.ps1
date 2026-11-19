@@ -62,7 +62,10 @@ function Invoke-JuicerUpkeep {
         if ($drift.Count -gt 0) { Write-JuicerLog ('Mantener: {0}: {1}. Se vuelven a aplicar con -Revisar -Si.' -f (Format-JuicerDriftSummary $drift).Title, (($drift | ForEach-Object { $_.Id }) -join ', ')) }
     } catch { Write-JuicerLog "Mantener: no se pudo revisar lo que Windows ha deshecho: $_" }
     $state = Read-JuicerUpkeepState
-    $games = @(Get-JuicerGames -KeepNew)
+    # Hidden games (the ones marked «no es un juego») stay out of the setup but go into Seen:
+    # otherwise un-hiding one later makes it look new and the frame pacer lands on it unasked.
+    $everything = @(Get-JuicerGames -KeepNew -IncludeHidden)
+    $games = @($everything | Where-Object { -not $_.Hidden })
     $monitor = $null
     try { $monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Mantener: sin monitor: $_" }
     $sig = Get-JuicerLimitSignature $monitor
@@ -88,7 +91,7 @@ function Invoke-JuicerUpkeep {
             $id = "juego:$($_.ExeName)"
             -not $hasBackend -or @($results | Where-Object { $_.Id -eq $id -and $_.Outcome -eq 'Error' }).Count -gt 0
         } | ForEach-Object { $_.Id })
-    $state.Seen = @($games | Where-Object { $failed -notcontains $_.Id } | ForEach-Object { $_.Id })
+    $state.Seen = @($everything | Where-Object { $failed -notcontains $_.Id } | ForEach-Object { $_.Id })
     if ($sig) { $state.Signature = $sig }
     Save-JuicerUpkeepState $state
     # A game that started failing after it was optimized gets its changes taken away.
@@ -160,7 +163,8 @@ function Register-JuicerUpkeep {
     if (-not (Test-JuicerWindows)) { return }
     $dir = Install-JuicerCopy
     $state = Read-JuicerUpkeepState
-    $state.Seen = @(Get-JuicerGames -KeepNew | ForEach-Object { $_.Id })
+    # Hidden ones included, so un-hiding one later does not make it «new».
+    $state.Seen = @(Get-JuicerGames -KeepNew -IncludeHidden | ForEach-Object { $_.Id })
     $m = $null
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
     $state.Signature = Get-JuicerLimitSignature $m

@@ -2061,6 +2061,22 @@ Describe 'Mantener los juegos optimizados' {
         (Read-JuicerUpkeepState).Seen | Should -Contain 'steam:1'
     }
 
+    It 'un juego oculto entra en lo ya visto sin optimizarse, y al mostrarlo no es nuevo' {
+        Save-JuicerUpkeepState @{ Seen = @('steam:1'); Signature = (Get-JuicerLimitSignature $Mon) }
+        Mock -ModuleName WinJuicer Get-JuicerGames {
+            param([switch]$KeepNew, [switch]$IncludeHidden)
+            $all = @((New-JuicerGame 'Steam' '1' 'Viejo' 'C:\J\Viejo' 'C:\J\Viejo\viejo.exe'), (New-JuicerGame 'Steam' '2' 'Herramienta' 'C:\J\H' 'C:\J\H\herramienta.exe')) |
+                ForEach-Object { $_.ExeName = (Split-Path -Leaf $_.Exe).ToLowerInvariant(); $_.Hidden = ($_.Id -eq 'steam:2'); $_ }
+            if ($IncludeHidden) { $all } else { @($all | Where-Object { -not $_.Hidden }) }
+        }
+        [void](Invoke-JuicerUpkeep -Quiet)
+        $M.Backend.State.FpsLimits.ContainsKey('herramienta.exe') | Should -BeFalse
+        (Read-JuicerUpkeepState).Seen | Should -Contain 'steam:2'
+        # Shown again: not new, so the next sign-in leaves it alone.
+        $plan = Get-JuicerUpkeepPlan @(@{ Id = 'steam:1' }, @{ Id = 'steam:2' }) @((Read-JuicerUpkeepState).Seen) 'x' 'x' $true
+        @($plan.New).Count | Should -Be 0
+    }
+
     It 'desde la línea de órdenes' {
         @(Start-Juicer -Mantener -Si 6>$null)[-1] | Should -Be 0
     }
