@@ -52,7 +52,7 @@
 
 .PARAMETER Juego
     Con -MedirJuego, el .exe que medir (por ejemplo cs2.exe). Sin él, el que
-    más fotogramas presente.
+    más fotogramas presente. Con -ModoPrudente, los .exe a los que aplicarlo.
 
 .PARAMETER Juegos
     Lista los juegos instalados que encuentra (Steam, Epic, GOG, Xbox, EA,
@@ -95,6 +95,19 @@
     nvidia o rtss (RivaTuner, que admite décimas: con estrobo, el ritmo va
     justo por debajo del refresco real). Los juegos que ya lo tienen pasan al
     nuevo motor.
+
+.PARAMETER ModoPrudente
+    Activar o Desactivar el modo prudente de los juegos de -Juego (separados
+    por comas): el frame pacer pone sólo el límite de FPS y deja la
+    sincronización vertical y la cola de fotogramas como las ponga el juego.
+    Para un juego que se congela o se cierra con la receta completa.
+
+.PARAMETER RestaurarPerfilesNvidia
+    Pone de nuevo la copia de los perfiles del driver de NVIDIA (nvdrsdb*.bin)
+    que Win Juicer hizo antes de su primer cambio en ellos. Sustituye TODOS los
+    ajustes de perfiles de NVIDIA (los de cada juego y los globales) por los de
+    la copia: pregunta antes (con -Si, no). Después hay que reiniciar el
+    servicio del driver de NVIDIA o, mejor, el equipo.
 
 .PARAMETER Fps
     Con -LimitarFps, el ritmo (de 20 a 1000).
@@ -235,6 +248,8 @@ param(
     [string]$CalibrarJuego,
     [ValidateSet('Fluidez', 'Latencia')][string]$Prioridad,
     [ValidateSet('Auto', 'nvidia', 'rtss')][string]$MotorPacer,
+    [ValidateSet('', 'Activar', 'Desactivar')][string]$ModoPrudente = '',
+    [switch]$RestaurarPerfilesNvidia,
     [switch]$Juegos,
     [switch]$OptimizarJuegos,
     [switch]$Mantener,

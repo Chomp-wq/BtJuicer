@@ -607,6 +607,16 @@ function Invoke-JuicerGameSetup {
                 }
                 Clear-JuicerGameSafe $g.ExeName
             }
+            # An anti-cheat takes RivaTuner's hook for an injection: with it as the only way to pace the
+            # game, leave it alone (the NVIDIA driver's limiter injects nothing, so it goes on as usual).
+            # Force does not lift it: it is for games Win Juicer protected, not for this.
+            if ($What -in 'Recomendado', 'Fps' -and (Get-JuicerFpsBackend) -eq 'rtss') {
+                $ac = Test-JuicerRtssBlocked $g
+                if ($ac) {
+                    New-JuicerResult @{ Id = "juego:$($g.ExeName)"; Title = $g.Name; Reboot = 'No' } 'NoAplica' "Sin tocar: tiene antitrampas ($ac): RivaTuner se inyecta y podría dar problemas; usa el limitador del propio juego."
+                    continue
+                }
+            }
             switch ($What) {
                 'Recomendado' {
                     # What its folder shows (Reflex, frame generation) is kept first, for the note on the rate set.

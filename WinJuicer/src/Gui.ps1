@@ -696,6 +696,7 @@ $script:GuiXaml = @'
                       <ComboBoxItem Content="RivaTuner (admite décimas)" Tag="rtss"/>
                     </ComboBox>
                     <Button x:Name="BtnPacerForget" Content="Olvidar calibraciones" IsEnabled="False"/>
+                    <Button x:Name="BtnNvRestore" Content="Restaurar perfiles de NVIDIA…" ToolTip="Pone la copia de los perfiles del driver que Win Juicer hizo antes de su primer cambio en ellos. Sustituye TODOS los ajustes de perfiles de NVIDIA por los de la copia."/>
                     <Button x:Name="BtnPacerInstallRtss" Content="Instalar RivaTuner (gratis)" Visibility="Collapsed" ToolTip="El motor del frame pacer sin gráfica NVIDIA y, con estrobo, el que admite décimas. Se instala con winget en su propia ventana."/>
                   </WrapPanel>
                   <StackPanel x:Name="PacerPanel"/>
@@ -754,8 +755,17 @@ $script:GuiXaml = @'
                     <TextBlock x:Name="GameNoticeText" TextWrapping="Wrap" Foreground="#F0E0B0"/>
                   </Border>
 
+                  <Border x:Name="GameIntro" Visibility="Collapsed" Background="#1B2630" BorderBrush="#2F5D7A" BorderThickness="1" CornerRadius="6" Padding="12,8" Margin="0,8,0,2">
+                    <StackPanel>
+                      <TextBlock x:Name="GameIntroText" TextWrapping="Wrap" Foreground="#CFE3F0"/>
+                      <Button x:Name="BtnGameIntroClose" Content="Entendido" HorizontalAlignment="Left" Margin="0,8,0,0"/>
+                    </StackPanel>
+                  </Border>
+
                   <TextBlock Text="Frame pacer" Style="{StaticResource Head}" FontSize="16"/>
                   <TextBlock x:Name="GamePacerNote" Style="{StaticResource Note}"/>
+                  <TextBlock x:Name="GameEffectiveText" Style="{StaticResource Note}" Visibility="Collapsed" Foreground="#F0E0B0"/>
+                  <TextBlock x:Name="GameAppliedText" Style="{StaticResource Note}" Visibility="Collapsed"/>
                   <CheckBox x:Name="GamePacerOn" Content="Activado en este juego" FontSize="14"/>
                   <Button x:Name="BtnGameInstallRtss" Content="Instalar RivaTuner (gratis)" HorizontalAlignment="Left" Visibility="Collapsed"/>
                   <StackPanel x:Name="GamePacerBox" Margin="22,2,0,0">
@@ -777,6 +787,8 @@ $script:GuiXaml = @'
                     <RadioButton x:Name="GameRateAuto" GroupName="GameRate">
                       <TextBlock x:Name="GameRateAutoText" Text="Automático, para tu pantalla"/>
                     </RadioButton>
+                    <Button x:Name="BtnGameWhy" Content="¿Por qué este número?" HorizontalAlignment="Left" Margin="22,0,0,0" ToolTip="Cómo se ha calculado el ritmo automático de este juego"/>
+                    <TextBlock x:Name="GameWhyText" Style="{StaticResource Note}" Visibility="Collapsed" Margin="22,0,4,6"/>
                     <StackPanel Orientation="Horizontal">
                       <RadioButton x:Name="GameRateManual" GroupName="GameRate" Content="Elegido por mí:"/>
                       <TextBox x:Name="GameFps" Style="{StaticResource Field}" Width="64"/>
@@ -1151,6 +1163,7 @@ $script:GuiWork = @{
         }
         @{
             Page = (Get-JuicerGuiGamePage $g); Pending = @(Get-JuicerPacerPending)
+            Applied = $(if ($A.Action -in 'Optimizar', 'PacerOn', 'Fps', 'Prioridad', 'Prudente') { Format-JuicerPacerApplied $exe } else { '' })
             Results = @($r | Where-Object { $_ -is [hashtable] -and $_.Outcome } | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot } })
         }
     }
@@ -1186,6 +1199,12 @@ $script:GuiWork = @{
             $Sync.Mutating = $false
         }
         @{ Fixed = $r; Added = $added; Info = (Get-JuicerShieldInfo) }
+    }
+    # NVIDIA's profile store from Win Juicer's copy: it writes ProgramData, so it counts as a change.
+    NvRestore = {
+        $Sync.Mutating = $true
+        try { $r = Restore-JuicerNvProfiles } finally { $Sync.Mutating = $false }
+        @{ Restore = $r }
     }
     # Whether the protection really filters here: reads only.
     ShieldCheck = { @{ Checks = @(Get-JuicerShieldCheck) } }
@@ -2514,6 +2533,14 @@ function Get-JuicerGuiGamePage {
     try { $tips = @(Get-JuicerGameTipsHere $g) } catch { Write-JuicerLog "Sin consejos para ${exe}: $_" }
     $cover = $null
     try { $cover = Get-JuicerCover $g -NoDownload } catch { Write-JuicerLog "Sin portada de ${exe}: $_" }
+    # The anti-cheat of the game (its folder, its name, the services of its launcher).
+    $ac = ''
+    try { $ac = Get-JuicerGameAntiCheat $(if ($g.Dir) { [string]$g.Dir } else { '' }) $exe } catch { Write-JuicerLog "Sin antitrampas de ${exe}: $_" }
+    # What Win Juicer asks for against what the game gets, only when it has a pacer on it.
+    $eff = $null
+    if ($g.Fps) { try { $eff = Format-JuicerEffectiveCap (Get-JuicerEffectiveCap $exe -Requested ([int]$g.Fps) -Monitor $m) } catch { Write-JuicerLog "Sin ritmo efectivo de ${exe}: $_" } }
+    $introSeen = $true
+    try { $introSeen = [bool](Read-JuicerUiPrefs).GameIntroSeen } catch { Write-JuicerLog "Sin preferencias de la ventana: $_" }
     @{
         Game = $g; Engine = (Get-JuicerFpsBackend); Priority = (Get-JuicerPacerPriority $exe); Manual = (Get-JuicerPacerFps $exe); ReflexNote = $reflex
         Auto = $(if ($auto) { @{ Fps = $auto.Fps; Why = $auto.Why; Calibrated = [bool]$auto.Calibrated } } else { $null })
@@ -2523,7 +2550,9 @@ function Get-JuicerGuiGamePage {
         CalAge = $(if ($g.CalFps -and $g.CalState -eq 'Activa') { Get-JuicerCalibrationAge $g.CalDate $g.CalFps -Changes @($g.CalChanges) } elseif ($g.CalFps -and $g.CalState -eq 'OtroMonitor') { @{ Sentence = 'Calibración de otro monitor o modo: no se usa ahora.' } } else { $null })
         MeasureWarn = (Get-JuicerFrameGenMeasureWarning $exe)
         Running = (Test-JuicerGameRunning $exe); Safe = (Get-JuicerGameSafe $exe); Minimal = [bool]$g.Minimal
-        AntiCheat = $(if ($g.Dir) { Get-JuicerGameAntiCheat ([string]$g.Dir) } else { '' })
+        AntiCheat = $ac; AntiCheatNote = (Get-JuicerAntiCheatNote $ac (Get-JuicerFpsBackend))
+        Effective = $eff; Applied = (Format-JuicerPacerApplied $exe)
+        IntroSeen = $introSeen
     }
 }
 
@@ -2565,6 +2594,9 @@ function Test-JuicerGuiGameShown {
     [bool]($script:Gui.C.GamePage.Visibility -eq 'Visible' -and $script:Gui.Game -and $script:Gui.Game.Id -eq $Id)
 }
 
+# The one-time explainer on the game page: short, in plain words.
+$script:GameIntroText = "Antes de empezar, tres cosas:`n· VRR (G-SYNC o FreeSync) hace que tu monitor cambie sus Hz al ritmo del juego, así que no hay cortes ni esperas mientras el juego no pase de los Hz.`n· El frame pacer le pone al juego un tope de FPS constante, un poco por debajo de esos Hz: los fotogramas llegan parejos y no se forma cola delante de la gráfica, que es lo que añade latencia.`n· Por eso a 180 Hz el tope es 171 y no 180: es Hz − Hz²/3600, la cifra de NVIDIA Reflex. Justo en los 180, la V-Sync haría esperar a un fotograma adelantado y la frecuencia variable podría salirse de su rango."
+
 function Show-JuicerGuiGamePage {
     param([hashtable]$P)
     if (-not $P -or -not $P.Game) { return }
@@ -2599,7 +2631,7 @@ function Show-JuicerGuiGamePage {
         $c.GamePacerNote.Text = if (-not $engine) {
             'Para marcar el ritmo hace falta una gráfica NVIDIA o RivaTuner Statistics Server, que es gratis: instálalo, ábrelo una vez y vuelve aquí.'
         } elseif ($g.Fps) {
-            ('Activo: {0} FPS, un fotograma cada {1:N2} ms. Se aplica solo cada vez que abres el juego, {2}.' -f $g.Fps, (1000 / $g.Fps), $(if ($P.Engine -eq 'rtss') { 'con el enganche de RivaTuner' } else { 'desde el driver, sin inyectar nada en él' })) + $(if ($P.Minimal) { ' Modo prudente: sólo el límite.' } else { '' }) + $(if ($P.ReflexNote) { " $($P.ReflexNote)" } else { '' })
+            ('Activo: {0} FPS, un fotograma cada {1:N2} ms. Se aplica solo cada vez que abres el juego, {2}.' -f $g.Fps, (1000 / $g.Fps), $(if ($P.Engine -eq 'rtss') { 'con el enganche de RivaTuner' } else { 'desde el driver, sin inyectar nada en él' })) + $(if ($P.Minimal) { ' Modo prudente: sólo el límite.' } else { '' }) + $(if ($P.ReflexNote) { " $($P.ReflexNote)" } else { '' }) + $(if ($P.AntiCheatNote -and $P.Engine -ne 'rtss') { " $($P.AntiCheatNote)" } else { '' })
         } else {
             'Desactivado. Actívalo para tener frametimes estables y menos latencia, a la medida de tu monitor.'
         }
@@ -2609,6 +2641,10 @@ function Show-JuicerGuiGamePage {
         $c.GameLatenciaNote.Text = 'Para juegos competitivos. Al calibrar, si tu PC da para el doble de tus Hz o más, sube ahí: cada fotograma llega antes a la pantalla.' + $(if ($P.Competitive) { ' Recomendado para este juego.' } else { '' })
         $c.GameRateAutoText.Text = if ($P.Auto) { 'Automático: {0} FPS{1}' -f $P.Auto.Fps, $(if ($P.Auto.Calibrated) { ', calibrado para tu PC' } else { ', para tu pantalla' }) } else { 'Automático, para tu pantalla' }
         $c.GameRateAutoText.ToolTip = $(if ($P.Auto) { New-JuicerTip @($P.Auto.Why) } else { $null })
+        # The same «why» open to read, behind a button: a tooltip is easy to miss.
+        $c.GameWhyText.Text = $(if ($P.Auto) { [string]$P.Auto.Why } else { '' })
+        $c.GameWhyText.Visibility = 'Collapsed'
+        $c.BtnGameWhy.Visibility = $(if ($P.Auto) { 'Visible' } else { 'Collapsed' })
         $c.GameRateAuto.IsChecked = [int]$P.Manual -le 0
         $c.GameRateManual.IsChecked = [int]$P.Manual -gt 0
         $c.GameFps.Text = $(if ([int]$P.Manual -gt 0) { [string]$P.Manual } else { '' })
@@ -2630,7 +2666,15 @@ function Show-JuicerGuiGamePage {
     elseif ($g.Waiting) { $notes += 'Hay un cambio del frame pacer esperando: se aplica en unos segundos.' }
     $script:Gui.GameMeasureWarn = [string]$P.MeasureWarn
     if ($P.MeasureWarn) { $notes += $P.MeasureWarn }
-    if ($P.Engine -eq 'rtss' -and $P.AntiCheat) { $notes += "Este juego usa $($P.AntiCheat). RivaTuner se engancha al juego para marcar el ritmo; la mayoría de anti-trampas lo admiten, pero si se cierra o te expulsa, quítale el frame pacer y usa el límite de FPS del propio juego." }
+    if ($P.Engine -eq 'rtss' -and $P.AntiCheatNote) { $notes += $P.AntiCheatNote }
+    # What holds the rate under what is asked, and what was put in the game.
+    $c.GameEffectiveText.Text = [string]$P.Effective
+    $c.GameEffectiveText.Visibility = $(if ($P.Effective) { 'Visible' } else { 'Collapsed' })
+    $c.GameAppliedText.Text = [string]$P.Applied
+    $c.GameAppliedText.Visibility = $(if ($P.Applied) { 'Visible' } else { 'Collapsed' })
+    # Said once: what VRR is, what the pacer does, why 171 and not 180. Dismissed for good.
+    $c.GameIntroText.Text = $script:GameIntroText
+    $c.GameIntro.Visibility = $(if ($P.IntroSeen) { 'Collapsed' } else { 'Visible' })
     $c.GameNoticeText.Text = $notes -join "`n`n"
     $c.GameNotice.Visibility = $(if ($notes.Count -gt 0) { 'Visible' } else { 'Collapsed' })
     $c.GameMeasurePanel.Children.Clear()
@@ -2664,7 +2708,10 @@ function Start-JuicerGuiGameAction {
         # on a result that went through (NVIDIA's own cap lowered the rate) is
         # shown too: what was asked is not what was set.
         $bad = @($r.Results | Where-Object { $_.Outcome -in 'Error', 'NoAplica', 'NoSeMantuvo' -or ($_.Outcome -in 'Aplicado', 'YaEstaba' -and $_.Message) })
-        if ($bad.Count -gt 0) { Show-JuicerGuiMessage (@($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message } | Select-Object -Unique) -join "`n") 'Warning' | Out-Null }
+        # What was put in the game, in plain words, after the changes that set the pacer.
+        $did = $(if ($r.Applied) { "`n`n$($r.Applied)" } else { '' })
+        if ($bad.Count -gt 0) { Show-JuicerGuiMessage ((@($bad | ForEach-Object { '{0}: {1}' -f $_.Title, $_.Message } | Select-Object -Unique) -join "`n") + $did) 'Warning' | Out-Null }
+        elseif ($did) { Show-JuicerGuiMessage $r.Applied | Out-Null }
         Show-JuicerGuiUndo
         Show-JuicerGuiHome
         Update-JuicerGuiPendingWatch $r.Pending
@@ -2993,6 +3040,26 @@ function Register-JuicerGuiHandlers {
             $o.Visibility = $(if ($o.Visibility -eq 'Visible') { 'Collapsed' } else { 'Visible' })
         }
         BtnGameBack           = { Close-JuicerGuiGame }
+        BtnGameWhy            = {
+            # Open and close the explanation of the automatic rate.
+            $t = $script:Gui.C.GameWhyText
+            $t.Visibility = $(if ($t.Visibility -eq 'Visible') { 'Collapsed' } else { 'Visible' })
+        }
+        BtnGameIntroClose     = {
+            $script:Gui.C.GameIntro.Visibility = 'Collapsed'
+            try { Save-JuicerUiPrefs @{ GameIntroSeen = $true } } catch { Write-JuicerLog "No se pudo guardar la preferencia de la ventana: $_" }
+            if ($script:Gui.Page) { $script:Gui.Page.IntroSeen = $true }
+        }
+        BtnNvRestore          = {
+            $backups = @(Get-JuicerNvBackups)
+            if ($backups.Count -eq 0) { Show-JuicerGuiMessage 'No hay ninguna copia de los perfiles de NVIDIA: Win Juicer la hace sola antes de su primer cambio en ellos, y todavía no ha hecho ninguno.' | Out-Null; return }
+            if (-not (Confirm-JuicerGui ("Copia de $($backups[0].Date).`n`n" + (Get-JuicerNvRestoreWarning) + "`n`n¿Restaurar?") 'Warning')) { return }
+            Start-JuicerGuiTask 'Restaurando los perfiles de NVIDIA…' 'NvRestore' @{} {
+                param($r)
+                Show-JuicerGuiMessage $r.Restore.Message $(if ($r.Restore.Ok) { 'Information' } else { 'Warning' }) | Out-Null
+                Set-JuicerGuiStatus 'Listo.'
+            }
+        }
         BtnGameOptimize       = { Start-JuicerGuiGameAction 'Optimizar' }
         BtnGameClear          = {
             $g = $script:Gui.Game
@@ -3306,14 +3373,16 @@ function Register-JuicerGuiHandlers {
 
 function Get-JuicerUiPrefsPath { Join-Path (Get-JuicerHome) 'interfaz.json' }
 
-# Advanced (the mode) and Window (Left, Top, Width, Height, Maximized).
+# Advanced (the mode), GameIntroSeen (the first-visit explainer of the game page was dismissed)
+# and Window (Left, Top, Width, Height, Maximized).
 function Read-JuicerUiPrefs {
     $p = Get-JuicerUiPrefsPath
-    $prefs = @{ Advanced = $false; Window = $null }
+    $prefs = @{ Advanced = $false; Window = $null; GameIntroSeen = $false }
     if (Test-Path -LiteralPath $p) {
         try {
             $d = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($p) | ConvertFrom-Json)
             $prefs.Advanced = [bool]$d.Advanced
+            $prefs.GameIntroSeen = [bool]$d.GameIntroSeen
             if ($d.Window -is [hashtable]) { $prefs.Window = $d.Window }
         } catch {
             Write-JuicerLog "interfaz.json dañado, se ignora: $_"
@@ -3372,7 +3441,7 @@ function Save-JuicerGuiPlacement {
 
 # What changes the system: closing the window in the middle of it would
 # leave the change half done.
-$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore', 'PacerPending', 'GameCalibrate', 'GameCalApply', 'GameVerify', 'Shield')
+$script:MutatingWork = @('Run', 'GameAction', 'GameSetup', 'Limiter', 'Startup', 'Upkeep', 'FineTune', 'MonitorMode', 'Restore', 'PacerPending', 'GameCalibrate', 'GameCalApply', 'GameVerify', 'Shield', 'NvRestore')
 
 # Keys: Esc goes back from a game's page, Ctrl+F searches in the tab that
 # has a search box, F5 reads the tab again.

@@ -649,10 +649,8 @@ function Show-JuicerGameList {
             foreach ($g in $sel) {
                 Write-Host ''
                 Write-JuicerFindings @(Get-JuicerGameTipsHere $g)
-                # A rate stored by hand above what Reflex lets the game reach.
-                $reflex = $null
-                try { $reflex = Get-JuicerReflexCapNoteHere ([string]$g.ExeName) } catch { Write-JuicerLog "Sin nota de Reflex: $_" }
-                if ($reflex) { Write-JuicerWrapped $reflex 2 'Yellow' }
+                # The pacer's side of it: anti-cheat, why the rate, what holds it down (Reflex included), what was put in.
+                Write-JuicerGamePacerInfo $g
             }
             Wait-JuicerKey
             continue
@@ -671,6 +669,75 @@ function Show-JuicerGameList {
         # Juicer protected after it failed; «t» (all of them) leaves those alone.
         Show-JuicerResults @(Invoke-JuicerGameSetup $sel $what $fps -Force:($pick -notmatch '^[tT]'))
     }
+}
+
+# Everything the pacer knows about one game, for the console: the anti-cheat
+# note, the automatic rate and why that number, what holds it down, what was put
+# in the game, and an offer to measure it when it never was. Game is the
+# gallery's (ExeName, Name, Dir, Exe); a game known only by its .exe name works.
+function Write-JuicerGamePacerInfo {
+    param([Parameter(Mandatory)][hashtable]$Game, [hashtable]$Monitor)
+    $exe = ConvertTo-JuicerExeName ([string]$(if ($Game.ExeName) { $Game.ExeName } else { $Game.Exe }))
+    if (-not $Monitor) { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" } }
+    $name = if ($Game.Name) { [string]$Game.Name } else { $exe }
+    Write-Host ''
+    Write-Host "  $name ($exe)" -ForegroundColor White
+    $backend = Get-JuicerFpsBackend
+    $ac = ''
+    try { $ac = Get-JuicerGameAntiCheat $(if ($Game.Dir) { [string]$Game.Dir } else { '' }) $exe } catch { Write-JuicerLog "Sin antitrampas de ${exe}: $_" }
+    $note = Get-JuicerAntiCheatNote $ac $backend
+    if ($note) { Write-JuicerWrapped $note 4 $(if ($backend -eq 'rtss') { 'Yellow' } else { 'Gray' }) }
+    $auto = $null
+    try { $auto = Get-JuicerRecommendedFps $exe $Monitor -Automatic } catch { Write-JuicerLog "Sin ritmo recomendado para ${exe}: $_" }
+    if ($auto) {
+        Write-JuicerWrapped ('Ritmo automático: {0} FPS{1}.' -f $auto.Fps, $(if ($auto.Calibrated) { ' (calibrado para tu PC)' } else { ' (para tu pantalla)' })) 4 'Gray'
+        # Under the rate: why that number.
+        Write-JuicerWrapped "¿Por qué este número? $($auto.Why)" 6 'DarkGray'
+    }
+    $manual = Get-JuicerPacerFps $exe
+    if ($manual -gt 0) { Write-JuicerWrapped "Ritmo elegido por ti: $manual FPS." 4 'Gray' }
+    $pacerState = $null
+    try { $pacerState = & (Get-JuicerBackend).PacerState } catch { Write-JuicerLog "Sin el estado de otros limitadores: $_" }
+    $cap = $null
+    try { $cap = Get-JuicerEffectiveCap $exe -Monitor $Monitor -State $pacerState } catch { Write-JuicerLog "Sin ritmo efectivo de ${exe}: $_" }
+    if ($cap) { Write-JuicerWrapped (Format-JuicerEffectiveCap $cap) 4 $(if ($cap.Effective -lt $cap.Requested) { 'Yellow' } else { 'Gray' }) }
+    $reflex = $null
+    try { $reflex = Get-JuicerReflexCapNoteHere $exe $Monitor } catch { Write-JuicerLog "Sin nota de Reflex: $_" }
+    if ($reflex) { Write-JuicerWrapped $reflex 4 'Yellow' }
+    $applied = Format-JuicerPacerApplied $exe -Console
+    if ($applied) { Write-Host ''; Write-JuicerWrapped $applied 4 'Gray' }
+    if (Test-JuicerPacerMinimal $exe) { Write-JuicerWrapped 'Modo prudente activado: sólo el límite de FPS.' 4 'Gray' }
+    # Never measured: say how, and offer it.
+    if (-not (Get-JuicerPreviousFrameResult $exe)) {
+        Write-JuicerWrapped 'Todavía no has medido este juego: medirlo dice si tu PC sostiene el ritmo y qué lo limita.' 4 'DarkGray'
+        if ($script:Interactive -and (Confirm-JuicerAction '¿Medir este juego ahora?')) {
+            Write-JuicerWrapped $script:CalibrateAdvice 2 'Gray'
+            try {
+                $f = @(Invoke-JuicerFrameCapture -Seconds 60 -Delay 10 -Process $exe -OnStatus ${function:Write-JuicerStatusLine})
+                Write-Host ''
+                Write-JuicerFindings $f
+            } catch {
+                Write-Host ''
+                Write-JuicerWrapped "No se pudo medir: $_" 2 'Yellow'
+            }
+        }
+    }
+}
+
+# Restores the newest copy of NVIDIA's profile store, after saying what it does.
+# The CLI and the pacer menu share it. Returns the exit code.
+function Invoke-JuicerNvRestoreCli {
+    $backups = @(Get-JuicerNvBackups)
+    if ($backups.Count -eq 0) {
+        Write-JuicerWrapped 'No hay ninguna copia de los perfiles de NVIDIA: Win Juicer la hace sola antes de su primer cambio en ellos, y todavía no ha hecho ninguno.' 2 'Yellow'
+        return 1
+    }
+    Write-JuicerWrapped ('Copia de ' + $backups[0].Date + ': ' + ($backups[0].Files -join ', ') + '.') 2 'Gray'
+    Write-JuicerWrapped (Get-JuicerNvRestoreWarning) 2 'Yellow'
+    if (-not (Confirm-JuicerAction '¿Restaurar los perfiles de NVIDIA desde esa copia?')) { Write-JuicerWrapped 'No se ha cambiado nada.' 2 'Gray'; return 0 }
+    $r = Restore-JuicerNvProfiles $backups[0].Path
+    Write-JuicerWrapped $r.Message 2 $(if ($r.Ok) { 'Green' } else { 'Yellow' })
+    if ($r.Ok) { 0 } else { 1 }
 }
 
 function Show-JuicerLimiter {
@@ -695,6 +762,10 @@ function Show-JuicerLimiter {
             Write-JuicerWrapped ('Tu pantalla: ' + (Format-JuicerMonitor $m) + '. Cómo la usas: ' + (Get-JuicerMonitorModes)[$m.Mode] + ". Ritmo recomendado: $($cap.Fps) FPS. $($cap.Why)") 2 'Gray'
         }
         $limits = @(Get-JuicerFpsLimits)
+        # Read once for the whole list: the other limiters, and the card's maker.
+        $otherLimiters = $null
+        try { $otherLimiters = & (Get-JuicerBackend).PacerState } catch { Write-JuicerLog "Sin el estado de otros limitadores: $_" }
+        $gpuVendor = Get-JuicerMainGpuVendor
         Write-Host ''
         $n = 0
         foreach ($g in $limits) {
@@ -710,11 +781,17 @@ function Show-JuicerLimiter {
             $calText = if ($age) { " ($($age.Text))" } elseif ($calState -eq 'OtroMonitor') { ' (calibración de otro monitor o modo)' } elseif ($calState -eq 'Activa') { ' (calibrado)' } else { '' }
             Write-Host ('  {0,2}. {1}: {2}{3}{4}' -f $n, $g.Exe, $fps, $calText, $(if ((Get-JuicerPacerPriority $g.Exe) -eq 'Latencia') { ' [latencia]' } else { '' }))
             if ($age -and $age.Stale) { Write-JuicerWrapped $age.Hint 6 'DarkGray' }
+            # What the game really gets, when something sits under what is asked.
+            if ($g.Fps) {
+                $eff = $null
+                try { $eff = Get-JuicerEffectiveCap $g.Exe -Requested ([int]$g.Fps) -Monitor $m -State $otherLimiters -Backend $backend -GpuVendor $gpuVendor } catch { Write-JuicerLog "Sin ritmo efectivo de $($g.Exe): $_" }
+                if ($eff -and $eff.Effective -lt $eff.Requested) { Write-JuicerWrapped (Format-JuicerEffectiveCap $eff) 6 'Yellow' }
+            }
         }
         if ($n -eq 0) { Write-Host '  Ningún juego con frame pacer todavía.' -ForegroundColor DarkGray }
         $allMonitors = @()
         try { $allMonitors = @(Get-JuicerMonitors) } catch { Write-JuicerLog "Sin monitores: $_" }
-        $conflicts = @(Get-JuicerPacerConflicts (& (Get-JuicerBackend).PacerState) (Get-JuicerFpsBackend) $limits $m (Get-JuicerMainGpuVendor) $allMonitors)
+        $conflicts = @(Get-JuicerPacerConflicts $otherLimiters (Get-JuicerFpsBackend) $limits $m $gpuVendor $allMonitors)
         if ($conflicts.Count -gt 0) { Write-Host ''; Write-JuicerFindings $conflicts }
         Write-Host ''
         Write-JuicerMenu @(
@@ -727,7 +804,10 @@ function Show-JuicerLimiter {
             @('D', 'Tu monitor es OLED', $(if ($m) { $o = Get-JuicerMonitorOledOverride $m; 'ahora: ' + $(if ($null -eq $o) { 'según su nombre (' + $(if (Test-JuicerMonitorOled $m) { 'OLED' } else { 'no OLED' }) + ')' } elseif ($o) { 'sí, lo dices tú' } else { 'no, lo dices tú' }) } else { 'si el nombre no lo delata' })),
             @('E', 'Motor', "ahora: $($pacer.Engine); con estrobo, RivaTuner admite décimas"),
             @('O', 'Olvidar las calibraciones', 'volver al ritmo recomendado'),
-            @('R', 'Recalcular los ritmos', 'con el modo y la frecuencia de ahora')
+            @('R', 'Recalcular los ritmos', 'con el modo y la frecuencia de ahora'),
+            @('G', 'Ver un juego', 'qué se ha puesto, por qué ese ritmo, qué lo limita y si tiene antitrampas'),
+            @('T', 'Modo prudente de un juego', 'sólo el límite, sin tocar la V-Sync ni la cola de fotogramas'),
+            @('N', 'Restaurar los perfiles de NVIDIA', 'la copia que se hizo antes del primer cambio (sustituye todos los perfiles)')
         )
         switch ((Read-JuicerChoice 'Elige, Intro para volver').ToUpperInvariant()) {
             'A' {
@@ -798,6 +878,29 @@ function Show-JuicerLimiter {
                 if (-not $e) { continue }
                 try { Show-JuicerResults @(Set-JuicerPacerEngine $e $m) } catch { Write-JuicerWrapped "$_" 2 'Yellow'; Wait-JuicerKey }
             }
+            'G' {
+                $q = Read-JuicerChoice 'Número del juego'
+                if (-not ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count)) { continue }
+                $one = $limits[[int]$q - 1]
+                # The gallery knows its folder (anti-cheat); a game added by name only has none.
+                $game = @(Get-JuicerGames -IncludeHidden | Where-Object { $_.ExeName -eq $one.Exe }) | Select-Object -First 1
+                if (-not $game) { $game = @{ ExeName = $one.Exe; Name = $one.Exe; Dir = ''; Exe = $one.Exe } }
+                Write-JuicerGamePacerInfo $game $m
+                Wait-JuicerKey
+            }
+            'T' {
+                $q = Read-JuicerChoice 'Número del juego'
+                if (-not ($q -match '^\d+$' -and [int]$q -ge 1 -and [int]$q -le $limits.Count)) { continue }
+                $one = $limits[[int]$q - 1].Exe
+                $on = -not (Test-JuicerPacerMinimal $one)
+                Write-JuicerWrapped 'Modo prudente: el frame pacer pone sólo el límite de FPS y deja la V-Sync y la cola de fotogramas como las ponga el juego. Para un juego que se congela o se cierra con la receta completa.' 2 'Gray'
+                if (Confirm-JuicerAction "¿$(if ($on) { 'Activar' } else { 'Quitar' }) el modo prudente de ${one}?") {
+                    Show-JuicerResults @(Set-JuicerPacerMinimal $one $on $m)
+                    Write-JuicerWrapped "Modo prudente de ${one}: $(if ($on) { 'activado' } else { 'desactivado' })." 2 'Green'
+                    Wait-JuicerKey
+                }
+            }
+            'N' { [void](Invoke-JuicerNvRestoreCli); Wait-JuicerKey }
             'O' { Clear-JuicerPacerCalibration; Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             'R' { Show-JuicerResults @(Update-JuicerFpsLimits $m) }
             '' { return }
@@ -1667,6 +1770,8 @@ function Start-Juicer {
         [string]$CalibrarJuego,
         [ValidateSet('', 'Fluidez', 'Latencia')][string]$Prioridad = '',
         [ValidateSet('', 'Auto', 'nvidia', 'rtss')][string]$MotorPacer = '',
+        [ValidateSet('', 'Activar', 'Desactivar')][string]$ModoPrudente = '',
+        [switch]$RestaurarPerfilesNvidia,
         [switch]$Juegos,
         [switch]$OptimizarJuegos,
         [switch]$Mantener,
@@ -1704,9 +1809,10 @@ function Start-Juicer {
     $QuitarApps = & $split $QuitarApps
     $Instalar = & $split $Instalar
     $LimitarFps = & $split $LimitarFps
+    $Juego = (& $split $Juego) -join ','
     $BloquearWeb = & $split $BloquearWeb
     if ($BloquearWeb.Count -gt 0 -and -not $ProteccionAdultos) { $ProteccionAdultos = 'Bloquear' }
-    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $PantallaOled -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
+    $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $ModoPrudente -or $RestaurarPerfilesNvidia -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $PantallaOled -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
     # -Simular promises «sin cambiar nada». Only the actions that can show what they would do
@@ -1720,6 +1826,7 @@ function Start-Juicer {
             ModoMonitor = [bool]$ModoMonitor; PantallaOled = [bool]$PantallaOled; OptimizarJuegos = [bool]$OptimizarJuegos
             Mantener = [bool]$Mantener; MantenerJuegos = [bool]$MantenerJuegos; BloquearWeb = ($PSBoundParameters.ContainsKey('BloquearWeb') -and $BloquearWeb.Count -gt 0)
             ProteccionAdultos = [bool]$ProteccionAdultos; Instalar = ($Instalar.Count -gt 0); RestaurarDiario = [bool]$RestaurarDiario
+            ModoPrudente = [bool]$ModoPrudente; RestaurarPerfilesNvidia = [bool]$RestaurarPerfilesNvidia
         }
         $blocked = @($noSim.Keys | Where-Object { $noSim[$_] }) | Select-Object -First 1
         if ($blocked) {
@@ -1749,6 +1856,7 @@ function Start-Juicer {
     $script:Interactive = -not $Si
     # Before anything reads the journal: a corrupt one is what this is for.
     if ($RestaurarDiario) { return $(if (Invoke-JuicerJournalRestore) { 0 } else { 1 }) }
+    if ($RestaurarPerfilesNvidia) { return (Invoke-JuicerNvRestoreCli) }
     if ($Lista) { Show-JuicerList; return 0 }
     if ($Revisar) { return (Invoke-JuicerDriftCli -Apply:$Si -Simulate:$Simular -AcceptRisk:$AceptoRiesgos -NoRestorePoint:$SinPuntoDeRestauracion) }
     if ($Estado) { Show-JuicerReady; return 0 }
@@ -1809,6 +1917,15 @@ function Start-Juicer {
         if ($results.Count -gt 0) { Show-JuicerResults $results }
         if ($LimitarFps.Count -eq 0 -and -not $CalibrarJuego) { return 0 }
     }
+    if ($ModoPrudente) {
+        # Per game, like -Prioridad: -Juego names them (several with commas).
+        $games = @($Juego -split ',' | Where-Object { $_ })
+        if ($games.Count -eq 0) { Write-Host '  -ModoPrudente va con -Juego (el .exe del juego, por ejemplo cs2.exe).' -ForegroundColor Yellow; return 2 }
+        $results = @(foreach ($exe in $games) { Set-JuicerPacerMinimal $exe ($ModoPrudente -eq 'Activar') $monitor })
+        Write-Host "  Modo prudente $(if ($ModoPrudente -eq 'Activar') { 'activado' } else { 'desactivado' }) ($($games -join ', '))."
+        if ($results.Count -gt 0) { Show-JuicerResults $results }
+        return $(if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
+    }
     if ($Prioridad) {
         $targets = @($LimitarFps) + @(if ($CalibrarJuego) { $CalibrarJuego })
         if ($targets.Count -eq 0) { Write-Host '  -Prioridad va con -LimitarFps o -CalibrarJuego.' -ForegroundColor Yellow; return 2 }
@@ -1843,6 +1960,11 @@ function Start-Juicer {
         # A rate given by hand is kept when the rates are recalculated.
         $results = @(foreach ($exe in $LimitarFps) { if ($Fps) { Set-JuicerPacerFps $exe $Fps $monitor $ModoMonitor } else { Add-JuicerFpsLimit $exe 0 $monitor $ModoMonitor } })
         Show-JuicerResults $results
+        # What was put in each game, in plain words.
+        foreach ($exe in $LimitarFps) {
+            $applied = Format-JuicerPacerApplied $exe -Console
+            if ($applied) { Write-Host ''; Write-JuicerWrapped $applied 2 'Gray' }
+        }
         return $(if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) { 1 } else { 0 })
     }
     if ($MedirJuego) {

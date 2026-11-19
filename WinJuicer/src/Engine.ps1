@@ -649,8 +649,11 @@ function Invoke-JuicerAction {
             & $b.DnsSet $Action.Interface ([string[]]@($Action.V4)) ([string[]]@($Action.V6))
         }
         'Feature' { if ($Capture.Exists) { & $b.FeatSet $Action.Name ([bool]$Action.Enabled) } }
-        'FpsLimit' { & $b.FpsWrite $Action.Exe $Action.Fps $Capture.Backend -Exact ([double]$Action.Exact) }
-        'NvSetting' { & $b.NvWrite $Action.Exe $Action.Id $Action.Value }
+        'FpsLimit' {
+            if ($Capture.Backend -eq 'nvidia') { Backup-JuicerNvProfilesOnce }
+            & $b.FpsWrite $Action.Exe $Action.Fps $Capture.Backend -Exact ([double]$Action.Exact)
+        }
+        'NvSetting' { Backup-JuicerNvProfilesOnce; & $b.NvWrite $Action.Exe $Action.Id $Action.Value }
         'Custom' { & $Action.Apply $Capture.State }
     }
 }

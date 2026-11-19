@@ -72,6 +72,8 @@ function Get-JuicerVrrCap {
 # Pending: exe -> what waits for that game to close (Add-JuicerPacerPending).
 # Recipe: the version of the game recipe already brought up to date
 # (Repair-JuicerGameSetups).
+# NvBackup: @{ Date; Path; Files } once NVIDIA's profile store was copied
+# before Win Juicer's first write to it (Backup-JuicerNvProfilesOnce).
 
 function Get-JuicerPacerPath { Join-Path (Get-JuicerHome) 'frame-pacer.json' }
 
@@ -131,7 +133,7 @@ function Select-JuicerCalibration {
 
 function Read-JuicerPacer {
     $p = Get-JuicerPacerPath
-    $s = @{ Engine = 'Auto'; Calibrated = @{}; Games = @{}; Pending = @{}; Recipe = 0 }
+    $s = @{ Engine = 'Auto'; Calibrated = @{}; Games = @{}; Pending = @{}; Recipe = 0; NvBackup = @{} }
     if (Test-Path -LiteralPath $p) {
         try {
             $d = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($p) | ConvertFrom-Json)
@@ -140,6 +142,7 @@ function Read-JuicerPacer {
             if ($d.Games -is [hashtable]) { $s.Games = $d.Games }
             if ($d.Pending -is [hashtable]) { $s.Pending = $d.Pending }
             if ($d.Recipe) { $s.Recipe = [int]$d.Recipe }
+            if ($d.NvBackup -is [hashtable]) { $s.NvBackup = $d.NvBackup }
         } catch {
             Write-JuicerLog "frame-pacer.json dañado, se aparta como .dañado y se empieza de cero: $_"
             # Keep the bad file: the next save would overwrite it with defaults and lose any chance to recover it.
@@ -152,6 +155,76 @@ function Read-JuicerPacer {
 function Save-JuicerPacer {
     param([hashtable]$State)
     Write-JuicerTextAtomic (Get-JuicerPacerPath) (ConvertTo-JuicerJson $State)
+}
+
+# --- NVIDIA's profile store, backed up before the first write -------------------
+# Win Juicer writes game profiles through the driver (NVAPI). A driver bug or an
+# interrupted write can leave that store in a state the NVIDIA Control Panel
+# cannot read, and the panel's own «restore defaults» only goes back to NVIDIA's
+# defaults. So, before the very first write ever (and only then), the two files
+# the driver keeps it in are copied into Win Juicer's folder, one dated folder
+# per copy, never overwritten.
+
+function Get-JuicerNvBackupRoot { Join-Path (Get-JuicerHome) 'respaldo-nvidia' }
+
+# Copies the store once. Never throws: a backup that cannot be made is logged and
+# tried again at the next write, and it never stops the change.
+function Backup-JuicerNvProfilesOnce {
+    $b = Get-JuicerBackend
+    if (-not $b.NvBackup) { return }
+    try {
+        $state = Read-JuicerPacer
+        if ($state.NvBackup -is [hashtable] -and $state.NvBackup.Date) { return }
+        $dest = Join-Path (Get-JuicerNvBackupRoot) (Get-Date -Format 'yyyy-MM-dd_HH-mm-ss')
+        New-Item -ItemType Directory -Path $dest -Force | Out-Null
+        $files = @(& $b.NvBackup $dest)
+        if ($files.Count -eq 0) {
+            # Nothing there yet (the driver has not saved any profile): nothing to protect, and no marker.
+            Remove-Item -LiteralPath $dest -Force -ErrorAction SilentlyContinue
+            return
+        }
+        $state.NvBackup = @{ Date = (Get-Date).ToString('s'); Path = $dest; Files = $files }
+        Save-JuicerPacer $state
+        Write-JuicerLog "Perfiles de NVIDIA copiados antes del primer cambio: $dest ($($files -join ', '))."
+    } catch {
+        Write-JuicerLog "No se pudo copiar los perfiles de NVIDIA antes del primer cambio: $_"
+    }
+}
+
+# The copies there are, newest first: @{ Path; Date; Files }.
+function Get-JuicerNvBackups {
+    $root = Get-JuicerNvBackupRoot
+    if (-not (Test-Path -LiteralPath $root -PathType Container)) { return @() }
+    @(Get-ChildItem -LiteralPath $root -Directory -ErrorAction SilentlyContinue | Sort-Object Name -Descending | ForEach-Object {
+            $f = @(Get-ChildItem -LiteralPath $_.FullName -Filter 'nvdrsdb*.bin' -File -ErrorAction SilentlyContinue | ForEach-Object { $_.Name })
+            if ($f.Count -gt 0) { @{ Path = $_.FullName; Date = $_.Name; Files = $f } }
+        })
+}
+
+# What the person must be told before it is done: it is everything, not only what Win Juicer set.
+function Get-JuicerNvRestoreWarning {
+    'Restaurar los perfiles de NVIDIA sustituye TODOS los ajustes de perfiles del driver (los de cada juego y los globales, también los que hayas puesto tú en el Panel de control de NVIDIA) por los de la copia que Win Juicer hizo antes de su primer cambio. Después hay que reiniciar el servicio del driver de NVIDIA, y lo más seguro es reiniciar el equipo; hasta entonces el driver puede seguir con lo de antes o volver a escribir encima. Win Juicer repondrá los límites de FPS que ya no estén.'
+}
+
+# Puts the newest copy (or the one at Path) back. Returns @{ Ok; Message; Files }.
+function Restore-JuicerNvProfiles {
+    param([string]$Path)
+    $b = Get-JuicerBackend
+    if (-not $b.NvRestore) { return @{ Ok = $false; Message = 'Este equipo no permite restaurar los perfiles de NVIDIA.'; Files = @() } }
+    if (-not $Path) {
+        $all = @(Get-JuicerNvBackups)
+        if ($all.Count -eq 0) { return @{ Ok = $false; Message = 'No hay ninguna copia de los perfiles de NVIDIA: se hace sola antes del primer cambio de Win Juicer en ellos, y todavía no ha habido ninguno.'; Files = @() } }
+        $Path = $all[0].Path
+    }
+    try {
+        $files = @(& $b.NvRestore $Path)
+    } catch {
+        Write-JuicerLog "No se pudieron restaurar los perfiles de NVIDIA desde ${Path}: $_"
+        return @{ Ok = $false; Message = "No se pudieron restaurar los perfiles de NVIDIA: $_"; Files = @() }
+    }
+    if ($files.Count -eq 0) { return @{ Ok = $false; Message = "La copia $Path no tiene archivos de perfiles de NVIDIA."; Files = @() } }
+    Write-JuicerLog "Perfiles de NVIDIA restaurados desde ${Path}: $($files -join ', ')."
+    @{ Ok = $true; Message = 'Perfiles de NVIDIA restaurados. Reinicia el servicio del driver de NVIDIA o, mejor, el equipo, para que los use.'; Files = $files }
 }
 
 function Get-JuicerPacerEngine { [string](Read-JuicerPacer).Engine }
@@ -504,7 +577,7 @@ function Add-JuicerFpsLimit {
     }
     # The rate is applied as asked, but Reflex in the game may cap it lower: say so.
     if ($r.Outcome -in 'Aplicado', 'YaEstaba') {
-        $reflex = Get-JuicerReflexCapNote $exeName $Fps $hz $use (Get-JuicerMainGpuVendor) (Get-JuicerGameTech $exeName)
+        $reflex = Get-JuicerReflexCapNote $exeName $Fps $hz $use (Get-JuicerMainGpuVendor) (Get-JuicerGameTech $exeName) (-not (Test-JuicerPacerMinimal $exeName))
         if ($reflex) { $r.Message = ("$($r.Message) $reflex").Trim() }
         # Forced VSync a hair under the refresh can make frames wait.
         $edge = Get-JuicerVsyncEdgeNote $Fps $hz $use (-not $over -and -not (Test-JuicerPacerMinimal $exeName))
@@ -579,7 +652,13 @@ function Clear-JuicerPacerPending {
 
 function Get-JuicerPacerPending { @((Read-JuicerPacer).Pending.Keys) }
 
-# What waited for its game, for the games that are closed now.
+# What waited for its game, for the games that are closed now. A change that
+# throws goes back on the list with one more attempt (it is the same change,
+# and the game is still waiting for it): losing it silently would leave the
+# game without the pacer the user asked for. After three attempts it is given
+# up, said in the log and in a result the person sees.
+$script:PacerPendingMaxAttempts = 3
+
 function Invoke-JuicerPacerPending {
     param([hashtable]$Monitor)
     $out = @()
@@ -596,7 +675,25 @@ function Invoke-JuicerPacerPending {
             }
             if ($p.Op -eq 'Set') { $out += Add-JuicerFpsLimit $exe ([int]$p.Fps) $Monitor ([string]$p.Use) }
         } catch {
-            $out += New-JuicerResult @{ Id = "fps:$exe"; Title = "Frame pacer: $exe"; Reboot = 'No' } 'Error' "$_"
+            $why = "$_"
+            $n = ([int]$p.Attempts) + 1
+            $info = @{ Id = "fps:$exe"; Title = "Frame pacer: $exe"; Reboot = 'No' }
+            if ($n -ge $script:PacerPendingMaxAttempts) {
+                Write-JuicerLog "Frame pacer de ${exe}: se deja de intentar tras $n intentos: $why"
+                $out += New-JuicerResult $info 'Error' "No se pudo aplicar tras $n intentos y Win Juicer deja de intentarlo: $why Vuelve a pedirlo desde la página del juego."
+            } else {
+                # Back on the list unless a newer request for this game came in meanwhile (that one wins).
+                $again = Read-JuicerPacer
+                if (-not $again.Pending.ContainsKey($exe)) {
+                    $q = @{}
+                    foreach ($k in $p.Keys) { $q[$k] = $p[$k] }
+                    $q.Attempts = $n
+                    $again.Pending[$exe] = $q
+                    Save-JuicerPacer $again
+                }
+                Write-JuicerLog "Frame pacer de ${exe}: intento $n de $script:PacerPendingMaxAttempts sin éxito, se reintentará: $why"
+                $out += New-JuicerResult $info 'Pendiente' "No se pudo aplicar (intento $n de $script:PacerPendingMaxAttempts) y se reintentará: $why"
+            }
         }
     }
     $out
@@ -674,6 +771,166 @@ function Format-JuicerFpsBackend {
         'rtss' { 'RivaTuner Statistics Server (tiene que estar abierto; se queda en la bandeja). En su Setup, «Framerate limiter»: «Front edge sync» da la menor latencia y «Back edge sync» los frametimes más planos' }
         default { 'ninguno todavía: con NVIDIA lo hace el driver; con AMD o Intel hace falta RivaTuner Statistics Server, que es gratis' }
     }
+}
+
+# --- Requested and effective ------------------------------------------------------
+# What Win Juicer asks for is not always what the game gets: NVIDIA's own
+# profile for the game, another limiter, the game's own limit, or Reflex with
+# G-SYNC can sit lower, and the lowest one wins. This puts together what the
+# detectors that already exist can see, and says nothing about the rest:
+# a detector that cannot read its source adds nothing (no guessing). Returns
+# @{ Exe; Requested; Effective; By; Limiter } or $null with nothing asked.
+# By is a list of @{ Source; Value; Text; Caps }: Caps is false for what only
+# informs (the VRR range is the display's, not a cap on the game's rate).
+# Limiter is the entry that holds the rate down, or $null when nothing does.
+# Everything the detectors read can be handed in (tests, and callers that
+# already have it); what is left out is read here.
+function Get-JuicerEffectiveCap {
+    param([Parameter(Mandatory)][string]$Exe, [int]$Requested = 0, [hashtable]$Monitor, [hashtable]$State, [string]$Backend, [hashtable]$Unreal, [hashtable]$Tech, [string]$GpuVendor)
+    $exe = ConvertTo-JuicerExeName $Exe
+    $b = Get-JuicerBackend
+    if (-not $PSBoundParameters.ContainsKey('Monitor')) { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" } }
+    if (-not $PSBoundParameters.ContainsKey('State')) { try { $State = & $b.PacerState } catch { Write-JuicerLog "Sin el estado de otros limitadores: $_" } }
+    if (-not $PSBoundParameters.ContainsKey('Backend')) { $Backend = Get-JuicerFpsBackend }
+    if (-not $PSBoundParameters.ContainsKey('Unreal')) { try { $Unreal = Get-JuicerUnrealLimit $exe } catch { Write-JuicerLog "Sin ajustes del juego: $_" } }
+    if (-not $PSBoundParameters.ContainsKey('Tech')) { $Tech = Get-JuicerGameTech $exe }
+    if (-not $PSBoundParameters.ContainsKey('GpuVendor')) { $GpuVendor = Get-JuicerMainGpuVendor }
+    if ($Requested -le 0) {
+        $live = @(Get-JuicerFpsLimits | Where-Object { $_.Exe -eq $exe }) | Select-Object -First 1
+        if ($live -and $live.Fps) { $Requested = [int]$live.Fps }
+    }
+    if ($Requested -le 0) { $Requested = Get-JuicerPacerFps $exe }
+    if ($Requested -le 0) { try { $rec = Get-JuicerRecommendedFps $exe $Monitor; if ($rec) { $Requested = [int]$rec.Fps } } catch { Write-JuicerLog "Sin ritmo recomendado para ${exe}: $_" } }
+    if ($Requested -le 0) { return $null }
+
+    $hz = if ($Monitor -and $Monitor.Display) { [int]$Monitor.Display.Hz } else { 0 }
+    $use = if ($Monitor) { Resolve-JuicerMonitorUse $Monitor } else { '' }
+    $by = New-Object System.Collections.ArrayList
+    $add = { param($Source, $Value, $Text, $Caps) [void]$by.Add(@{ Source = $Source; Value = [int][Math]::Round([double]$Value); Text = $Text; Caps = [bool]$Caps }) }
+    & $add 'Win Juicer' $Requested 'el ritmo que pide Win Juicer' $true
+
+    # NVIDIA's own profile for this game (Win Juicer never goes above it) and any
+    # limit of the user's in that profile when the engine is not the driver.
+    $frl = $null
+    try { $frl = & $b.NvRead $exe ([uint32]0x10835002) } catch { Write-JuicerLog "Sin leer el límite de NVIDIA de ${exe}: $_" }
+    if ($frl -and $null -ne $frl.Predefined -and [int]$frl.Predefined -gt 0) { & $add 'NVIDIA (perfil del juego)' $frl.Predefined 'NVIDIA limita este juego en su propio perfil porque por encima no funciona bien' $true }
+    $ownDriver = [bool]($frl -and $null -ne $frl.Value -and [int]$frl.Value -gt 0)
+    if ($Backend -ne 'nvidia' -and $ownDriver) { & $add 'NVIDIA (perfil del juego)' $frl.Value 'un límite en el perfil de NVIDIA de este juego' $true }
+    if ($State) {
+        # The panel's global limit is for games whose profile has none of its own.
+        if ($Backend -ne 'nvidia' -and -not $ownDriver -and [int]$State.NvGlobal -gt 0) { & $add 'NVIDIA (global)' $State.NvGlobal 'el límite global del panel de NVIDIA' $true }
+        # RivaTuner limits only while it is open.
+        if ($State.RtssRunning) {
+            $perGame = if ($State.RtssGames -is [hashtable]) { $State.RtssGames[$exe] } else { $null }
+            if ($Backend -ne 'rtss' -and $perGame -gt 0) { & $add 'RivaTuner (perfil del juego)' $perGame 'un límite en el perfil de RivaTuner de este juego' $true }
+            elseif ($Backend -ne 'rtss' -and $null -eq $perGame -and [double]$State.RtssGlobal -gt 0) { & $add 'RivaTuner (global)' $State.RtssGlobal 'el límite global de RivaTuner, si el juego no tiene perfil propio' $true }
+        }
+    }
+    if ($Unreal -and [double]$Unreal.Limit -gt 0) { & $add 'El propio juego' $Unreal.Limit 'el límite de FPS de los ajustes del propio juego' $true }
+    # Reflex caps with G-SYNC and V-Sync on: only where Win Juicer forces V-Sync (not in prudent mode).
+    if (-not (Test-JuicerPacerMinimal $exe)) {
+        $reflex = Get-JuicerReflexCapSource $exe $Requested $hz $use $GpuVendor $Tech
+        if ($reflex) { & $add 'Reflex con G-SYNC' $reflex.Cap 'NVIDIA Reflex pone ese tope con G-SYNC y V-Sync (Hz − Hz²/3600), si lo tienes activado en el juego' $true }
+    }
+    $top = Get-JuicerVrrTop $Monitor
+    if ($use -in 'VRR', 'EstroboSync' -and $top -gt 0 -and $Requested -gt $top) { & $add 'Rango VRR de la pantalla' $top "por encima de $top Hz la frecuencia variable se apaga" $false }
+
+    $capping = @($by | Where-Object { $_.Caps -and $_.Value -gt 0 })
+    $effective = ($capping | ForEach-Object { $_.Value } | Measure-Object -Minimum).Minimum
+    $limiter = $null
+    if ($effective -lt $Requested) { $limiter = @($capping | Where-Object { $_.Value -eq $effective -and $_.Source -ne 'Win Juicer' }) | Select-Object -First 1 }
+    @{ Exe = $exe; Requested = $Requested; Effective = [int]$effective; By = @($by); Limiter = $limiter }
+}
+
+# «Pides 178 · efectivo ~171 (limita: Reflex con G-SYNC)». Several holding it at
+# the same value are all named.
+function Format-JuicerEffectiveCap {
+    param($Cap)
+    if (-not $Cap) { return '' }
+    $out = if ($Cap.Effective -lt $Cap.Requested) {
+        $names = @($Cap.By | Where-Object { $_.Caps -and $_.Value -eq $Cap.Effective -and $_.Source -ne 'Win Juicer' } | ForEach-Object { $_.Source })
+        'Pides {0} · efectivo ~{1} (limita: {2})' -f $Cap.Requested, $Cap.Effective, ($names -join ' y ')
+    } else {
+        'Pides {0} · efectivo {0}: nada que Win Juicer vea lo limita por debajo' -f $Cap.Requested
+    }
+    $info = @($Cap.By | Where-Object { -not $_.Caps } | ForEach-Object { $_.Text })
+    if ($info.Count -gt 0) { $out += ' · ojo: ' + ($info -join '; ') }
+    $out
+}
+
+# --- What was put in a game ---------------------------------------------------------
+# The journal knows what Win Juicer changed for a game (fps:<exe>); this says it
+# the way a person would, from what is set now, for the message after applying
+# (the rate line is worded here; Format-JuicerAction words the same thing for
+# the change lists, and carries no live value).
+
+# Lines, one per thing. Reads the journal and the driver; Console words the way
+# back for the console instead of the window.
+function Get-JuicerPacerAppliedLines {
+    param([Parameter(Mandatory)][string]$Exe, [switch]$Console)
+    $exe = ConvertTo-JuicerExeName $Exe
+    $b = Get-JuicerBackend
+    $state = Read-JuicerPacer
+    $entry = Get-JuicerJournalEntry (Read-JuicerJournal) "fps:$exe"
+    $lines = @()
+    $set = @()
+    if ($entry) {
+        foreach ($c in @($entry.Actions)) {
+            if ($c.Type -eq 'FpsLimit') {
+                $live = $null
+                try { $live = & $b.FpsRead $exe ([string]$c.Backend) } catch { Write-JuicerLog "No se pudo leer el ritmo de ${exe}: $_" }
+                if ($live -and $live.Fps) {
+                    $by = if ($live.Backend -eq 'rtss') { 'con RivaTuner, a través de su enganche' } else { 'con el driver de NVIDIA, sin inyectar nada en el juego' }
+                    $rate = if ($live.Backend -eq 'rtss' -and [double]$live.Exact -gt 0) { [double]$live.Exact } else { [double]$live.Fps }
+                    $lines += ('Límite de {0:0.##} FPS ({1:N2} ms por fotograma) {2}.' -f $rate, (1000 / $rate), $by)
+                }
+            } elseif ($c.Type -eq 'NvSetting') {
+                $id = [uint32]$c.SettingId
+                $set += $id
+                $live = $null
+                try { $live = & $b.NvRead $exe $id } catch { Write-JuicerLog "No se pudo leer el ajuste de NVIDIA de ${exe}: $_" }
+                if (-not $live -or $null -eq $live.Value) { continue }
+                $lines += switch ($id) {
+                    ([uint32]0x007BA09E) { if ([uint32]$live.Value -eq 1) { 'Fotogramas pre-renderizados: 1 (la cola más corta, menos latencia)' } else { "Fotogramas pre-renderizados: $($live.Value)" } }
+                    ([uint32]0x00A879CF) {
+                        switch ([uint32]$live.Value) {
+                            ([uint32]0x47814940) { 'V-Sync forzada (con G-SYNC y el límite por debajo de los Hz sólo tapa un corte, sin añadir espera)' }
+                            ([uint32]0x08416747) { 'V-Sync desactivada (el ritmo pasa de los Hz: sin su espera ni su cola, con cortes de imagen)' }
+                            ([uint32]0x60925292) { 'V-Sync: la que diga el juego' }
+                            default { "V-Sync: valor $($live.Value)" }
+                        }
+                    }
+                    default { 'Ajuste de NVIDIA 0x{0:X8} = {1}' -f $id, $live.Value }
+                }
+            }
+        }
+    }
+    if ($entry) {
+        if (Test-JuicerPacerMinimal $exe) {
+            $lines += 'Modo prudente: sólo el límite; la V-Sync y la cola de fotogramas se quedan como las deje el juego.'
+        } else {
+            # What the recipe leaves alone because NVIDIA fixes it for that game.
+            foreach ($r in @(@{ Id = [uint32]0x007BA09E; Name = 'Fotogramas pre-renderizados' }, @{ Id = [uint32]0x00A879CF; Name = 'La V-Sync' })) {
+                if ($set -contains $r.Id) { continue }
+                $info = $null
+                try { $info = & $b.NvRead $exe $r.Id } catch { Write-JuicerLog "No se pudo leer el ajuste de NVIDIA de ${exe}: $_" }
+                if ($info -and $null -ne $info.Predefined) { $lines += "$($r.Name): no se toca, porque NVIDIA ya lo fija así para este juego." }
+            }
+        }
+    }
+    if ($state.Pending.ContainsKey($exe)) { $lines += "Hay un cambio en espera: se aplicará en cuanto cierres $exe (Win Juicer no toca un juego abierto)." }
+    if ($lines.Count -gt 0) {
+        $lines += $(if ($Console) { 'Se deshace con «Q» (quitar el frame pacer) en este menú, o con «Deshacer» del menú principal.' } else { 'Se deshace con «Quitar lo de Win Juicer» (arriba) o desde la pestaña Deshacer.' })
+    }
+    $lines
+}
+
+# The lines as one text, with its heading; '' when there is nothing to say.
+function Format-JuicerPacerApplied {
+    param([Parameter(Mandatory)][string]$Exe, [switch]$Console)
+    $lines = @(Get-JuicerPacerAppliedLines $Exe -Console:$Console)
+    if ($lines.Count -eq 0) { return '' }
+    "Qué se ha puesto en $(ConvertTo-JuicerExeName $Exe):`n" + (($lines | ForEach-Object { "· $_" }) -join "`n")
 }
 
 # --- How well it paces --------------------------------------------------------

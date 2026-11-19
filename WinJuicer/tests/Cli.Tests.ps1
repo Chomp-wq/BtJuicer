@@ -108,6 +108,8 @@ Describe '-Simular no cambia nada' {
             @{ Name = 'MedirJuego'; Args = @{ MedirJuego = 30 } }
             @{ Name = 'ApuntarAjuste'; Args = @{ ApuntarAjuste = $true; AjusteCpu = 'CO -25' } }
             @{ Name = 'OlvidarAjuste'; Args = @{ OlvidarAjuste = $true } }
+            @{ Name = 'ModoPrudente'; Args = @{ ModoPrudente = 'Activar'; Juego = 'cs2.exe' } }
+            @{ Name = 'RestaurarPerfilesNvidia'; Args = @{ RestaurarPerfilesNvidia = $true } }
         )
         foreach ($c in $cases) {
             $a = $c.Args

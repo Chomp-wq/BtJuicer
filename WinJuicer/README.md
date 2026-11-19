@@ -198,6 +198,8 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -CalibrarJuego cs2.exe -Si              # y aplica la propuesta sin preguntar
 .\WinJuicer.ps1 -CalibrarJuego cs2.exe -Prioridad Latencia  # para competitivos: por encima de los Hz si da para ello
 .\WinJuicer.ps1 -MotorPacer rtss                        # RivaTuner en vez del driver (admite décimas)
+.\WinJuicer.ps1 -ModoPrudente Activar -Juego cs2.exe    # sólo el límite de FPS en ese juego (Desactivar para volver)
+.\WinJuicer.ps1 -RestaurarPerfilesNvidia                # vuelve a la copia de los perfiles del driver (pregunta antes)
 .\WinJuicer.ps1 -ApuntarAjuste -AjusteCpu 'Curve Optimizer -30' -AjusteGpu 'curva 900 mV, memoria +500' -HerramientaGpu Afterburner
 .\WinJuicer.ps1 -OlvidarAjuste
 .\WinJuicer.ps1 -ModoMonitor Estrobo                     # usas ELMB/DyAc sin VRR: el ritmo va exacto a los Hz
@@ -540,6 +542,21 @@ si tienes dos. Se aplica solo cada vez que abras el juego.
   para instalar RivaTuner. **Modo prudente**: sólo el límite de FPS, sin tocar
   la sincronización vertical ni la cola de fotogramas, para un juego que se
   porta mal con lo demás.
+- **¿Por qué este número?**: el cálculo del ritmo automático, a un clic bajo el
+  ritmo (en la consola, debajo del ritmo en la información del juego). **Pides
+  178 · efectivo ~171 (limita: Reflex con G-SYNC)**: lo que de verdad llega al
+  juego, mirando lo que Win Juicer sabe leer: el perfil del propio NVIDIA para
+  el juego, un límite en el perfil de NVIDIA o de RivaTuner (abierto), el
+  global de RivaTuner o del panel, el límite propio del juego (Unreal), Reflex
+  con G-SYNC (sólo con la V-Sync forzada, no en modo prudente) y el tope del
+  VRR (que avisa, no recorta). Lo que no puede leer, no lo adivina.
+- **Qué se ha puesto**, en palabras normales, después de aplicar: el límite y
+  con qué motor, fotogramas pre-renderizados, V-Sync, lo que se deja porque
+  NVIDIA ya lo fija, el modo prudente, lo que espera a que cierres el juego y
+  cómo se deshace. En la ventana, en el mensaje y en la página; en la consola,
+  tras `-LimitarFps` y en la información del juego.
+- **Primera visita**: una explicación corta y descartable (qué es VRR, qué hace
+  el frame pacer, por qué 171 y no 180 a 180 Hz); se recuerda en `interfaz.json`.
 - **Más rendimiento**: la gráfica potente (con dos gráficas) y prioridad por
   encima de lo normal (no «alta»: con prioridad alta, un juego que ocupa un
   núcleo entero deja sin turno al sonido, al ratón y a sus propios hilos, y el
@@ -587,9 +604,21 @@ Cada cambio en la página se aplica al momento y se deshace como todo lo demás.
   página, es en modo prudente. Si ya fallaba antes, sólo te avisa: entonces no
   parece cosa de Win Juicer.
 - **Con RivaTuner** el ritmo se marca a través de su enganche al juego (el
-  mismo de su contador de FPS). Si el juego trae anti-trampas (Easy Anti-Cheat,
-  BattlEye…), su página lo dice: la mayoría lo admiten, pero si se cierra o te
-  expulsa, mejor su propio límite de FPS.
+  mismo de su contador de FPS), y un antitrampas puede tomarlo por un truco.
+  Win Juicer detecta el antitrampas de cada juego: Easy Anti-Cheat, BattlEye,
+  EA Javelin (`EAAntiCheat*.exe`), nProtect GameGuard, XIGNCODE3, Tencent ACE
+  (`AntiCheatExpert`, `ACE-*`), NetEase (`NeacSafe*`), mhyprot (HoYoverse),
+  Ricochet (Call of Duty: su driver `atvi-randgrid*` o el nombre del `.exe`),
+  Hyperion (Roblox), Riot Vanguard (su servicio `vgc` más un juego de Riot) y
+  FACEIT (su servicio más CS2). Los de Ricochet por nombre, Tencent, NetEase,
+  mhyprot y FACEIT por archivo se reconocen de memoria, sin una especificación:
+  pueden fallar. Con un antitrampas y RivaTuner como único motor, **Optimizar,
+  el mantenimiento automático y el ritmo a mano no ponen el frame pacer**:
+  resultado «no aplica», «tiene antitrampas: RivaTuner se inyecta y podría dar
+  problemas; usa el limitador del propio juego». El driver de NVIDIA, que no
+  se inyecta, sigue como siempre. La misma nota sale en la página del juego y
+  en la información del juego de la consola. Quien quiera RivaTuner igualmente
+  puede pedirlo con `-LimitarFps`.
 - Si sospechas de las «Optimizaciones para juegos en ventana» (de Ajustes),
   Windows deja quitarlas para un solo juego: Configuración > Sistema >
   Pantalla > Gráficos, el juego, Opciones.
@@ -895,6 +924,25 @@ con Win Juicer cerrado:
   NVIDIA o RivaTuner (o `-MotorPacer`). Al cambiarlo, cada juego pasa al nuevo
   motor y se quita del anterior, y la receta de baja latencia sigue en su
   perfil de NVIDIA.
+- **Un cambio en espera que falla** (el driver no contesta al cerrar el juego)
+  no se pierde: vuelve a la lista con un contador de intentos, se avisa, y tras
+  3 intentos se deja con un error visible y una línea en el registro.
+- **Copia de los perfiles de NVIDIA.** Antes de la primera escritura de Win
+  Juicer en el driver, copia `nvdrsdb*.bin` de `ProgramData\NVIDIA Corporation\Drs`
+  a `respaldo-nvidia\<fecha>` (una sola vez; queda anotado en `frame-pacer.json`).
+  Para volver: `-RestaurarPerfilesNvidia`, «N» en el menú del frame pacer de la
+  consola o «Restaurar perfiles de NVIDIA…» en la ventana. Sustituye **todos** los
+  ajustes de perfiles de NVIDIA por los de la copia, pide confirmación (con
+  `-Si`, no) y hay que reiniciar el servicio del driver o, mejor, el equipo.
+  `-Simular` lo rechaza.
+- **Si NVAPI falla**, el mensaje sale en español («el driver de NVIDIA no
+  responde: reinicia el equipo o actualízalo», «hace falta ejecutar Win
+  Juicer como administrador…») con el código al final y el original en el
+  registro. Un fallo de NVAPI se recuerda 30 segundos, no hasta cerrar Win
+  Juicer.
+- **Modo prudente por consola**: «T» en el menú del frame pacer o
+  `-ModoPrudente Activar|Desactivar -Juego cs2.exe` (varios con comas). Ese menú
+  también tiene «G» (ver un juego, y ofrece medirlo si nunca se midió).
 - **Dos limitadores a la vez**: avisa si RivaTuner tiene un límite en su perfil
   Global o en el de un juego que ya tiene el ritmo del driver, si el panel de
   NVIDIA tiene un límite global, o si el motor es RivaTuner y no está abierto.
@@ -1471,7 +1519,9 @@ arranca nada), «Listo para jugar» y la edad de los drivers. `Mejoras.Tests.ps1
 las confirmaciones con detalle, las opciones no válidas de los menús (y que sin
 entrada salen), la grabación y VBS de «Listo para jugar», los juegos ocultos, la
 edad de la calibración y la vista previa de la limpieza sobre carpetas temporales.
-`Pacer.Tests.ps1`, el frame pacer: qué limita a un juego según la medida (Reflex, «Ultra»,
+`Seguridad.Tests.ps1`, los antitrampas y RivaTuner, los cambios en espera que fallan, la
+nota de Reflex en modo prudente, la copia y restauración de los perfiles de NVIDIA, los
+mensajes de NVAPI, «pides y efectivo» y «qué se ha puesto». `Pacer.Tests.ps1`, el frame pacer: qué limita a un juego según la medida (Reflex, «Ultra»,
 algo externo, el procesador, la gráfica o el propio ritmo), los archivos de Reflex y de
 generación de fotogramas, el límite propio de Unreal, los ritmos atrasados, los límites
 que borra el driver, la edad de la calibración, las propuestas de calibrar (la escena, la
