@@ -546,6 +546,35 @@ Describe 'Optimizaciones de ventana y HAGS' {
         Get-JuicerWindowedState | Should -BeTrue
     }
 
+    It 'la línea de ventana sigue omitida si se desconoce, y con VRR señala el ajuste' {
+        @(Get-JuicerReadyStatus @{ Windowed = $null; MonitorUse = 'VRR' } | Where-Object { $_.Key -eq 'ventana' }).Count | Should -Be 0
+        $w = @(Get-JuicerReadyStatus @{ Windowed = $false; MonitorUse = 'VRR' } | Where-Object { $_.Key -eq 'ventana' })
+        $w[0].Ok | Should -BeFalse
+        $w[0].Reason | Should -BeLike '*juegos.ventana*'
+        $w[0].Reason | Should -BeLike '*monitor es VRR*'
+        @(Get-JuicerReadyStatus @{ Windowed = $true; MonitorUse = 'VRR' } | Where-Object { $_.Key -eq 'ventana' })[0].Ok | Should -BeTrue
+    }
+
+    It 'VRROptimizeEnable a 0 con un monitor VRR avisa y apunta a juegos.vrr; sin dato o sin VRR, calla' {
+        $v = @(Get-JuicerReadyStatus @{ VrrOptimize = $false; MonitorUse = 'VRR' } | Where-Object { $_.Key -eq 'vrr' })
+        $v.Count | Should -Be 1
+        $v[0].Ok | Should -BeFalse
+        $v[0].Reason | Should -BeLike '*juegos.vrr*'
+        @(Get-JuicerReadyStatus @{ VrrOptimize = $true; MonitorUse = 'VRR' } | Where-Object { $_.Key -eq 'vrr' })[0].Ok | Should -BeTrue
+        @(Get-JuicerReadyStatus @{ VrrOptimize = $null; MonitorUse = 'VRR' } | Where-Object { $_.Key -eq 'vrr' }).Count | Should -Be 0
+        @(Get-JuicerReadyStatus @{ VrrOptimize = $false; MonitorUse = 'Fijo' } | Where-Object { $_.Key -eq 'vrr' }).Count | Should -Be 0
+    }
+
+    It 'lee VRROptimizeEnable del registro: sólo explícito' {
+        Get-JuicerVrrOptimizeState | Should -BeNullOrEmpty
+        Write-JuicerReg $script:DxKey 'DirectXUserGlobalSettings' 'String' 'SwapEffectUpgradeEnable=1;'
+        Get-JuicerVrrOptimizeState | Should -BeNullOrEmpty
+        Write-JuicerReg $script:DxKey 'DirectXUserGlobalSettings' 'String' 'VRROptimizeEnable=0;SwapEffectUpgradeEnable=1;'
+        Get-JuicerVrrOptimizeState | Should -BeFalse
+        Write-JuicerReg $script:DxKey 'DirectXUserGlobalSettings' 'String' 'VRROptimizeEnable=1;'
+        Get-JuicerVrrOptimizeState | Should -BeTrue
+    }
+
     It 'HAGS espera al reinicio según la última vez que se aplicó, no la primera' {
         $boot = [datetime]'2026-06-01T10:00:00'
         Test-JuicerAppliedAfterBoot @{ AppliedAt = '2026-05-01T09:00:00' } $boot | Should -BeFalse

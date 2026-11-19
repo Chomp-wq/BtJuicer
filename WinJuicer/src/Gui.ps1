@@ -1071,6 +1071,8 @@ $script:GuiWork = @{
             if ($t) { $Sync.Status = $t.Title; $results += @(Set-JuicerToggle $t ([bool]$tg.On)) }
         }
         foreach ($id in @($A.Undo)) { $Sync.Status = "Deshaciendo $id"; $results += Undo-JuicerTweak $id }
+        # The caps the driver wiped (the window's «Volver a aplicarlos»): a game that is open waits for it to close.
+        if (@($A.FpsExes).Count -gt 0 -and -not $A.Simulate) { $Sync.Status = 'Volviendo a poner el límite de FPS…'; $results += @(Restore-JuicerWipedFpsLimits -Exe @($A.FpsExes)) }
         $Sync.Status = 'Comprobando el estado…'
         @{
             Results  = @($results | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; Outcome = $_.Outcome; Message = $_.Message; Reboot = $_.Reboot; Changes = @($_.Changes) } })
@@ -1264,7 +1266,7 @@ function Get-JuicerGuiSnapshot {
     # What Windows has undone since Win Juicer applied it, for the card on Empezar. Plain data
     # only: the tweaks themselves carry script blocks that must not cross runspaces.
     $drift = @()
-    try { $drift = @(Get-JuicerDrift $journal -States $full | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; State = $_.State; Level = $_.Level } }) } catch { Write-JuicerLog "No se pudo revisar lo que Windows ha deshecho: $_" }
+    try { $drift = @(Get-JuicerDrift $journal -States $full | ForEach-Object { @{ Id = $_.Id; Title = $_.Title; State = $_.State; Level = $_.Level; Kind = [string]$_.Kind; Exe = [string]$_.Exe } }) } catch { Write-JuicerLog "No se pudo revisar lo que Windows ha deshecho: $_" }
     @{ States = $states; Dns = $dns; Changes = $(if ($SkipChanges) { @{} } else { Get-JuicerTweakChanges }); Drift = $drift }
 }
 
@@ -2081,19 +2083,19 @@ function Select-JuicerGuiCarefulApps {
 }
 
 function Invoke-JuicerGuiApply {
-    param([string[]]$Ids, [switch]$Simulate)
+    param([string[]]$Ids, [switch]$Simulate, [string[]]$FpsExes = @())
     $catalog = @(Get-JuicerCatalog)
     # Plus the «no» side of a preference («id!»), which a re-apply of what Windows undid can name.
     $tweaks = @($catalog | Where-Object { $Ids -contains $_.Id }) + @($Ids | Where-Object { $_ -like '*!' } | ForEach-Object { Resolve-JuicerJournalTweak $_ } | Where-Object { $_ })
-    if ($tweaks.Count -eq 0) { Show-JuicerGuiMessage 'No hay nada seleccionado que aplicar.' | Out-Null; return }
+    if ($tweaks.Count -eq 0 -and $FpsExes.Count -eq 0) { Show-JuicerGuiMessage 'No hay nada seleccionado que aplicar.' | Out-Null; return }
     if (-not $Simulate) {
         $tweaks = @(Select-JuicerGuiExtreme $tweaks)
-        if ($tweaks.Count -eq 0) { return }
-        $list = ($tweaks | ForEach-Object { '· ' + $_.Title }) -join "`n"
+        if ($tweaks.Count -eq 0 -and $FpsExes.Count -eq 0) { return }
+        $list = (@($tweaks | ForEach-Object { '· ' + $_.Title }) + @($FpsExes | ForEach-Object { "· Volver a poner el límite de FPS de $_" })) -join "`n"
         if (-not (Confirm-JuicerGui "Se aplicará:`n`n$list`n`n¿Seguir?")) { return }
     }
     $verb = if ($Simulate) { 'Simulando…' } else { 'Aplicando…' }
-    Start-JuicerGuiTask $verb 'Run' @{ Ids = @($tweaks | ForEach-Object { $_.Id }); Simulate = [bool]$Simulate; RestorePoint = [bool]$script:Gui.C.ChkRestorePoint.IsChecked } { param($r) Complete-JuicerGuiRun $r }
+    Start-JuicerGuiTask $verb 'Run' @{ Ids = @($tweaks | ForEach-Object { $_.Id }); Simulate = [bool]$Simulate; RestorePoint = [bool]$script:Gui.C.ChkRestorePoint.IsChecked; FpsExes = @($FpsExes) } { param($r) Complete-JuicerGuiRun $r }
 }
 
 function Start-JuicerGuiAudit {
@@ -2486,6 +2488,8 @@ function Get-JuicerGuiGamePage {
     $auto = $null
     try { $auto = Get-JuicerRecommendedFps $exe $m -Automatic } catch { Write-JuicerLog "Sin ritmo recomendado para ${exe}: $_" }
     $last = Get-JuicerPreviousFrameResult $exe
+    # What the game's folder shows (kept, and looked at again only if the folder changed), before the notes that use it.
+    try { [void](Update-JuicerGameTech $g) } catch { Write-JuicerLog "Sin carpeta de ${exe}: $_" }
     $reflex = $null
     try { $reflex = Get-JuicerReflexCapNoteHere $exe $m } catch { Write-JuicerLog "Sin nota de Reflex para ${exe}: $_" }
     $tips = @()
@@ -2498,7 +2502,8 @@ function Get-JuicerGuiGamePage {
         Competitive = (Test-JuicerCompetitiveGame $exe); TwoGpus = ((Get-JuicerGpuCount) -ge 2)
         Last = $(if ($last) { @{ Date = $last.Date; AvgFps = $last.AvgFps; Low1 = $last.Low1; Steady = $last.Steady; JitterMs = $last.JitterMs; InputLatency = $last.InputLatency; Latency = $last.Latency } } else { $null })
         Chart = (Get-JuicerFrameChart $exe); Tips = $tips; Cover = $cover
-        CalAge = $(if ($g.CalFps) { Get-JuicerCalibrationAge $g.CalDate $g.CalFps } else { $null })
+        CalAge = $(if ($g.CalFps -and $g.CalState -eq 'Activa') { Get-JuicerCalibrationAge $g.CalDate $g.CalFps } elseif ($g.CalFps -and $g.CalState -eq 'OtroMonitor') { @{ Sentence = 'Calibración de otro monitor o modo: no se usa ahora.' } } else { $null })
+        MeasureWarn = (Get-JuicerFrameGenMeasureWarning $exe)
         Running = (Test-JuicerGameRunning $exe); Safe = (Get-JuicerGameSafe $exe); Minimal = [bool]$g.Minimal
         AntiCheat = $(if ($g.Dir) { Get-JuicerGameAntiCheat ([string]$g.Dir) } else { '' })
     }
@@ -2603,6 +2608,8 @@ function Show-JuicerGuiGamePage {
     if ($P.Safe) { $notes += Format-JuicerSafeNote $P.Safe $g.Name }
     if ($P.Running) { $notes += 'El juego está abierto: lo que cambies del frame pacer se aplicará en cuanto lo cierres. Win Juicer no toca el perfil de un juego en marcha, para que no se congele.' }
     elseif ($g.Waiting) { $notes += 'Hay un cambio del frame pacer esperando: se aplica en unos segundos.' }
+    $script:Gui.GameMeasureWarn = [string]$P.MeasureWarn
+    if ($P.MeasureWarn) { $notes += $P.MeasureWarn }
     if ($P.Engine -eq 'rtss' -and $P.AntiCheat) { $notes += "Este juego usa $($P.AntiCheat). RivaTuner se engancha al juego para marcar el ritmo; la mayoría de anti-trampas lo admiten, pero si se cierra o te expulsa, quítale el frame pacer y usa el límite de FPS del propio juego." }
     $c.GameNoticeText.Text = $notes -join "`n`n"
     $c.GameNotice.Visibility = $(if ($notes.Count -gt 0) { 'Visible' } else { 'Collapsed' })
@@ -2652,7 +2659,8 @@ function Start-JuicerGuiGameMeasure {
     $g = $script:Gui.Game
     if (-not $g) { return }
     $what = if ($Work -eq 'GameCalibrate') { 'calibrar' } else { 'medir' }
-    if (-not (Confirm-JuicerGui "Para $what $($g.Name):`n`n1. Ten el juego abierto, ya jugando (no en un menú).`n2. Pulsa Sí y vuelve al juego antes de 10 segundos.`n3. Juega con normalidad un minuto.`n`nWin Juicer te avisará al terminar. ¿Empezar?")) { return }
+    $fgWarn = if ($script:Gui.GameMeasureWarn) { "`n`n$($script:Gui.GameMeasureWarn)" } else { '' }
+    if (-not (Confirm-JuicerGui "Para $what $($g.Name):`n`n1. Ten el juego abierto, ya jugando (no en un menú).`n2. Pulsa Sí y vuelve al juego antes de 10 segundos.`n3. Juega con normalidad un minuto.$fgWarn`n`nWin Juicer te avisará al terminar. ¿Empezar?")) { return }
     Start-JuicerGuiTask "Vuelve a $($g.Name): empieza en 10 s…" $Work @{ Game = $g.Clone() } {
         param($r)
         Show-JuicerGuiGamePage $r.Page
@@ -2713,12 +2721,14 @@ function Get-JuicerGuiLimiter {
     try { $state = & (Get-JuicerBackend).PacerState } catch { Write-JuicerLog "Sin estado del frame pacer: $_" }
     $backend = Get-JuicerFpsBackend
     $engines = @(Get-JuicerPacerEngines)
+    $allMonitors = @()
+    try { $allMonitors = @(Get-JuicerMonitors) } catch { Write-JuicerLog "Sin monitores: $_" }
     @{
         Backend = $backend; Monitor = $(if ($m) { Format-JuicerMonitor $m } else { '' }); Cap = $cap
         Mode = $(if ($m) { $m.Mode } else { '' })
         Limits = $limits
         Engine = $pacer.Engine; Engines = $engines; Calibrated = @($pacer.Calibrated.Keys)
-        Conflicts = @(Get-JuicerPacerConflicts $state $backend $limits $m)
+        Conflicts = @(Get-JuicerPacerConflicts $state $backend $limits $m (Get-JuicerMainGpuVendor) @($allMonitors))
         # RivaTuner, when there is nothing else to pace with, or with strobing,
         # where its decimals put the pace just under the real refresh rate.
         SuggestRtss = ($engines -notcontains 'rtss') -and (-not $backend -or ($m -and (Resolve-JuicerMonitorUse $m) -eq 'Estrobo'))
@@ -2855,10 +2865,13 @@ function Register-JuicerGuiHandlers {
             $script:Gui.Window.Close()
         }
         BtnDriftReapply       = {
-            $ids = @(@($script:Gui.Snapshot.Drift) | Where-Object { $_ } | ForEach-Object { [string]$_.Id })
-            if ($ids.Count -eq 0) { return }
+            $drift = @(@($script:Gui.Snapshot.Drift) | Where-Object { $_ })
+            $ids = @($drift | Where-Object { $_.Kind -ne 'Fps' } | ForEach-Object { [string]$_.Id })
+            # The caps the driver wiped go back through the limiter, not the catalog.
+            $fps = @($drift | Where-Object { $_.Kind -eq 'Fps' } | ForEach-Object { [string]$_.Exe })
+            if ($ids.Count -eq 0 -and $fps.Count -eq 0) { return }
             # The normal way: Extremo ones are confirmed one by one, then a question for the rest.
-            Invoke-JuicerGuiApply $ids
+            Invoke-JuicerGuiApply $ids -FpsExes $fps
         }
         BtnUpdateCopy         = {
             ('System.Windows.Clipboard' -as [type])::SetText($script:OneLineCommand)

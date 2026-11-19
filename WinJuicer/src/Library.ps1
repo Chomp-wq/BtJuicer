@@ -212,14 +212,16 @@ function Get-JuicerLibraryPath { Join-Path (Get-JuicerHome) 'juegos.json' }
 # Exe: the .exe worked out or chosen for each game id; Custom: games added by
 # hand; Known: ids already seen, to mark the new ones; Hidden: ids the person
 # said are not games (a tool, a benchmark), kept out of the gallery and of the
-# automatic optimizing but still known, so showing them again is not «new».
+# automatic optimizing but still known, so showing them again is not «new»;
+# Tech: what each game's folder says it can do (see Update-JuicerGameTech).
 function Read-JuicerLibraryState {
-    $s = @{ Exe = @{}; Custom = @(); Known = @(); Hidden = @() }
+    $s = @{ Exe = @{}; Custom = @(); Known = @(); Hidden = @(); Tech = @{} }
     $p = Get-JuicerLibraryPath
     if (Test-Path -LiteralPath $p) {
         try {
             $d = ConvertTo-JuicerHashtable ([IO.File]::ReadAllText($p) | ConvertFrom-Json)
             if ($d.Exe -is [hashtable]) { $s.Exe = $d.Exe }
+            if ($d.Tech -is [hashtable]) { $s.Tech = $d.Tech }
             $s.Custom = @($d.Custom | Where-Object { $_ -is [hashtable] })
             $s.Known = @($d.Known | Where-Object { $_ })
             $s.Hidden = @($d.Hidden | Where-Object { $_ })
@@ -326,7 +328,9 @@ function Get-JuicerGames {
         $g.ExeName = (Split-Path -Leaf $g.Exe).ToLowerInvariant()
         $wasKnown = $state.Known -contains $g.Id -or @($g.Merged | Where-Object { $state.Known -contains $_ }).Count -gt 0
         $g.New = $state.Known.Count -gt 0 -and -not $wasKnown
-        $g.Hidden = [bool]($state.Hidden -contains $g.Id)
+        # Hidden carries over from the ids this one absorbed: hiding the registry entry of a
+        # game that later merged into its store entry must not bring it back to the gallery.
+        $g.Hidden = [bool]($state.Hidden -contains $g.Id) -or @($g.Merged | Where-Object { $_ -and $state.Hidden -contains $_ }).Count -gt 0
         $out += $g
     }
     # A collector that threw found nothing this run; forgetting its ids would
@@ -353,6 +357,108 @@ function Set-JuicerGameHidden {
     $rest = @($s.Hidden | Where-Object { $_ -ne $Id })
     $s.Hidden = $(if ($Hidden) { @($rest) + $Id } else { $rest })
     Save-JuicerLibraryState $s
+}
+
+# --- What a game's folder says it can do -------------------------------------------
+# The files of the technologies that matter for latency, by name only (nothing
+# is opened or read): NVIDIA Reflex (Streamline's sl.reflex.dll, or the Vulkan
+# layer), DLSS Frame Generation and FSR 3 frame generation. They say the game
+# is capable: a game can ship the DLL and have the option off, and a game
+# without it may still have the technology built in, so their absence proves
+# nothing.
+$script:TechFiles = @{
+    Reflex = '^(sl\.reflex\.dll|nvlowlatencyvk\.dll)$'
+    DlssFG = '^(nvngx_dlssg\.dll|sl\.dlss_g\.dll)$'
+    Fsr3FG = '^ffx_frameinterpolation'
+}
+
+# The game folder to three levels down, and the .exe's own folder to one
+# (Unreal keeps them at Game\Binaries\Win64, deeper than that), counting at
+# most MaxFiles files so that a huge install is not walked for long. Returns
+# @{ Reflex; DlssFG; Fsr3FG; Files }.
+function Find-JuicerGameTech {
+    param([string]$Dir, [string]$ExeDir = '', [int]$MaxFiles = 20000)
+    $any = '(' + (($script:TechFiles.Values) -join '|') + ')'
+    $found = @{}
+    $seen = 0
+    $roots = @(@{ Path = $Dir; Depth = 3 })
+    if ($ExeDir -and $ExeDir.TrimEnd('\') -ne ([string]$Dir).TrimEnd('\')) { $roots += @{ Path = $ExeDir; Depth = 1 } }
+    foreach ($root in $roots) {
+        if (-not $root.Path -or -not (Test-Path -LiteralPath $root.Path -PathType Container)) { continue }
+        $queue = New-Object System.Collections.Queue
+        $queue.Enqueue(@{ P = [string]$root.Path; D = 0 })
+        while ($queue.Count -gt 0 -and $seen -lt $MaxFiles) {
+            $item = $queue.Dequeue()
+            try {
+                foreach ($f in [IO.Directory]::EnumerateFiles($item.P)) {
+                    $seen++
+                    $leaf = [IO.Path]::GetFileName($f).ToLowerInvariant()
+                    if ($leaf -match $any) { $found[$leaf] = $true }
+                    if ($seen -ge $MaxFiles) { break }
+                }
+                if ($item.D -lt $root.Depth) { foreach ($d in [IO.Directory]::EnumerateDirectories($item.P)) { $queue.Enqueue(@{ P = $d; D = ($item.D + 1) }) } }
+            } catch {
+                Write-Verbose "Carpeta sin leer: $($item.P)"
+            }
+        }
+    }
+    $names = @($found.Keys | Sort-Object)
+    @{
+        Reflex = [bool](@($names | Where-Object { $_ -match $script:TechFiles.Reflex }).Count -gt 0)
+        DlssFG = [bool](@($names | Where-Object { $_ -match $script:TechFiles.DlssFG }).Count -gt 0)
+        Fsr3FG = [bool](@($names | Where-Object { $_ -match $script:TechFiles.Fsr3FG }).Count -gt 0)
+        Files = $names
+    }
+}
+
+# What was found for a game the last time (null if never looked). Reads only.
+function Get-JuicerGameTech {
+    param([string]$ExeName)
+    if (-not $ExeName) { return $null }
+    $t = (Read-JuicerLibraryState).Tech[([string]$ExeName).ToLowerInvariant()]
+    if ($t -is [hashtable]) { $t } else { $null }
+}
+
+# Looks at the game's folder, or uses what was found before: the answer is kept
+# in juegos.json with the folder's last write time and the date, and is looked
+# for again when either changes (or after 30 days: a patch rewrites files
+# without touching the folder). Game is the gallery's (Dir, Exe, ExeName).
+# Never throws.
+function Update-JuicerGameTech {
+    param([Parameter(Mandatory)][hashtable]$Game, [switch]$Force)
+    $exe = ([string]$Game.ExeName).ToLowerInvariant()
+    if (-not $exe) { return $null }
+    $dir = [string]$Game.Dir
+    try {
+        if (-not $dir -or -not (Test-Path -LiteralPath $dir -PathType Container)) { return (Get-JuicerGameTech $exe) }
+        $stamp = [string](Get-Item -LiteralPath $dir -ErrorAction Stop).LastWriteTimeUtc.Ticks
+        $state = Read-JuicerLibraryState
+        $c = $state.Tech[$exe]
+        if ($c -is [hashtable] -and -not $Force -and [string]$c.Stamp -eq $stamp -and [string]$c.Dir -eq $dir) {
+            $when = [datetime]::MinValue
+            if ([datetime]::TryParse([string]$c.Date, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::None, [ref]$when) -and ((Get-Date) - $when).TotalDays -lt 30) { return $c }
+        }
+        $exeDir = if ([IO.Path]::IsPathRooted([string]$Game.Exe)) { [IO.Path]::GetDirectoryName([string]$Game.Exe) } else { '' }
+        $t = Find-JuicerGameTech $dir $exeDir
+        $entry = @{ Dir = $dir; Stamp = $stamp; Date = (Get-Date).ToString('s'); Reflex = $t.Reflex; DlssFG = $t.DlssFG; Fsr3FG = $t.Fsr3FG; Files = @($t.Files) }
+        $state.Tech[$exe] = $entry
+        Save-JuicerLibraryState $state
+        $entry
+    } catch {
+        Write-JuicerLog "No se pudo mirar la carpeta de ${exe}: $_"
+        Get-JuicerGameTech $exe
+    }
+}
+
+# «DLSS Frame Generation», «FSR 3 Frame Generation» or both, or '' when the
+# folder shows none.
+function Get-JuicerFrameGenName {
+    param([hashtable]$Tech)
+    if (-not $Tech) { return '' }
+    $n = @()
+    if ($Tech.DlssFG) { $n += 'DLSS Frame Generation' }
+    if ($Tech.Fsr3FG) { $n += 'FSR 3 Frame Generation' }
+    $n -join ' y '
 }
 
 function Test-JuicerGameFile { param([string]$Path) [bool]($Path -and (Test-Path -LiteralPath $Path -PathType Leaf)) }
@@ -388,6 +494,9 @@ function Get-JuicerGameStatus {
     $fps = @{}
     foreach ($l in @(Get-JuicerFpsLimits)) { $fps[$l.Exe] = $l.Fps }
     $pacer = Read-JuicerPacer
+    # The monitor is read only if some game has a calibration to compare with.
+    $calMonitor = $null
+    $calRead = $false
     foreach ($g in $Games) {
         $g.Fps = $fps[$g.ExeName]
         $g.Limited = $ids.ContainsKey("fps:$($g.ExeName)")
@@ -400,6 +509,15 @@ function Get-JuicerGameStatus {
         $cal = $pacer.Calibrated[[string]$g.ExeName]
         $g.CalFps = $(if ($cal -is [hashtable] -and [int]$cal.Fps -gt 0) { [int]$cal.Fps } else { 0 })
         $g.CalDate = $(if ($cal -is [hashtable]) { [string]$cal.Date } else { '' })
+        # Whether it is in force on this monitor: its age says nothing otherwise.
+        $g.CalState = ''
+        if ($g.CalFps) {
+            if (-not $calRead) {
+                $calRead = $true
+                try { $calMonitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
+            }
+            $g.CalState = Get-JuicerCalibrationState ([string]$g.ExeName) $cal $calMonitor $pacer
+        }
         $g
     }
 }
@@ -408,7 +526,11 @@ function Format-JuicerGameStatus {
     param([hashtable]$Game)
     $p = @()
     if ($Game.Fps) { $p += '{0} FPS ({1:N2} ms)' -f $Game.Fps, (1000 / $Game.Fps) } elseif ($Game.Limited) { $p += 'frame pacer quitado fuera de Win Juicer' }
-    if ($Game.Fps -and $Game.CalFps) { $age = Get-JuicerCalibrationAge $Game.CalDate $Game.CalFps; if ($age) { $p += $age.Text } }
+    # The age of a calibration only when it is the one in force; made for another screen it says so.
+    if ($Game.Fps -and $Game.CalFps) {
+        if ($Game.CalState -eq 'Activa') { $age = Get-JuicerCalibrationAge $Game.CalDate $Game.CalFps; if ($age) { $p += $age.Text } }
+        elseif ($Game.CalState -eq 'OtroMonitor') { $p += 'calibración de otro monitor o modo' }
+    }
     if ($Game.Gpu) { $p += 'GPU dedicada' }
     if ($Game.Priority) { $p += 'prioridad por encima de lo normal' }
     if ($Game.Minimal -and $Game.Fps) { $p += 'modo prudente' }
@@ -440,12 +562,17 @@ function Invoke-JuicerGameSetup {
             }
             switch ($What) {
                 'Recomendado' {
+                    # What its folder shows (Reflex, frame generation) is kept first, for the note on the rate set.
+                    try { [void](Update-JuicerGameTech $g) } catch { Write-JuicerLog "Sin carpeta de $($g.ExeName): $_" }
                     # A rate given by hand is kept, so recalculating does not undo it.
                     if ($Fps -gt 0) { Set-JuicerPacerFps $g.ExeName $Fps $Monitor } else { Add-JuicerFpsLimit $g.ExeName 0 $Monitor }
                     if ($GpuCount -ge 2 -and [IO.Path]::IsPathRooted($g.Exe)) { Invoke-JuicerTweak (New-JuicerGpuTweak $g.Exe) }
                 }
                 # 0 is automatic again.
-                'Fps' { Set-JuicerPacerFps $g.ExeName $Fps $Monitor }
+                'Fps' {
+                    try { [void](Update-JuicerGameTech $g) } catch { Write-JuicerLog "Sin carpeta de $($g.ExeName): $_" }
+                    Set-JuicerPacerFps $g.ExeName $Fps $Monitor
+                }
                 # Windows keys the GPU choice by full path: games known only by name have none.
                 'Gpu' { if ([IO.Path]::IsPathRooted($g.Exe)) { Invoke-JuicerTweak (New-JuicerGpuTweak $g.Exe) } }
                 'Prioridad' { Invoke-JuicerTweak (New-JuicerPriorityTweak $g.Exe) }

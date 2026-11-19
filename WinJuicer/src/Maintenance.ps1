@@ -103,7 +103,10 @@ function Get-JuicerCleanupTargets {
 # for the tests. A target with Services (the update downloads) is left out while a restart
 # is pending, and says why.
 function Get-JuicerCleanupPreview {
-    param([object[]]$Targets = @(Get-JuicerCleanupTargets), [bool]$RebootPending = (Test-JuicerRebootPending))
+    # DeliveryCache: whether the real cleanup will empty the Delivery Optimization cache (it does
+    # when the cmdlet exists, Windows 10 1809 and later). Windows owns that folder and the cleanup
+    # calls its cmdlet instead of deleting files, so the preview says so rather than guess a size.
+    param([object[]]$Targets = @(Get-JuicerCleanupTargets), [bool]$RebootPending = (Test-JuicerRebootPending), [bool]$DeliveryCache = [bool](Get-Command 'Delete-DeliveryOptimizationCache' -ErrorAction SilentlyContinue))
     $items = @(foreach ($t in $Targets) {
             $skip = ''
             $m = @{ Bytes = [int64]0; Files = 0; Skipped = 0; Refused = $false }
@@ -115,6 +118,9 @@ function Get-JuicerCleanupPreview {
             }
             @{ Name = $t.Name; Path = $t.Path; Bytes = $m.Bytes; Skipped = $m.Skipped; Note = $skip }
         })
+    if ($DeliveryCache) {
+        $items += @{ Name = 'Caché de Optimización de distribución'; Path = ''; Bytes = [int64]0; Skipped = 0; Note = ''; Unmeasured = 'Windows la vacía; tamaño no medido' }
+    }
     @{ Items = $items; Total = [int64](($items | ForEach-Object { $_.Bytes } | Measure-Object -Sum).Sum) }
 }
 
@@ -123,9 +129,11 @@ function Format-JuicerCleanupPreview {
     param([hashtable]$Preview)
     $lines = foreach ($i in $Preview.Items) {
         if ($i.Note) { '· {0}: sin tocar ({1})' -f $i.Name, $i.Note }
+        elseif ($i.Unmeasured) { '· {0}: {1}' -f $i.Name, $i.Unmeasured }
         else { '· {0}: {1}' -f $i.Name, (Format-JuicerBytes $i.Bytes) }
     }
-    @($lines) + ('Total: {0}. Lo reciente o en uso no se toca, y la caché de shaders tampoco.' -f (Format-JuicerBytes $Preview.Total))
+    $unmeasured = if (@($Preview.Items | Where-Object { $_.Unmeasured }).Count -gt 0) { ' (sin contar lo no medido)' } else { '' }
+    @($lines) + ('Total: {0}{1}. Lo reciente o en uso no se toca, y la caché de shaders tampoco.' -f (Format-JuicerBytes $Preview.Total), $unmeasured)
 }
 
 function Invoke-JuicerCleanup {

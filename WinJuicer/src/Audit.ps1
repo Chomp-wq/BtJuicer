@@ -725,7 +725,8 @@ function Get-JuicerPlanKind {
 # PlanKind and CpuMax (the processor's maximum state plugged in, %);
 # OnBattery (null on a desktop); MonitorHz and MonitorMaxHz (0 when unknown);
 # Vbs and Hvci (virtualization-based security / memory integrity running, null unknown);
-# Audio (the default output, see ConvertTo-JuicerAudioInfo; null unknown).
+# Audio (the default output, see ConvertTo-JuicerAudioInfo; null unknown);
+# VrrOptimize (VRROptimizeEnable token, null unknown) and MonitorUse (VRR, Fijo… of the main monitor).
 # Out: @{ Key; Ok; Info; Title; Reason } per thing known, always in the same order. Info lines
 # are context, not a verdict: they carry Ok = true so nothing counts them as «por mirar».
 function Get-JuicerReadyStatus {
@@ -747,7 +748,17 @@ function Get-JuicerReadyStatus {
     }
     if ($null -ne $In.Windowed) {
         if ($In.Windowed) { & $add 'ventana' $true 'Optimizaciones para juegos en ventana activadas' '' }
-        else { & $add 'ventana' $false 'Optimizaciones para juegos en ventana desactivadas' 'Los juegos DirectX 10 y 11 en ventana o sin bordes no usan el modelo de presentación moderno: más latencia, y sin VRR en ventana. Ajuste «juegos.ventana».' }
+        else {
+            # Only when the token says 0 outright: absent means Windows's own default, which is unknown and omitted.
+            $why = 'Los juegos DirectX 10 y 11 en ventana o sin bordes no usan el modelo de presentación moderno: más latencia, y sin VRR en ventana.'
+            if ($In.MonitorUse -eq 'VRR') { $why += ' Tu monitor es VRR y en ventana no lo aprovecha.' }
+            & $add 'ventana' $false 'Optimizaciones para juegos en ventana desactivadas' ($why + ' Ajuste «juegos.ventana».')
+        }
+    }
+    # VRROptimizeEnable (juegos.vrr): only means something with a VRR monitor, and only an explicit 0 is a verdict.
+    if ($null -ne $In.VrrOptimize -and $In.MonitorUse -eq 'VRR') {
+        if ($In.VrrOptimize) { & $add 'vrr' $true 'Frecuencia variable también en juegos que no la piden, activada' '' }
+        else { & $add 'vrr' $false 'Frecuencia variable en juegos que no la piden, desactivada' 'Tu monitor es VRR, pero Windows la tiene apagada para los juegos DirectX 11 que no la activan por sí mismos: tirones y cortes cuando los FPS no llegan a los Hz. Ajuste «juegos.vrr».' }
     }
     if ($null -ne $In.GameDvr) {
         if ($In.GameDvr) { & $add 'grabacion' $false 'Game Bar graba en segundo plano' 'Graba en segundo plano: cuesta FPS aunque nunca guardes un clip. Ajuste «juegos.grabacion» (no afecta a NVIDIA, AMD ni OBS).' }
@@ -813,6 +824,15 @@ function Get-JuicerWindowedState {
     [string]$v -eq '1'
 }
 
+# The «Frecuencia de actualización variable» switch of Settings > Graphics (juegos.vrr), from the same
+# token string: true or false only when VRROptimizeEnable is written; null (unknown) otherwise.
+function Get-JuicerVrrOptimizeState {
+    $reg = Read-JuicerReg 'HKCU\Software\Microsoft\DirectX\UserGpuPreferences' 'DirectXUserGlobalSettings'
+    $v = Get-JuicerTokenValue (ConvertFrom-JuicerTokenString (Get-JuicerRegString $reg)) 'VRROptimizeEnable'
+    if ($null -eq $v) { return $null }
+    [string]$v -eq '1'
+}
+
 # Whether Game Bar records in the background, by the values the juegos.grabacion tweak writes:
 # true only when background capture is switched on and nothing switches the capture off; false
 # when one of the three says off; null when none can be read (an absent value is Windows's own
@@ -835,7 +855,7 @@ function Get-JuicerGameDvrState {
 
 # Reads this PC for Get-JuicerReadyStatus. Each part on its own: one that fails is unknown.
 function Get-JuicerReadyInputs {
-    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; GameDvr = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0; Vbs = $null; Hvci = $null; Audio = $null }
+    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; VrrOptimize = $null; MonitorUse = ''; GameDvr = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0; Vbs = $null; Hvci = $null; Audio = $null }
     if (-not (Test-JuicerWindows)) { return $in }
     try {
         # Windows 11 has it on until someone turns it off: a missing value is «on».
@@ -863,6 +883,7 @@ function Get-JuicerReadyInputs {
         }
     } catch { Write-Verbose "Sin HAGS: $_" }
     try { $in.Windowed = Get-JuicerWindowedState } catch { Write-Verbose "Sin optimizaciones de ventana: $_" }
+    try { $in.VrrOptimize = Get-JuicerVrrOptimizeState } catch { Write-Verbose "Sin VRR en juegos: $_" }
     try { $in.GameDvr = Get-JuicerGameDvrState } catch { Write-Verbose "Sin grabación de Game Bar: $_" }
     try {
         # The same class the security audit reads: 2 is «running».
@@ -896,7 +917,7 @@ function Get-JuicerReadyInputs {
     $in.Audio = Get-JuicerAudioInfo
     try {
         $m = Get-JuicerPrimaryMonitor
-        if ($m) { $in.MonitorHz = [int]$m.Display.Hz; $in.MonitorMaxHz = [int]$m.Display.MaxHz }
+        if ($m) { $in.MonitorHz = [int]$m.Display.Hz; $in.MonitorMaxHz = [int]$m.Display.MaxHz; $in.MonitorUse = [string]$m.Use }
     } catch { Write-Verbose "Sin monitor: $_" }
     $in
 }

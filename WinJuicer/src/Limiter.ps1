@@ -49,6 +49,15 @@
 
 function Get-JuicerFpsBackend { [string](& (Get-JuicerBackend).FpsBackend) }
 
+# The cap NVIDIA Reflex, and the low latency mode «Ultra», put on a game under
+# G-SYNC with VSync: Hz - Hz^2/3600, rounded down (171 at 180 Hz). One place
+# for the formula the frame pacer, the notes and the measurement all share.
+function Get-JuicerVrrCap {
+    param([int]$Hz)
+    if ($Hz -le 0) { return 0 }
+    [int][Math]::Floor($Hz - $Hz * $Hz / 3600)
+}
+
 # --- What the frame pacer remembers ------------------------------------------
 # Engine: Auto, nvidia or rtss. Calibrated: exe -> @{ Fps; Why; Signature; Date }.
 # Games: exe -> @{ Priority = Fluidez | Latencia; Fps = a rate chosen by hand;
@@ -202,12 +211,12 @@ function Get-JuicerFpsCap {
     $lowered = $true
     switch ($Use) {
         'VRR' {
-            $fps = [int][Math]::Floor($Hz - $Hz * $Hz / 3600)
+            $fps = Get-JuicerVrrCap $Hz
             $vsync = $true
             $why = "Pantalla de $Hz Hz con frecuencia variable: $fps FPS ({0:N2} ms por fotograma) la mantiene siempre dentro del rango VRR, la misma cifra que usa NVIDIA Reflex. Con la sincronización vertical forzada en el driver y el límite por debajo de los Hz, VSync no llega a esperar nunca: sólo tapa un corte si un fotograma llega antes de tiempo, sin sumar latencia." -f (1000 / $fps)
         }
         'EstroboSync' {
-            $fps = [int][Math]::Floor($Hz - $Hz * $Hz / 3600)
+            $fps = Get-JuicerVrrCap $Hz
             $vsync = $true
             $why = "Pantalla de $Hz Hz con estroboscopio y frecuencia variable: el mismo objetivo que con VRR, $fps FPS ({0:N2} ms por fotograma), para no salir nunca del rango. El destello sigue a cada fotograma: cuanto más estable el frametime, más uniforme el parpadeo." -f (1000 / $fps)
         }
@@ -421,10 +430,25 @@ function Add-JuicerFpsLimit {
     }
     # The rate is applied as asked, but Reflex in the game may cap it lower: say so.
     if ($r.Outcome -in 'Aplicado', 'YaEstaba') {
-        $reflex = Get-JuicerReflexCapNote $exeName $Fps $hz $use (Get-JuicerMainGpuVendor)
+        $reflex = Get-JuicerReflexCapNote $exeName $Fps $hz $use (Get-JuicerMainGpuVendor) (Get-JuicerGameTech $exeName)
         if ($reflex) { $r.Message = ("$($r.Message) $reflex").Trim() }
+        # Forced VSync a hair under the refresh can make frames wait.
+        $edge = Get-JuicerVsyncEdgeNote $Fps $hz $use (-not $over -and -not (Test-JuicerPacerMinimal $exeName))
+        if ($edge) { $r.Message = ("$($r.Message) $edge").Trim() }
     }
     $r
+}
+
+# A cap less than 3 FPS under the refresh, with VSync forced by the driver
+# under variable refresh: a frame that arrives a hair early waits for the
+# next refresh, and the wait is latency. Only where VSync is forced (Forced);
+# the safe side is the Reflex rate, or 3 under the refresh if that is lower.
+# Null when it does not apply.
+function Get-JuicerVsyncEdgeNote {
+    param([int]$Fps, [int]$Hz, [string]$Use, [bool]$Forced = $true)
+    if (-not $Forced -or $Hz -le 0 -or $Use -notin 'VRR', 'EstroboSync' -or $Fps -le $Hz - 3 -or $Fps -gt $Hz) { return $null }
+    $safe = [Math]::Min((Get-JuicerVrrCap $Hz), $Hz - 3)
+    "A menos de 3 FPS de tus $Hz Hz, la V-Sync forzada puede hacer esperar fotogramas: mejor ≤ $safe."
 }
 
 # Takes a game's frame pacer away; if the game is open, when it closes.
@@ -514,17 +538,52 @@ function Update-JuicerFpsLimits {
 
 # Games limited by Win Juicer, with the cap in force now.
 function Get-JuicerFpsLimits {
+    param([System.Collections.IList]$Journal)
     $b = Get-JuicerBackend
     # Assigned first: Read-JuicerJournal hands the list over whole, and piping
     # the call itself would filter one object, the list.
-    $journal = Read-JuicerJournal
+    $journal = if ($null -ne $Journal) { $Journal } else { Read-JuicerJournal }
     foreach ($e in @($journal | Where-Object { ([string]$_.Id) -like 'fps:*' })) {
         $exe = ([string]$e.Id).Substring(4)
         $cur = $null
+        $unreadable = $false
         # Read where it was set, even if the engine changed since.
         $by = @($e.Actions | Where-Object { $_.Type -eq 'FpsLimit' } | ForEach-Object { [string]$_.Backend }) | Select-Object -First 1
-        try { $cur = & $b.FpsRead $exe $by } catch { Write-JuicerLog "No se pudo leer el ritmo de ${exe}: $_" }
-        @{ Id = [string]$e.Id; Exe = $exe; Fps = $(if ($cur) { $cur.Fps } else { $null }); Exact = $(if ($cur) { [double]$cur.Exact } else { 0 }); Backend = $(if ($cur) { $cur.Backend } else { '' }) }
+        try { $cur = & $b.FpsRead $exe $by } catch { $unreadable = $true; Write-JuicerLog "No se pudo leer el ritmo de ${exe}: $_" }
+        @{ Id = [string]$e.Id; Exe = $exe; Fps = $(if ($cur) { $cur.Fps } else { $null }); Exact = $(if ($cur) { [double]$cur.Exact } else { 0 }); Backend = $(if ($cur) { $cur.Backend } else { '' }); Unreadable = $unreadable }
+    }
+}
+
+# Games Win Juicer limited whose cap is gone from the driver: a clean driver
+# install, a profile reset, another tool. They are in the journal, but there is
+# nothing live. A cap that could not be read does not count, and neither does
+# any of it without an engine to set it again (the card was taken out).
+function Get-JuicerWipedFpsLimits {
+    param([System.Collections.IList]$Journal)
+    if (-not (Get-JuicerFpsBackend)) { return }
+    foreach ($l in @(Get-JuicerFpsLimits -Journal $Journal)) {
+        if (-not $l.Fps -and -not $l.Unreadable) { $l }
+    }
+}
+
+# Puts those caps back (all of them, or only the Exe given): the same way as
+# any other cap, so a game that is open waits for it to close (Pendiente).
+# Games already waiting for that are left to it. Returns the results.
+function Restore-JuicerWipedFpsLimits {
+    param([hashtable]$Monitor, [string[]]$Exe = @())
+    $wiped = @(Get-JuicerWipedFpsLimits)
+    if ($Exe.Count -gt 0) { $wiped = @($wiped | Where-Object { $Exe -contains $_.Exe }) }
+    $waiting = @((Read-JuicerPacer).Pending.Keys)
+    $wiped = @($wiped | Where-Object { $waiting -notcontains $_.Exe })
+    if ($wiped.Count -eq 0) { return }
+    Write-JuicerLog ('Frame pacer: el driver borró el límite de {0}: se vuelve a poner.' -f (($wiped | ForEach-Object { $_.Exe }) -join ', '))
+    if (-not $Monitor) { try { $Monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" } }
+    foreach ($w in $wiped) {
+        try {
+            Add-JuicerFpsLimit $w.Exe 0 $Monitor
+        } catch {
+            New-JuicerResult @{ Id = $w.Id; Title = "Frame pacer: $($w.Exe)"; Reboot = 'No' } 'Error' "$_"
+        }
     }
 }
 
@@ -555,10 +614,47 @@ function Test-JuicerPacerQueue {
     ($null -ne $Result.GpuMs95 -and $Result.GpuMs95 -ge 0.95 * $FrameMs)
 }
 
+# Whether the PC had time to spare in a measurement: the busier of the
+# processor and the graphics card, on 95 % of the frames, well under the frame
+# time (the 15 % margin calibrating leaves), and no queue in front of the card.
+# With generated frames those numbers are not the game's: no.
+function Test-JuicerPacerHeadroom {
+    param([hashtable]$Result, [double]$FrameMs)
+    if ($FrameMs -le 0 -or $Result.Generated -ge 30 -or $null -eq $Result.WorkMs95 -or $Result.WorkMs95 -le 0) { return $false }
+    if (Test-JuicerPacerQueue $Result $FrameMs) { return $false }
+    $Result.WorkMs95 * 1.15 -lt $FrameMs
+}
+
+# A game asked for more than the Reflex cap (it is under it and up to the
+# refresh) that sits on that cap, with even frames and a PC with room to spare:
+# what holds it is Reflex or the low latency mode Ultra with G-SYNC, which put
+# that very cap on it, not the PC. Returns the cap, or 0 when it does not apply.
+# Only with NVIDIA (or a card not known): they are NVIDIA's.
+function Test-JuicerReflexCapMatch {
+    param([hashtable]$Result, [int]$Cap, [int]$Hz, [string]$Use, [string]$GpuVendor = '')
+    if ($Hz -le 0 -or $Use -notin 'VRR', 'EstroboSync' -or $GpuVendor -notin '', 'NVIDIA') { return 0 }
+    $refl = Get-JuicerVrrCap $Hz
+    if ($Cap -le $refl -or $Cap -gt $Hz -or [Math]::Abs($Result.AvgFps - $refl) -gt 1.5) { return 0 }
+    if ($Result.P95Ms -gt (1000 / $refl) * 1.03) { return 0 }
+    if (-not (Test-JuicerPacerHeadroom $Result (1000 / [Math]::Max(1, $Result.AvgFps)))) { return 0 }
+    $refl
+}
+
+# Even frames well under the cap and a PC with room to spare: neither the PC
+# nor the pace is what holds the game; something else puts that ceiling.
+function Test-JuicerExternalLimit {
+    param([hashtable]$Result, [double]$Target)
+    if ($Target -le 0 -or $Result.AvgFps -ge $Target * 0.97 -or $Result.Steady -lt 85) { return $false }
+    if ($Result.P95Ms -gt (1000 / [Math]::Max(1, $Result.AvgFps)) * 1.1) { return $false }
+    Test-JuicerPacerHeadroom $Result (1000 / [Math]::Max(1, $Result.AvgFps))
+}
+
 # A measurement of a game under its frame pacer, against its target. Cap is
-# the FPS set; Exact, the fractional one RivaTuner uses, if any.
+# the FPS set; Exact, the fractional one RivaTuner uses, if any. Hz, Use and
+# GpuVendor let it tell what is holding the game under its cap when it is
+# not the PC (Reflex, Radeon Chill, the game's own limiter).
 function Get-JuicerPacerFindings {
-    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [double]$Exact = 0, [string]$Backend = '')
+    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [double]$Exact = 0, [string]$Backend = '', [int]$Hz = 0, [string]$Use = '', [string]$GpuVendor = '')
     $area = "Frame pacer: $($Result.Application)"
     $target = if ($Exact -gt 0) { $Exact } else { $Cap }
     $ms = 1000 / $target
@@ -568,7 +664,18 @@ function Get-JuicerPacerFindings {
     $detail = '{0} % de los fotogramas a {1:N2} ms ±{2:N1}; de un fotograma al siguiente cambian {3:N2} ms de media.' -f $Result.Steady, $ms, [Math]::Max(0.3, 0.04 * $ms), $Result.JitterMs
     if ($null -ne $Result.AnimErrorMs) { $detail += ' Error de animación: {0:N2} ms de media (lo que el movimiento se desvía del tiempo real; cuanto más cerca de 0, más fluido).' -f $Result.AnimErrorMs }
     $holds = $Result.P95Ms -le $ms * 1.03
-    if ($holds -and $Result.Steady -ge 90) {
+    $reflexCap = Test-JuicerReflexCapMatch $Result $Cap $Hz $Use $GpuVendor
+    if ($reflexCap -gt 0) {
+        # It is what the measurement shows, so it is said as that: the same figure, not a diagnosis of the settings.
+        $out = @(New-JuicerFinding $area 'Info' ('Se queda en {0:N0} FPS con el ritmo en {1}: es el tope de Reflex o del modo de baja latencia Ultra' -f $Result.AvgFps, $target) ("La medida coincide con $reflexCap FPS, que es lo que NVIDIA Reflex y el modo de baja latencia «Ultra» ponen por su cuenta con G-SYNC y V-Sync en una pantalla de $Hz Hz (Hz − Hz²/3600). Tu procesador y tu gráfica tienen margen (su trabajo llega a {0:N2} ms de los {1:N2} ms de cada fotograma), así que no es tu PC. Pon el ritmo de este juego en $reflexCap FPS en Win Juicer y queda igual, sin un tope escondido; para pasar de ahí tendrías que apagar Reflex (o Ultra) en el juego o en el panel de NVIDIA, y se pierde latencia. $detail" -f $Result.WorkMs95, (1000 / $Result.AvgFps)))
+    } elseif ($Hz -gt 0 -and (Test-JuicerExternalLimit $Result $target)) {
+        $who = switch ($GpuVendor) {
+            'AMD' { 'el límite de FPS del propio juego, Radeon Chill o Frame Rate Target Control (FRTC) en AMD Software (global o de este juego), un límite de RivaTuner, o la V-Sync contra otra pantalla de menos Hz' }
+            'NVIDIA' { 'el límite de FPS del propio juego, un límite global o de este juego en el panel de NVIDIA o en RivaTuner, el modo de baja latencia Ultra o Reflex (que ponen su propio tope), o la V-Sync contra otra pantalla de menos Hz' }
+            default { 'el límite de FPS del propio juego, Radeon Chill o FRTC (AMD), un límite del panel de la gráfica o de RivaTuner, o la V-Sync contra otra pantalla de menos Hz' }
+        }
+        $out = @(New-JuicerFinding $area 'Medio' ('Algo externo limita el juego a {0:N0} FPS, con el ritmo en {1}' -f $Result.AvgFps, $target) ("Es lo que muestra la medida: los fotogramas llegan parejos a {0:N0} FPS y tu procesador y tu gráfica tienen margen (su trabajo llega a {1:N2} ms de los {2:N2} ms de cada fotograma), así que ni es tu PC ni es el ritmo de Win Juicer. Win Juicer no puede saber qué lo pone; los sospechosos habituales: $who. Revisa esos y mide otra vez. $detail" -f $Result.AvgFps, $Result.WorkMs95, (1000 / $Result.AvgFps)))
+    } elseif ($holds -and $Result.Steady -ge 90) {
         $out = @(New-JuicerFinding $area 'Ok' ('Ritmo clavado a {0} FPS' -f $target) $detail)
     } elseif (-not $holds) {
         $out = @(New-JuicerFinding $area 'Medio' ('No sostiene {0} FPS: el 5 % más lento va a {1:N0}' -f $target, $Result.Fps95) "$detail Cada vez que no llega, el frametime salta. «Calibrar» baja el ritmo a lo que sí sostiene, que se nota más fluido que un objetivo alto con altibajos.")
@@ -622,11 +729,19 @@ function Get-JuicerPacerMultiple {
 # frame more, so up to a multiple of the refresh (two to four times: the
 # tear lines stay put) when the game holds it with room.
 function Get-JuicerPacerCalibration {
-    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [int]$Max = 0, [string]$Use = 'Fijo', [int]$VrrMin = 0, [int[]]$Rates = @(), [int]$Hz = 0, [string]$Priority = 'Fluidez')
+    param([Parameter(Mandatory)][hashtable]$Result, [Parameter(Mandatory)][int]$Cap, [int]$Max = 0, [string]$Use = 'Fijo', [int]$VrrMin = 0, [int[]]$Rates = @(), [int]$Hz = 0, [string]$Priority = 'Fluidez', [string]$GpuVendor = '')
     if ($Max -le 0) { $Max = $Cap }
     $ms = 1000 / $Cap
     if ($Result.AvgFps -gt $Cap * 1.04) {
         return @{ Fps = $Cap; Action = 'NoActua'; Why = ('El juego iba a {0:N0} FPS, por encima del ritmo: el frame pacer no estaba actuando, así que esta medida no sirve para calibrar.' -f $Result.AvgFps) }
+    }
+    # A cap above the Reflex one that measures just at the Reflex one, with the
+    # PC at ease, is not the PC missing frames: Reflex (or the low latency mode
+    # Ultra) holds it there. Lowering the pace to what it «held» would only
+    # throw away the rate the person chose, so it stays.
+    $reflexCap = Test-JuicerReflexCapMatch $Result $Cap $Hz $Use $GpuVendor
+    if ($reflexCap -gt 0) {
+        return @{ Fps = $Cap; Action = 'Reflex'; Suggest = $reflexCap; Why = ('Mide {0:N0} FPS con el ritmo en {1}, y tu PC va sobrado: lo limita Reflex o el modo de baja latencia Ultra con G-SYNC (tope {2}), no tu PC. Por eso no se baja el ritmo. Si quieres que coincida, ponlo en {2} FPS; para pasar de ahí tendrías que apagar Reflex (o Ultra), y se pierde latencia.' -f $Result.AvgFps, $Cap, $reflexCap) }
     }
     $misses = $Result.P95Ms -gt $ms * 1.03
     # With generated frames, busy times and the queue are not the game's.
@@ -675,7 +790,7 @@ function Get-JuicerPacerCalibration {
 # moves the cap to what it holds, and remembers it for this monitor. Returns
 # findings; callers wrap them in @().
 function Invoke-JuicerPacerCalibration {
-    param([Parameter(Mandatory)][string]$Exe, [int]$Seconds = 60, [int]$Delay = 10, [scriptblock]$OnStatus, [hashtable]$Monitor)
+    param([Parameter(Mandatory)][string]$Exe, [int]$Seconds = 60, [int]$Delay = 10, [scriptblock]$OnStatus, [hashtable]$Monitor, [switch]$NoFrameGenWarning)
     $exe = ConvertTo-JuicerExeName $Exe
     if (-not $Monitor) { $Monitor = Get-JuicerPrimaryMonitor }
     if (-not $Monitor) { throw 'No se pudo leer la pantalla.' }
@@ -688,13 +803,13 @@ function Invoke-JuicerPacerCalibration {
     $cap = if (-not $unpaced) { [int]$now[0].Fps } else { $rec = Get-JuicerRecommendedFps $exe $Monitor; if ($rec) { [int]$rec.Fps } else { 0 } }
     if ($cap -le 0) { throw "No se pudo calcular el ritmo de $exe." }
     $started = Get-Date
-    $out = @(Invoke-JuicerFrameCapture -Seconds $Seconds -Delay $Delay -Process $exe -OnStatus $OnStatus)
+    $out = @(Invoke-JuicerFrameCapture -Seconds $Seconds -Delay $Delay -Process $exe -OnStatus $OnStatus -NoFrameGenWarning:$NoFrameGenWarning)
     $result = Get-JuicerPreviousFrameResult $exe
     if (-not $result -or [datetime]$result.Date -lt $started.AddSeconds(-5)) { return $out }
     $use = Resolve-JuicerMonitorUse $Monitor
     $vrrMin = if ($Monitor.Vrr) { [int]$Monitor.Vrr.Min } else { 0 }
     $max = (Get-JuicerFpsCap ([int]$Monitor.Display.Hz) $use $null $vrrMin).Fps
-    $c = Get-JuicerPacerCalibration $result $cap $max $use $vrrMin @($Monitor.Display.RefreshRates | Where-Object { $_ }) ([int]$Monitor.Display.Hz) (Get-JuicerPacerPriority $exe)
+    $c = Get-JuicerPacerCalibration $result $cap $max $use $vrrMin @($Monitor.Display.RefreshRates | Where-Object { $_ }) ([int]$Monitor.Display.Hz) (Get-JuicerPacerPriority $exe) (Get-JuicerMainGpuVendor)
     $area = "Frame pacer: $exe"
     if ($unpaced -and $c.Action -eq 'NoActua') {
         Write-JuicerLog "Calibración de ${exe}: medido sin ritmo (el juego estaba abierto)"
@@ -712,10 +827,30 @@ function Invoke-JuicerPacerCalibration {
         $when = if ($r.Outcome -eq 'Pendiente') { ' Se aplicará en cuanto cierres el juego: Win Juicer no lo cambia con el juego abierto, para que no se congele.' } else { '' }
         $out += New-JuicerFinding $area $sev ('Calibrado: de {0} a {1} FPS' -f $cap, $c.Fps) "$($c.Why)$when"
     } else {
-        $out += New-JuicerFinding $area $(if ($c.Action -eq 'Mantener') { 'Ok' } else { 'Medio' }) $(switch ($c.Action) { 'Mantener' { "Calibrado: se queda en $cap FPS" } 'Estrobo' { 'Con estrobo no se baja el ritmo' } default { 'Sin calibrar' } }) $c.Why
+        $sev = switch ($c.Action) { 'Mantener' { 'Ok' } 'Reflex' { 'Info' } default { 'Medio' } }
+        $out += New-JuicerFinding $area $sev $(switch ($c.Action) { 'Mantener' { "Calibrado: se queda en $cap FPS" } 'Reflex' { "Lo limita Reflex a $($c.Suggest) FPS, no tu PC: el ritmo no se toca" } 'Estrobo' { 'Con estrobo no se baja el ritmo' } default { 'Sin calibrar' } }) $c.Why
     }
     Write-JuicerLog "Calibración de ${exe}: $($c.Action) $cap -> $($c.Fps)"
     $out
+}
+
+# Whether a game's calibration is what is in force now: Activa (this
+# monitor, used this way, and no rate chosen by hand over it), Manual (a rate
+# the person chose wins), OtroMonitor (made for another monitor, refresh rate
+# or mode, so it is not used) or '' (no calibration, or no screen to compare
+# with). Only an Activa one is worth showing its age.
+function Get-JuicerCalibrationState {
+    param([string]$Exe, [hashtable]$Calibration, [hashtable]$Monitor, [hashtable]$Pacer)
+    if ($Calibration -isnot [hashtable] -or [int]$Calibration.Fps -le 0) { return '' }
+    if (-not $Pacer) { $Pacer = Read-JuicerPacer }
+    $key = ConvertTo-JuicerExeName $Exe
+    $g = $Pacer.Games[$key]
+    if ($g -is [hashtable] -and [int]$g.Fps -gt 0) { return 'Manual' }
+    if (-not $Monitor -or -not $Monitor.Display) { return '' }
+    if ([string]$Calibration.Signature -ne (Get-JuicerLimitSignature $Monitor)) { return 'OtroMonitor' }
+    $latency = $g -is [hashtable] -and [string]$g.Priority -eq 'Latencia'
+    if ((Resolve-JuicerMonitorUse $Monitor) -eq 'Estrobo' -and -not $latency) { return 'OtroMonitor' }
+    'Activa'
 }
 
 # How old a calibration is, in words: «calibrado hace 12 días a 141 FPS», and after 30 days
@@ -749,11 +884,23 @@ function Clear-JuicerPacerCalibration {
 
 # --- Two limiters at once -----------------------------------------------------
 
-# Whatever else limits frames and would fight the frame pacer, and what the
-# engine in use cannot do with this monitor. State comes from the backend
-# (RTSS's Global profile and games, NVIDIA's global limit); Limits, from
-# Get-JuicerFpsLimits.
+# Whatever else limits frames and would fight the frame pacer, what the
+# engine in use cannot do with this monitor, and what the setup says about the
+# rates in force. State comes from the backend (RTSS's Global profile and
+# games, NVIDIA's global limit); Limits, from Get-JuicerFpsLimits; GpuVendor
+# is the main card's (NVIDIA, AMD…) and Monitors every active display.
 function Get-JuicerPacerConflicts {
+    param([hashtable]$State, [string]$Backend, [object[]]$Limits = @(), [hashtable]$Monitor, [string]$GpuVendor = '', [object[]]$Monitors = @())
+    $out = @()
+    if ($State) { $out += @(Get-JuicerPacerStateConflicts $State $Backend $Limits $Monitor) }
+    $out += @(Get-JuicerPacerAdvice $Limits $Monitor $GpuVendor $Monitors)
+    $out
+}
+
+# What the engine's own state says: other limiters, RivaTuner not open, G-SYNC
+# off in the driver, the shader cache, and strobing with a driver that only
+# takes whole numbers.
+function Get-JuicerPacerStateConflicts {
     param([hashtable]$State, [string]$Backend, [object[]]$Limits = @(), [hashtable]$Monitor)
     $out = @()
     $area = 'Frame pacer'
@@ -802,11 +949,80 @@ function Get-JuicerPacerConflicts {
     $out
 }
 
+# What the rates and the setup say, without the engine's state: rates left
+# behind by a change of refresh, the AMD limiters, several monitors, a G-SYNC
+# monitor Windows cannot tell from a fixed one.
+function Get-JuicerPacerAdvice {
+    param([object[]]$Limits = @(), [hashtable]$Monitor, [string]$GpuVendor = '', [object[]]$Monitors = @())
+    $out = @()
+    $area = 'Frame pacer'
+    # Caps that no longer are what Recalcular would set: the refresh rate or
+    # the monitor mode changed (or Win Juicer got a new way to work the rate
+    # out) and the sign-in upkeep only recalculates when it is on. A rate
+    # chosen by hand stays, a game waiting for its close is left to that, and
+    # a game NVIDIA caps lower in its own profile is not a stale rate.
+    if ($Monitor -and $Monitor.Display -and @($Limits).Count -gt 0) {
+        $pacer = Read-JuicerPacer
+        $stale = @()
+        foreach ($l in @($Limits)) {
+            if (-not $l.Fps -or $pacer.Pending.ContainsKey([string]$l.Exe)) { continue }
+            $g = $pacer.Games[[string]$l.Exe]
+            if ($g -is [hashtable] -and [int]$g.Fps -gt 0) { continue }
+            try {
+                $rec = Get-JuicerRecommendedFps ([string]$l.Exe) $Monitor
+                if (-not $rec -or [int]$rec.Fps -eq [int]$l.Fps) { continue }
+                $frl = & (Get-JuicerBackend).NvRead ([string]$l.Exe) ([uint32]0x10835002)
+                if ($frl -and $null -ne $frl.Predefined -and [int]$frl.Predefined -gt 0 -and [int]$frl.Predefined -le [int]$l.Fps) { continue }
+                $stale += @{ Exe = [string]$l.Exe; Now = [int]$l.Fps; Rec = [int]$rec.Fps }
+            } catch {
+                Write-JuicerLog "Sin ritmo recomendado para $($l.Exe): $_"
+            }
+        }
+        if ($stale.Count -gt 0) {
+            $hz = [int]$Monitor.Display.Hz
+            $pairs = @($stale | ForEach-Object { "$($_.Now)>$($_.Rec)" } | Select-Object -Unique)
+            $names = ($stale | Select-Object -First 5 | ForEach-Object { $_.Exe }) -join ', '
+            if ($stale.Count -gt 5) { $names += " y $($stale.Count - 5) más" }
+            $text = if ($pairs.Count -eq 1) {
+                "tus juegos tienen $($stale[0].Now) FPS y para tus $hz Hz serían $($stale[0].Rec)"
+            } else {
+                'tus juegos tienen ritmos distintos de los que tocan para tus {0} Hz ({1})' -f $hz, (($stale | Select-Object -First 5 | ForEach-Object { '{0}: {1}, ahora serían {2}' -f $_.Exe, $_.Now, $_.Rec }) -join '; ')
+            }
+            $out += New-JuicerFinding $area 'Medio' ('Hay {0} con un ritmo que ya no es el recomendado' -f $(if ($stale.Count -eq 1) { '1 juego' } else { "$($stale.Count) juegos" })) ("$($text.Substring(0, 1).ToUpperInvariant())$($text.Substring(1)): pulsa «Recalcular los ritmos» (en la consola, R en este menú). Sale así cuando cambia tu monitor, su modo o los Hz, o Win Juicer calcula el ritmo de otra manera; el mantenimiento al iniciar sesión sólo lo recalcula si lo tienes activado. Afecta a: $names. Los ritmos que elegiste tú no se tocan.")
+        }
+    }
+    if ($GpuVendor -eq 'AMD') {
+        $out += New-JuicerFinding $area 'Info' 'AMD: Radeon Chill y Frame Rate Target Control' 'Si en AMD Software tienes Radeon Chill o Frame Rate Target Control (global o para el juego), manda el más bajo de los límites; Chill además baja los FPS por sí solo cuando no te mueves. Si un juego no llega al ritmo de Win Juicer y la gráfica va sobrada, es lo primero que hay que mirar.'
+    }
+    # Several screens: the pace is worked out for the main one.
+    $active = @($Monitors | Where-Object { $_ -and $_.Display })
+    if ($active.Count -gt 1) {
+        $main = if ($Monitor) { $Monitor } else { $active[0] }
+        $differs = @($active | Where-Object { $_ -ne $main -and ([int]$_.Display.Hz -ne [int]$main.Display.Hz -or [bool]$_.Vrr -ne [bool]$main.Vrr) })
+        if ($differs.Count -gt 0) {
+            $mainText = '{0} Hz{1}' -f [int]$main.Display.Hz, $(if ($main.Vrr) { ' con VRR' } else { ' sin VRR' })
+            $others = ($differs | ForEach-Object { '{0} Hz{1}' -f [int]$_.Display.Hz, $(if ($_.Vrr) { ' con VRR' } else { ' sin VRR' }) }) -join ' y '
+            $out += New-JuicerFinding $area 'Info' 'Tienes pantallas con distintos Hz o VRR' "Calculado para tu pantalla principal ($mainText); la otra va a $others. Si juegas en otra, cámbiala a principal (Configuración > Sistema > Pantalla > «Convertir en pantalla principal») o ajusta el modo del monitor aquí, y recalcula los ritmos."
+        }
+    }
+    # Windows cannot tell a G-SYNC module monitor from a fixed one: it has no
+    # FreeSync or HDMI VRR block in its EDID.
+    if ($GpuVendor -eq 'NVIDIA' -and $Monitor -and -not $Monitor.Vrr) {
+        $mode = if ($Monitor.Mode) { [string]$Monitor.Mode } else { Get-JuicerMonitorMode $Monitor }
+        if ($mode -eq 'Automatico' -and (Resolve-JuicerMonitorUse $Monitor) -eq 'Fijo') {
+            $out += New-JuicerFinding $area 'Info' 'Tu monitor sale como de frecuencia fija' 'Si tu monitor es G-SYNC (con módulo), Windows no lo distingue de uno fijo: elige «Frecuencia variable» en el modo del monitor y el ritmo irá justo debajo de los Hz, con la V-Sync que G-SYNC necesita.'
+        }
+    }
+    $out
+}
+
 # The conflicts on this PC, now.
 function Get-JuicerPacerConflictsHere {
     $state = $null
     try { $state = & (Get-JuicerBackend).PacerState } catch { Write-JuicerLog "Sin estado del frame pacer: $_" }
     $m = $null
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
-    Get-JuicerPacerConflicts $state (Get-JuicerFpsBackend) @(Get-JuicerFpsLimits) $m
+    $all = @()
+    try { $all = @(Get-JuicerMonitors) } catch { Write-JuicerLog "Sin monitores: $_" }
+    Get-JuicerPacerConflicts $state (Get-JuicerFpsBackend) @(Get-JuicerFpsLimits) $m (Get-JuicerMainGpuVendor) $all
 }

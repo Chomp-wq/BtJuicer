@@ -31,6 +31,18 @@
     actualización de BIOS lo borra, si la RAM cambia de velocidad o si hay
     errores WHEA o cuelgues del driver de la gráfica desde entonces.
 
+.PARAMETER AjusteCpu
+    Con -ApuntarAjuste, el undervolt u overclock del procesador, con tus palabras
+    (por ejemplo «Curve Optimizer -30»).
+
+.PARAMETER AjusteGpu
+    Con -ApuntarAjuste, el undervolt u overclock de la gráfica, con tus palabras
+    (por ejemplo «curva 900 mV, memoria +500»).
+
+.PARAMETER HerramientaGpu
+    Con -ApuntarAjuste, el programa con el que lo aplicaste: Afterburner,
+    Adrenalin o Intel.
+
 .PARAMETER OlvidarAjuste
     Borra el ajuste apuntado y deja de comprobarlo.
 
@@ -170,7 +182,10 @@
     Aplica la configuración de un archivo exportado en otro equipo.
 
 .PARAMETER Simular
-    Muestra qué cambiaría, sin cambiar nada.
+    Muestra qué cambiaría, sin cambiar nada. Vale con -Recomendado, -Perfil,
+    -Aplicar, -QuitarApps, -Dns, -Importar, -Revisar, -Deshacer y -DeshacerTodo;
+    con cualquier otra acción que cambie algo, se niega antes de hacer nada
+    (código de salida 2).
 
 .PARAMETER Si
     No pregunta. Los ajustes Extremo siguen necesitando -AceptoRiesgos.
@@ -253,6 +268,17 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# One value as the Windows command line (CommandLineToArgvW, what powershell.exe -File parses)
+# will read it back: in double quotes, a run of backslashes before a quote is doubled and the
+# quote escaped, and a run before the closing quote is doubled too. Without that, a path ending
+# in a backslash swallows the closing quote and a value with a quote splits in two.
+function ConvertTo-JuicerCommandLineArgument {
+    param([AllowEmptyString()][string]$Value)
+    $escaped = [regex]::Replace($Value, '(\\*)"', '$1$1\"')
+    $escaped = [regex]::Replace($escaped, '(\\+)\z', '$1$1')
+    '"' + $escaped + '"'
+}
+
 if ([Environment]::OSVersion.Platform -ne 'Win32NT') {
     Write-Host 'Win Juicer sólo funciona en Windows.' -ForegroundColor Red
     exit 1
@@ -267,13 +293,13 @@ if (-not $admin -or ($window -and -not $sta)) {
     # Relaunch elevated with the same arguments and the same PowerShell.
     $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-STA')
     if ($PSBoundParameters.Count -gt 0 -and -not $window) { $arguments += '-NoExit' }
-    $arguments += @('-File', "`"$PSCommandPath`"")
+    $arguments += @('-File', (ConvertTo-JuicerCommandLineArgument $PSCommandPath))
     foreach ($kv in $PSBoundParameters.GetEnumerator()) {
         if ($kv.Value -is [System.Management.Automation.SwitchParameter]) {
             if ($kv.Value) { $arguments += "-$($kv.Key)" }
         } else {
             $arguments += "-$($kv.Key)"
-            $arguments += '"' + (@($kv.Value) -join ',') + '"'
+            $arguments += ConvertTo-JuicerCommandLineArgument (@($kv.Value) -join ',')
         }
     }
     try {

@@ -701,12 +701,17 @@ function Show-JuicerLimiter {
             $n++
             $fps = if ($g.Exact -gt 0 -and $g.Backend -eq 'rtss') { '{0:N2} FPS' -f $g.Exact } elseif ($g.Fps) { "$($g.Fps) FPS" } else { 'sin ritmo ahora' }
             $cal = $pacer.Calibrated[$g.Exe]
-            $age = $(if ($cal -is [hashtable]) { Get-JuicerCalibrationAge ([string]$cal.Date) ([int]$cal.Fps) } else { $null })
-            Write-Host ('  {0,2}. {1}: {2}{3}{4}' -f $n, $g.Exe, $fps, $(if ($age) { " ($($age.Text))" } elseif ($cal) { ' (calibrado)' } else { '' }), $(if ((Get-JuicerPacerPriority $g.Exe) -eq 'Latencia') { ' [latencia]' } else { '' }))
+            # Its age only when it is the calibration in force on this monitor, used this way, with no rate of yours over it.
+            $calState = Get-JuicerCalibrationState $g.Exe $cal $m $pacer
+            $age = $(if ($calState -eq 'Activa') { Get-JuicerCalibrationAge ([string]$cal.Date) ([int]$cal.Fps) } else { $null })
+            $calText = if ($age) { " ($($age.Text))" } elseif ($calState -eq 'OtroMonitor') { ' (calibración de otro monitor o modo)' } elseif ($calState -eq 'Activa') { ' (calibrado)' } else { '' }
+            Write-Host ('  {0,2}. {1}: {2}{3}{4}' -f $n, $g.Exe, $fps, $calText, $(if ((Get-JuicerPacerPriority $g.Exe) -eq 'Latencia') { ' [latencia]' } else { '' }))
             if ($age -and $age.Stale) { Write-JuicerWrapped $age.Hint 6 'DarkGray' }
         }
         if ($n -eq 0) { Write-Host '  Ningún juego con frame pacer todavía.' -ForegroundColor DarkGray }
-        $conflicts = @(Get-JuicerPacerConflicts (& (Get-JuicerBackend).PacerState) (Get-JuicerFpsBackend) $limits $m)
+        $allMonitors = @()
+        try { $allMonitors = @(Get-JuicerMonitors) } catch { Write-JuicerLog "Sin monitores: $_" }
+        $conflicts = @(Get-JuicerPacerConflicts (& (Get-JuicerBackend).PacerState) (Get-JuicerFpsBackend) $limits $m (Get-JuicerMainGpuVendor) $allMonitors)
         if ($conflicts.Count -gt 0) { Write-Host ''; Write-JuicerFindings $conflicts }
         Write-Host ''
         Write-JuicerMenu @(
@@ -995,8 +1000,20 @@ function Write-JuicerDrift {
 # ones asked one by one, a restore point first.
 function Invoke-JuicerDriftReapply {
     param([object[]]$Drift, [switch]$Simulate, [switch]$AcceptRisk, [switch]$NoRestorePoint)
-    $tweaks = @($Drift | ForEach-Object { $_.Tweak })
-    Invoke-JuicerTweakSet $tweaks -Simulate:$Simulate -AcceptRisk:$AcceptRisk -NoRestorePoint:$NoRestorePoint
+    # A game's cap the driver wiped is not a catalog tweak: it goes back through the limiter
+    # (a game that is open waits for it to close), and has nothing to restore a point for.
+    $fps = @($Drift | Where-Object { $_.Kind -eq 'Fps' })
+    $tweaks = @($Drift | Where-Object { $_.Kind -ne 'Fps' } | ForEach-Object { $_.Tweak })
+    $results = @()
+    if ($tweaks.Count -gt 0) { $results += @(Invoke-JuicerTweakSet $tweaks -Simulate:$Simulate -AcceptRisk:$AcceptRisk -NoRestorePoint:$NoRestorePoint) }
+    if ($fps.Count -gt 0) {
+        if ($Simulate) {
+            foreach ($f in $fps) { $results += New-JuicerResult @{ Id = $f.Id; Title = $f.Title; Reboot = 'No' } 'Simulado' 'Se volvería a poner el límite de FPS que el driver borró.' }
+        } else {
+            $results += @(Restore-JuicerWipedFpsLimits -Exe @($fps | ForEach-Object { [string]$_.Exe }))
+        }
+    }
+    $results
 }
 
 # -Revisar: what Windows has undone since it was applied. With -Si, applies it again.
@@ -1653,8 +1670,26 @@ function Start-Juicer {
     $cli = $Diagnostico -or $Informe -or $Exportar -or $Importar -or $Equipo -or $Juegos -or $OptimizarJuegos -or $Mantener -or $MantenerJuegos -or $ProteccionAdultos -or $Medir -or $NuevaMedida -or $ApuntarAjuste -or $OlvidarAjuste -or $MedirJuego -or $CalibrarJuego -or $MotorPacer -or $LimitarFps.Count -gt 0 -or $ModoMonitor -or $PantallaOled -or $Lista -or $Revisar -or $RestaurarDiario -or $Estado -or $Recomendado -or $Perfil -or $Dns -or $DeshacerTodo -or
     $Aplicar.Count -gt 0 -or $Deshacer.Count -gt 0 -or $QuitarApps.Count -gt 0 -or $Instalar.Count -gt 0
 
+    # -Simular promises «sin cambiar nada». Only the actions that can show what they would do
+    # (the tweak sets, -Revisar and the undo actions) honour it; every other mutating action
+    # would just run, so it is refused up front, before anything (even the copy below) happens.
+    if ($Simular -and $cli) {
+        $noSim = [ordered]@{
+            Informe = [bool]$Informe; Exportar = [bool]$Exportar; Medir = [bool]$Medir; NuevaMedida = [bool]$NuevaMedida
+            MedirJuego = [bool]$MedirJuego; CalibrarJuego = [bool]$CalibrarJuego; ApuntarAjuste = [bool]$ApuntarAjuste
+            OlvidarAjuste = [bool]$OlvidarAjuste; LimitarFps = ($LimitarFps.Count -gt 0); MotorPacer = [bool]$MotorPacer
+            ModoMonitor = [bool]$ModoMonitor; PantallaOled = [bool]$PantallaOled; OptimizarJuegos = [bool]$OptimizarJuegos
+            Mantener = [bool]$Mantener; MantenerJuegos = [bool]$MantenerJuegos; BloquearWeb = ($PSBoundParameters.ContainsKey('BloquearWeb') -and $BloquearWeb.Count -gt 0)
+            ProteccionAdultos = [bool]$ProteccionAdultos; Instalar = ($Instalar.Count -gt 0); RestaurarDiario = [bool]$RestaurarDiario
+        }
+        $blocked = @($noSim.Keys | Where-Object { $noSim[$_] }) | Select-Object -First 1
+        if ($blocked) {
+            Write-Host "  -Simular no vale con -${blocked}: no puede enseñarse sin hacerlo." -ForegroundColor Yellow
+            return 2
+        }
+    }
     # The protected copy the sign-in task runs follows this version.
-    if ((Test-JuicerWindows) -and -not $Mantener -and -not $ProteccionAdultos) { Update-JuicerCopy }
+    if ((Test-JuicerWindows) -and -not $Mantener -and -not $ProteccionAdultos -and -not $Simular) { Update-JuicerCopy }
     if (-not $cli) {
         $script:Screen = $true
         $script:Interactive = $true
@@ -1743,7 +1778,9 @@ function Start-Juicer {
     }
     if ($CalibrarJuego) {
         try {
-            $f = @(Invoke-JuicerPacerCalibration -Exe $CalibrarJuego -Seconds $(if ($MedirJuego) { $MedirJuego } else { 60 }) -OnStatus ${function:Write-JuicerStatusLine} -Monitor $monitor)
+            $fgWarn = Get-JuicerFrameGenMeasureWarning (ConvertTo-JuicerExeName $CalibrarJuego)
+            if ($fgWarn) { Write-JuicerWrapped $fgWarn 2 'Yellow'; Write-Host '' }
+            $f = @(Invoke-JuicerPacerCalibration -Exe $CalibrarJuego -Seconds $(if ($MedirJuego) { $MedirJuego } else { 60 }) -OnStatus ${function:Write-JuicerStatusLine} -Monitor $monitor -NoFrameGenWarning)
             Write-Host ''
             Write-JuicerFindings $f
             return 0
@@ -1762,7 +1799,9 @@ function Start-Juicer {
     if ($MedirJuego) {
         if ($MedirJuego -lt 10 -or $MedirJuego -gt 600) { Write-Host '  -MedirJuego va de 10 a 600 segundos.' -ForegroundColor Yellow; return 2 }
         try {
-            $f = @(Invoke-JuicerFrameCapture -Seconds $MedirJuego -Delay 10 -Process $Juego -OnStatus ${function:Write-JuicerStatusLine})
+            $fgWarn = if ($Juego) { Get-JuicerFrameGenMeasureWarning (ConvertTo-JuicerExeName $Juego) } else { $null }
+            if ($fgWarn) { Write-JuicerWrapped $fgWarn 2 'Yellow'; Write-Host '' }
+            $f = @(Invoke-JuicerFrameCapture -Seconds $MedirJuego -Delay 10 -Process $Juego -OnStatus ${function:Write-JuicerStatusLine} -NoFrameGenWarning)
             Write-Host ''
             Write-JuicerFindings $f
             return 0
@@ -1799,8 +1838,24 @@ function Start-Juicer {
     }
 
     $results = @()
-    if ($DeshacerTodo) { $results += @(Undo-JuicerAll) }
-    foreach ($id in $Deshacer) { $results += Undo-JuicerTweak $id }
+    if ($Simular -and ($DeshacerTodo -or $Deshacer.Count -gt 0)) {
+        # Only say what would go back; the journal and the machine stay as they are.
+        # Assigned as it comes: the journal is returned as one list, and @() would wrap it.
+        $journal = Read-JuicerJournal
+        if ($DeshacerTodo) {
+            if ($journal.Count -eq 0) { Write-Host '  No hay cambios de Win Juicer que deshacer.' }
+            else { Write-JuicerWrapped (Format-JuicerUndoAllConfirm $journal -NoQuestion) 2 'Gray' }
+        }
+        $picked = @()
+        foreach ($id in $Deshacer) {
+            $e = Get-JuicerJournalEntry $journal $id
+            if ($e) { $picked += $e } else { Write-Host "  ${id}: no hay cambios de Win Juicer guardados para este ajuste." }
+        }
+        if ($picked.Count -gt 0 -and -not $DeshacerTodo) { Write-JuicerWrapped (Format-JuicerUndoAllConfirm $picked -NoQuestion) 2 'Gray' }
+    } else {
+        if ($DeshacerTodo) { $results += @(Undo-JuicerAll) }
+        foreach ($id in $Deshacer) { $results += Undo-JuicerTweak $id }
+    }
 
     $tweaks = New-Object System.Collections.ArrayList
     $add = { param($t) if (-not ($tweaks | Where-Object { $_.Id -eq $t.Id })) { [void]$tweaks.Add($t) } }

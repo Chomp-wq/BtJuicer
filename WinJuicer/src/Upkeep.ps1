@@ -57,11 +57,15 @@ function Invoke-JuicerUpkeep {
     try { [void](Repair-JuicerShield) } catch { Write-JuicerLog "Mantener: no se pudo revisar la protección: $_" }
     # What Windows has undone since: only logged, never put back behind the user's back.
     try {
-        $drift = @(Get-JuicerDrift)
+        # The caps the driver wiped are put back below, so they are not «only logged».
+        $drift = @(Get-JuicerDrift | Where-Object { $_.Kind -ne 'Fps' })
         if ($drift.Count -gt 0) { Write-JuicerLog ('Mantener: {0}: {1}. Se vuelven a aplicar con -Revisar -Si.' -f (Format-JuicerDriftSummary $drift).Title, (($drift | ForEach-Object { $_.Id }) -join ', ')) }
     } catch { Write-JuicerLog "Mantener: no se pudo revisar lo que Windows ha deshecho: $_" }
     $state = Read-JuicerUpkeepState
-    $games = @(Get-JuicerGames -KeepNew)
+    # Hidden games (the ones marked «no es un juego») stay out of the setup but go into Seen:
+    # otherwise un-hiding one later makes it look new and the frame pacer lands on it unasked.
+    $everything = @(Get-JuicerGames -KeepNew -IncludeHidden)
+    $games = @($everything | Where-Object { -not $_.Hidden })
     $monitor = $null
     try { $monitor = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Mantener: sin monitor: $_" }
     $sig = Get-JuicerLimitSignature $monitor
@@ -70,6 +74,11 @@ function Invoke-JuicerUpkeep {
     # What waited for a game to close, and what an older recipe left behind.
     $results += @(Invoke-JuicerPacerPending $monitor)
     $results += @(Repair-JuicerGameSetups)
+    # What a clean driver install (or a reset of its profiles) took away: the caps are
+    # ours and cost nothing to put back; an open game waits for its close, as always.
+    $restored = @()
+    try { $restored = @(Restore-JuicerWipedFpsLimits $monitor) } catch { Write-JuicerLog "Mantener: no se pudieron volver a poner los límites de FPS: $_" }
+    $results += $restored
     if ($plan.Recalc) { $results += @(Update-JuicerFpsLimits $monitor) }
     $hasBackend = $false
     if ($plan.New.Count -gt 0 -and (Get-JuicerFpsBackend)) {
@@ -82,7 +91,7 @@ function Invoke-JuicerUpkeep {
             $id = "juego:$($_.ExeName)"
             -not $hasBackend -or @($results | Where-Object { $_.Id -eq $id -and $_.Outcome -eq 'Error' }).Count -gt 0
         } | ForEach-Object { $_.Id })
-    $state.Seen = @($games | Where-Object { $failed -notcontains $_.Id } | ForEach-Object { $_.Id })
+    $state.Seen = @($everything | Where-Object { $failed -notcontains $_.Id } | ForEach-Object { $_.Id })
     if ($sig) { $state.Signature = $sig }
     Save-JuicerUpkeepState $state
     # A game that started failing after it was optimized gets its changes taken away.
@@ -92,6 +101,8 @@ function Invoke-JuicerUpkeep {
     $done = @($plan.New | Where-Object { -not (Get-JuicerGameSafe $_.ExeName) })
     if ($done.Count -gt 0) { $msg += 'Juegos nuevos optimizados: ' + (($done | ForEach-Object { $_.Name }) -join ', ') + '.' }
     if ($plan.Recalc) { $msg += 'Ha cambiado tu monitor o cómo lo usas: frame pacer recalculado.' }
+    $back = @($restored | Where-Object { $_.Outcome -eq 'Aplicado' })
+    if ($back.Count -gt 0) { $msg += 'El driver borró el límite de {0}: Win Juicer lo ha vuelto a poner.' -f $(if ($back.Count -eq 1) { '1 juego' } else { "$($back.Count) juegos" }) }
     foreach ($p in @($safety.Protected)) { $msg += "$($p.Name) falló después de optimizarlo: Win Juicer le ha quitado sus cambios por si eran la causa." }
     Write-JuicerLog ('Mantener: {0} nuevos, recalcular {1}, {2} cambios' -f $plan.New.Count, $plan.Recalc, $ok.Count)
     if ($msg.Count -gt 0 -and -not $Quiet) { Show-JuicerToast ($msg -join ' ') }
@@ -152,7 +163,8 @@ function Register-JuicerUpkeep {
     if (-not (Test-JuicerWindows)) { return }
     $dir = Install-JuicerCopy
     $state = Read-JuicerUpkeepState
-    $state.Seen = @(Get-JuicerGames -KeepNew | ForEach-Object { $_.Id })
+    # Hidden ones included, so un-hiding one later does not make it «new».
+    $state.Seen = @(Get-JuicerGames -KeepNew -IncludeHidden | ForEach-Object { $_.Id })
     $m = $null
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
     $state.Signature = Get-JuicerLimitSignature $m

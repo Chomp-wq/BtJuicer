@@ -191,6 +191,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Juegos                                 # los juegos instalados y lo que tiene cada uno
 .\WinJuicer.ps1 -OptimizarJuegos                        # frame pacer para tu monitor (y GPU dedicada) a todos
 .\WinJuicer.ps1 -MantenerJuegos Activar                 # optimizar solos los juegos nuevos al iniciar sesión
+.\WinJuicer.ps1 -Mantener                              # lo que hace esa tarea: optimizar los juegos nuevos y recalcular el frame pacer
 .\WinJuicer.ps1 -LimitarFps cs2.exe,eldenring.exe       # frame pacer al ritmo recomendado, solo cada vez que los abras
 .\WinJuicer.ps1 -LimitarFps cs2.exe -Fps 237            # o al tuyo
 .\WinJuicer.ps1 -CalibrarJuego cs2.exe                  # lo mide con su ritmo y lo ajusta a lo que sostiene
@@ -203,6 +204,7 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -NuevaMedida                            # empezar a comparar desde ahora
 .\WinJuicer.ps1 -Perfil Rendimiento
 .\WinJuicer.ps1 -Aplicar juegos.ventana,pref.oscuro -Si # sin preguntar
+.\WinJuicer.ps1 -Aplicar juegos.ventana -SinPuntoDeRestauracion -Si  # sin intentar crear el punto de restauración
 .\WinJuicer.ps1 -QuitarApps Microsoft.BingNews,Clipchamp.Clipchamp
 .\WinJuicer.ps1 -Dns Cloudflare
 .\WinJuicer.ps1 -ProteccionAdultos Activar               # para siempre: estricta (o -NivelProteccion Equilibrado)
@@ -214,12 +216,25 @@ PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
 .\WinJuicer.ps1 -Exportar C:\mi-config.json             # lo que Win Juicer cambió aquí
 .\WinJuicer.ps1 -Importar C:\mi-config.json -Simular    # en otro PC: qué haría
 .\WinJuicer.ps1 -Deshacer ui.menu
+.\WinJuicer.ps1 -Deshacer ui.menu -Simular            # qué volvería, sin deshacer nada
 .\WinJuicer.ps1 -DeshacerTodo
+.\WinJuicer.ps1 -DeshacerTodo -Simular                  # lo que se deshará, sin tocar nada
+.\WinJuicer.ps1 -Consola                                # el menú de texto en lugar de la ventana
 ```
+
+`-Simular` enseña qué cambiaría sin cambiar nada con `-Recomendado`, `-Perfil`,
+`-Aplicar`, `-QuitarApps`, `-Dns`, `-Importar`, `-Revisar`, `-Deshacer` y
+`-DeshacerTodo`. Con cualquier otra acción que cambie algo o escriba un archivo
+(`-LimitarFps`, `-OptimizarJuegos`, `-Instalar`, `-ProteccionAdultos`, `-Exportar`…)
+se niega antes de hacer nada («-Simular no vale con -X: no puede enseñarse sin
+hacerlo») y sale con 2.
 
 Los ajustes del nivel Extremo y las apps marcadas «con cuidado» se confirman
 siempre uno a uno; sin preguntas, sólo con `-AceptoRiesgos`. Código de salida:
 0 si todo fue bien, 1 si algún ajuste falló, 2 si un argumento no es válido.
+Estos códigos valen desde una consola de administrador: desde una que no lo es,
+Win Juicer se vuelve a abrir con permisos elevados en otra ventana y la
+original sale con 0 sin esperar el resultado.
 
 ## Recomendado para este equipo
 
@@ -578,7 +593,8 @@ Cada cambio en la página se aplica al momento y se deshace como todo lo demás.
 juego, que Win Juicer no puede cambiar desde fuera, para tu gráfica, tu
 monitor y cómo lo usas:
 - **Latencia:** NVIDIA Reflex («Activado + Boost» si tu medida dice que limita
-  el procesador), AMD Anti-Lag 2 en los juegos que lo traen (CS2, Ghost of
+  el procesador; también lo ofrece si la carpeta del juego trae sus archivos),
+  AMD Anti-Lag 2 en los juegos que lo traen (CS2, Ghost of
   Tsushima) o Radeon Anti-Lag del panel en los demás.
 - **Sincronización vertical y limitador del juego:** qué hacer según uses VRR,
   ELMB u otro estroboscopio, o frecuencia fija, para no sumar dos colas ni dos
@@ -683,10 +699,41 @@ con Win Juicer cerrado:
   el propio juego se limita a Hz − Hz²/3600 (180 Hz a 171, 144 a 138, 240 a
   224) y manda el límite más bajo, así que un ritmo escrito a mano por encima
   de esa cifra y sin pasar de los Hz (por ejemplo 178 FPS a 180 Hz) no se
-  alcanza nunca. Win Juicer lo aplica igualmente, pero, en los juegos que sabe
-  que tienen Reflex, lo dice al aplicarlo (ventana y consola), en la página del
-  juego y en los consejos de la consola. Para pasar de ahí habría que apagar
-  Reflex en el juego, y se pierde latencia.
+  alcanza nunca (Marvel Rivals con 178 a 180 Hz se queda en 171). Win Juicer
+  lo aplica igualmente, y lo dice al aplicarlo (ventana y consola), en la
+  página del juego y en los consejos de la consola. Para pasar de ahí habría
+  que apagar Reflex en el juego, y se pierde latencia. Cómo sabe que un juego
+  tiene Reflex, por tres caminos que se suman:
+  - **La tabla** de juegos conocidos (CS2, VALORANT, Fortnite, Apex, Marvel
+    Rivals…).
+  - **Los archivos de su carpeta.** Mira, sólo por nombre y sin abrir nada
+    (hasta tres niveles de la carpeta del juego, la del `.exe` y un máximo de
+    archivos), si están `sl.reflex.dll` o `NvLowLatencyVk.dll` (Reflex),
+    `nvngx_dlssg.dll` o `sl.dlss_g.dll` (DLSS Frame Generation, que fuerza
+    Reflex) y `ffx_frameinterpolation*` (FSR 3). Lo recuerda por juego en
+    `juegos.json` junto con la fecha de la carpeta, y lo vuelve a mirar si
+    cambia (o pasados 30 días). Que estén los archivos dice que el juego
+    **puede**; que lo tengas activado lo decides tú en sus opciones. Y que no
+    estén no prueba nada: hay juegos que lo traen integrado.
+  - **La medida.** Si mides un juego y su media cae justo en esa cifra (con
+    margen de 1,5 FPS), con fotogramas parejos, la gráfica y el procesador
+    sobrados y un ritmo mayor puesto, dice que lo limita Reflex o el modo de
+    baja latencia «Ultra» con G-SYNC, no tu PC, y propone poner el ritmo en
+    esa cifra. **Calibrar** no baja el ritmo en ese caso ni borra el que
+    elegiste. Si en cambio la media queda por debajo del ritmo, pareja y con
+    margen, pero no coincide con esa cifra, dice que algo externo limita y
+    nombra los sospechosos habituales según tu gráfica: el límite del propio
+    juego, Radeon Chill o Frame Rate Target Control en AMD, un límite del
+    panel de NVIDIA o de RivaTuner, la V-Sync contra otra pantalla. Es lo que
+    muestra la medida; Win Juicer no puede saber cuál de ellos es.
+- **El límite del propio juego (Unreal).** En los juegos de Unreal Engine
+  (`*-Win64-Shipping.exe`, como Marvel Rivals) lee, sin cambiar nada, su
+  `GameUserSettings.ini` en `%LOCALAPPDATA%\<proyecto>\Saved\Config\Windows`
+  (también `WindowsNoEditor` y `WinGDK`): `FrameRateLimit` y `bUseVSync`. Si el
+  juego tiene su propio límite, la página del juego avisa («el juego tiene su
+  propio límite a 144 FPS: con el de Win Juicer a 171 manda el menor») y
+  sugiere dejarlo en ilimitado; si ya lo está, lo confirma. Si no encuentra el
+  archivo, no dice nada.
 - **La latencia**: un límite que el juego alcanza deja la gráfica por debajo
   del 100 %, así que no se forma cola de fotogramas, que es de donde sale la
   latencia. Con NVIDIA el perfil del juego recibe además la receta de baja
@@ -696,8 +743,10 @@ con Win Juicer cerrado:
   límite por debajo de los Hz no llega a actuar más que para tapar un corte en
   un pico (con estroboscopio sin VRR, para que cada destello tenga su
   fotograma). Lo que el perfil de NVIDIA de ese juego ya trae se respeta, y no
-  se fuerza «Preferir rendimiento máximo». El modo «Ultra» no tiene un
-  identificador público y no se toca. La sincronización vertical del perfil siempre queda en uno de tres
+  se fuerza «Preferir rendimiento máximo». Win Juicer no lee ni cambia el modo
+  «Ultra»: su identificador no es público. Lo que sí hace es detectar su tope
+  al medir (ver «El tope de Reflex»), porque con G-SYNC y V-Sync se comporta
+  como Reflex. La sincronización vertical del perfil siempre queda en uno de tres
   estados (forzada, desactivada o la del juego), así que cambiar de modo o de
   prioridad nunca deja puesta la del anterior. Un ritmo por encima de los Hz
   (escrito a mano o calibrado) nunca la fuerza: haría esperar cada fotograma
@@ -733,7 +782,10 @@ con Win Juicer cerrado:
   el máximo de tu monitor, dejando un 15 % de margen para los picos). Con
   estroboscopio sin VRR no baja nunca: te dice a qué frecuencia bajar el
   monitor. Lo recuerda por juego mientras el monitor, sus Hz y cómo lo usas
-  sigan iguales; «Olvidar calibraciones» vuelve al ritmo recomendado.
+  sigan iguales; «Olvidar calibraciones» vuelve al ritmo recomendado. «Calibrado
+  hace N días» sólo sale cuando esa calibración es la que manda ahora (mismo
+  monitor y modo, y sin un ritmo tuyo por encima); si es de otro monitor o
+  modo, lo dice así.
 - **Prioridad por juego: fluidez o latencia mínima.** Con fluidez (la de
   siempre), el ritmo más estable dentro de lo que el monitor enseña entero.
   Con **latencia**, pensada para competitivos: igual hasta que lo calibras;
@@ -745,7 +797,33 @@ con Win Juicer cerrado:
 - **Generación de fotogramas** (DLSS, FSR): la medida la detecta y calibrar
   ya no sube ni baja el ritmo por la cola o el margen, que con fotogramas
   generados no se pueden leer bien; sólo lo baja si no se cumple. Con
-  RivaTuner como motor avisa: se pelea con la generación y da tirones.
+  RivaTuner como motor avisa: se pelea con la generación y da tirones. Si la
+  carpeta del juego trae sus archivos (ver «El tope de Reflex»), lo avisa
+  **antes** de medir (en la confirmación de la ventana, en la página del juego
+  y en la consola), y los consejos del juego recuerdan que el límite cuenta
+  también los fotogramas generados: 171 FPS son unos 85 reales, y la
+  generación de DLSS fuerza Reflex.
+- **Un ritmo a menos de 3 FPS de los Hz.** Con VRR y la sincronización
+  vertical forzada, un ritmo como 178 a 180 Hz puede hacer esperar fotogramas:
+  al aplicarlo lo dice y propone el de Reflex (171) o menos.
+- **Ritmos que se quedan atrás.** Si cambias de monitor, de modo o de Hz, o
+  Win Juicer calcula el ritmo de otra manera, los juegos con ritmo automático
+  pueden quedarse con el viejo (el mantenimiento al iniciar sesión sólo
+  recalcula si está activado): el frame pacer lo avisa («tus juegos tienen 57
+  FPS y para tus 180 Hz serían 171») y «Recalcular los ritmos» lo arregla. Los
+  que elegiste tú no se tocan.
+- **Límites que borra el driver.** Una instalación limpia del driver de
+  NVIDIA, o reiniciar sus perfiles, se lleva los límites. Win Juicer los ve en
+  el diario sin nada puesto: el mantenimiento al iniciar sesión los vuelve a
+  poner (un juego abierto espera a que lo cierres) y lo apunta en el registro;
+  en la ventana (tarjeta «Qué ha cambiado») y en `-Revisar` salen como «el
+  driver borró el límite de N juegos», y `-Revisar -Si` o «Volver a
+  aplicarlos» los restablece.
+- **Otras pantallas, AMD y G-SYNC con módulo.** Con varias pantallas de
+  distintos Hz o VRR, avisa de que el ritmo está calculado para la principal.
+  Con AMD, recuerda que Radeon Chill y Frame Rate Target Control mandan si son
+  más bajos. Con NVIDIA y un monitor que Windows ve como fijo (los G-SYNC con
+  módulo no anuncian VRR), sugiere elegir «Frecuencia variable» en su modo.
 - **Los Hz de verdad.** Windows dice 180 Hz, pero la pantalla suele ir a
   179,96. Win Juicer lee la fracción exacta (`QueryDisplayConfig`). Con
   estroboscopio y sincronización vertical eso importa: un ritmo de 180 es un
@@ -1334,6 +1412,10 @@ arranca nada), «Listo para jugar» y la edad de los drivers. `Mejoras.Tests.ps1
 las confirmaciones con detalle, las opciones no válidas de los menús (y que sin
 entrada salen), la grabación y VBS de «Listo para jugar», los juegos ocultos, la
 edad de la calibración y la vista previa de la limpieza sobre carpetas temporales.
+`Pacer.Tests.ps1`, el frame pacer: qué limita a un juego según la medida (Reflex, «Ultra»,
+algo externo), los archivos de Reflex y de generación de fotogramas, el límite propio de
+Unreal, los ritmos atrasados, los límites que borra el driver y la edad de la calibración,
+todo sobre la máquina en memoria y carpetas temporales.
 
 Las pruebas de `Windows.Tests.ps1` cambian de verdad la configuración del equipo,
 nivel Extremo incluido, y luego la devuelven. Están pensadas para una máquina
