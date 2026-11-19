@@ -780,6 +780,19 @@ function Get-JuicerDrift {
         }
         $out += @{ Id = [string]$e.Id; Title = [string]$t.Title; Tweak = $t; State = $s.State; Level = [int]$t.Level; Pending = @($s.Pending) }
     }
+    # A game's frame pacer is not in the catalog, so the loop above never sees it.
+    # What a clean driver install wipes is its cap: journaled, with nothing live.
+    # Kind 'Fps' marks them: they go back through the limiter, not the catalog.
+    try {
+        foreach ($w in @(Get-JuicerWipedFpsLimits $Journal)) {
+            if (@($out | Where-Object { $_.Id -eq $w.Id }).Count -gt 0) { continue }
+            # An open game is not touched (its cap waits for it to close).
+            if (Test-JuicerGameRunning $w.Exe) { continue }
+            $out += @{ Id = [string]$w.Id; Title = "Frame pacer de $($w.Exe)"; Tweak = $null; Kind = 'Fps'; Exe = [string]$w.Exe; State = 'Pendiente'; Level = 1; Pending = @() }
+        }
+    } catch {
+        Write-JuicerLog "No se pudo revisar si el driver borró algún límite de FPS: $_"
+    }
     $out
 }
 
@@ -787,11 +800,21 @@ function Get-JuicerDrift {
 # line per tweak, at most Max of them.
 function Format-JuicerDriftSummary {
     param([object[]]$Drift, [int]$Max = 8)
-    $d = @($Drift | Where-Object { $_ })
-    if ($d.Count -eq 0) { return @{ Title = ''; Lines = @() } }
+    $all = @($Drift | Where-Object { $_ })
+    if ($all.Count -eq 0) { return @{ Title = ''; Lines = @() } }
+    # Frame pacer caps the driver wiped are told apart: it was the driver, not Windows, and one line is enough.
+    $fps = @($all | Where-Object { $_.Kind -eq 'Fps' })
+    $d = @($all | Where-Object { $_.Kind -ne 'Fps' })
+    $fpsText = 'El driver borró el límite de {0}' -f $(if ($fps.Count -eq 1) { '1 juego' } else { "$($fps.Count) juegos" })
+    if ($d.Count -eq 0) {
+        $fpsLines = @($fps | Select-Object -First $Max | ForEach-Object { '· ' + $(if ($_.Exe) { $_.Exe } else { $_.Title }) })
+        if ($fps.Count -gt $Max) { $fpsLines += "· y $($fps.Count - $Max) más" }
+        return @{ Title = $fpsText; Lines = $fpsLines }
+    }
     $title = if ($d.Count -eq 1) { 'Windows ha deshecho 1 cambio tuyo' } else { "Windows ha deshecho $($d.Count) cambios tuyos" }
     $lines = @($d | Select-Object -First $Max | ForEach-Object { '· ' + $_.Title + $(if ($_.State -eq 'Parcial') { ' (en parte)' } else { '' }) })
     if ($d.Count -gt $Max) { $lines += "· y $($d.Count - $Max) más" }
+    if ($fps.Count -gt 0) { $lines += '· ' + $fpsText.Substring(0, 1).ToLowerInvariant() + $fpsText.Substring(1) + ': ' + (($fps | Select-Object -First 5 | ForEach-Object { $_.Exe }) -join ', ') }
     @{ Title = $title; Lines = $lines }
 }
 

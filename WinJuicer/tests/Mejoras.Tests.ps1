@@ -214,7 +214,8 @@ Describe 'Edad de la calibración' {
 
     It 'el estado del juego lo incluye cuando tiene frame pacer' {
         $when = (Get-Date).AddDays(-12).ToString('s')
-        $g = @{ Fps = 118; CalFps = 118; CalDate = $when }
+        # The age is shown when the calibration is the one in force (see Pacer.Tests.ps1 for the rest).
+        $g = @{ Fps = 118; CalFps = 118; CalDate = $when; CalState = 'Activa' }
         (Format-JuicerGameStatus $g) | Should -BeLike '*calibrado hace 12 días a 118 FPS*'
         (Format-JuicerGameStatus @{ Fps = 118; CalFps = 0; CalDate = '' }) | Should -Not -BeLike '*calibrado*'
         (Format-JuicerGameStatus @{ Fps = $null; CalFps = 118; CalDate = $when }) | Should -Not -BeLike '*calibrado*'

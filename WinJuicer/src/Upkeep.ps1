@@ -57,7 +57,8 @@ function Invoke-JuicerUpkeep {
     try { [void](Repair-JuicerShield) } catch { Write-JuicerLog "Mantener: no se pudo revisar la protección: $_" }
     # What Windows has undone since: only logged, never put back behind the user's back.
     try {
-        $drift = @(Get-JuicerDrift)
+        # The caps the driver wiped are put back below, so they are not «only logged».
+        $drift = @(Get-JuicerDrift | Where-Object { $_.Kind -ne 'Fps' })
         if ($drift.Count -gt 0) { Write-JuicerLog ('Mantener: {0}: {1}. Se vuelven a aplicar con -Revisar -Si.' -f (Format-JuicerDriftSummary $drift).Title, (($drift | ForEach-Object { $_.Id }) -join ', ')) }
     } catch { Write-JuicerLog "Mantener: no se pudo revisar lo que Windows ha deshecho: $_" }
     $state = Read-JuicerUpkeepState
@@ -70,6 +71,11 @@ function Invoke-JuicerUpkeep {
     # What waited for a game to close, and what an older recipe left behind.
     $results += @(Invoke-JuicerPacerPending $monitor)
     $results += @(Repair-JuicerGameSetups)
+    # What a clean driver install (or a reset of its profiles) took away: the caps are
+    # ours and cost nothing to put back; an open game waits for its close, as always.
+    $restored = @()
+    try { $restored = @(Restore-JuicerWipedFpsLimits $monitor) } catch { Write-JuicerLog "Mantener: no se pudieron volver a poner los límites de FPS: $_" }
+    $results += $restored
     if ($plan.Recalc) { $results += @(Update-JuicerFpsLimits $monitor) }
     $hasBackend = $false
     if ($plan.New.Count -gt 0 -and (Get-JuicerFpsBackend)) {
@@ -92,6 +98,8 @@ function Invoke-JuicerUpkeep {
     $done = @($plan.New | Where-Object { -not (Get-JuicerGameSafe $_.ExeName) })
     if ($done.Count -gt 0) { $msg += 'Juegos nuevos optimizados: ' + (($done | ForEach-Object { $_.Name }) -join ', ') + '.' }
     if ($plan.Recalc) { $msg += 'Ha cambiado tu monitor o cómo lo usas: frame pacer recalculado.' }
+    $back = @($restored | Where-Object { $_.Outcome -eq 'Aplicado' })
+    if ($back.Count -gt 0) { $msg += 'El driver borró el límite de {0}: Win Juicer lo ha vuelto a poner.' -f $(if ($back.Count -eq 1) { '1 juego' } else { "$($back.Count) juegos" }) }
     foreach ($p in @($safety.Protected)) { $msg += "$($p.Name) falló después de optimizarlo: Win Juicer le ha quitado sus cambios por si eran la causa." }
     Write-JuicerLog ('Mantener: {0} nuevos, recalcular {1}, {2} cambios' -f $plan.New.Count, $plan.Recalc, $ok.Count)
     if ($msg.Count -gt 0 -and -not $Quiet) { Show-JuicerToast ($msg -join ' ') }

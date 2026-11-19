@@ -1553,7 +1553,10 @@ Describe 'Frame pacer: ritmo, calibración y conflictos' {
         (Get-JuicerPacerConflicts $closed 'rtss' $limits $Mon).Severity | Should -Be 'Alto'
         [void](Set-JuicerMonitorMode $Mon 'Estrobo')
         $Mon.Mode = 'Estrobo'
-        (Get-JuicerPacerConflicts $none 'nvidia' $limits $Mon).Title | Should -BeLike '*179?963 Hz*sólo limita en enteros'
+        # Under strobing the pace is the refresh rate now: the 171 set before is a rate left behind, said on its own.
+        @(Get-JuicerPacerConflicts $none 'nvidia' $limits $Mon | Where-Object { $_.Title -like 'Hay 1 juego con un ritmo*' }).Count | Should -Be 1
+        $now = @(@{ Exe = 'cs2.exe'; Fps = 180 })
+        (Get-JuicerPacerConflicts $none 'nvidia' $now $Mon).Title | Should -BeLike '*179?963 Hz*sólo limita en enteros'
         (Get-JuicerPacerConflicts $closed 'rtss' @() $Mon).Title | Should -BeLike 'Ritmo al Hz exacto: 179?95 FPS*'
         @(Get-JuicerPacerConflictsHere).Count | Should -Be 0
     }

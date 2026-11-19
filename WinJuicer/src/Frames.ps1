@@ -427,8 +427,15 @@ function Get-JuicerPreviousFrameResult {
 # was the game. OnStatus is told what is happening each second. Returns the
 # findings; callers wrap them in @().
 function Invoke-JuicerFrameCapture {
-    param([int]$Seconds = 60, [int]$Delay = 10, [string]$Process, [scriptblock]$OnStatus)
+    param([int]$Seconds = 60, [int]$Delay = 10, [string]$Process, [scriptblock]$OnStatus, [switch]$NoFrameGenWarning)
     $say = if ($OnStatus) { $OnStatus } else { { param($t) Write-Verbose $t } }
+    # Said before the countdown, not only after the numbers come out odd (a caller
+    # that already said it on its own screen passes -NoFrameGenWarning).
+    if ($Process -and -not $NoFrameGenWarning) {
+        $fgWarn = $null
+        try { $fgWarn = Get-JuicerFrameGenMeasureWarning $Process } catch { Write-JuicerLog "Sin aviso de generación de fotogramas: $_" }
+        if ($fgWarn) { New-JuicerFinding "Juego: $Process" 'Medio' 'Antes de medir: generación de fotogramas con RivaTuner' $fgWarn }
+    }
     & $say 'Preparando PresentMon…'
     $pm = Get-JuicerPresentMon
     $csv = Join-Path ([IO.Path]::GetTempPath()) ('wj-fps-' + [guid]::NewGuid().ToString('N') + '.csv')
@@ -501,11 +508,12 @@ function Invoke-JuicerFrameCapture {
             try { Save-JuicerFrameChart $result.Application $chart.Chart } catch { Write-JuicerLog "Sin guardar la gráfica: $_" }
         }
         try {
-            $cap = Get-JuicerRecommendedFps $result.Application
+            $mon = Get-JuicerPrimaryMonitor
+            $cap = Get-JuicerRecommendedFps $result.Application $mon
             if ($cap) {
                 if ($now.Count -gt 0) {
-                    # Under the frame pacer: how well it holds the pace.
-                    Get-JuicerPacerFindings $result ([int]$now[0].Fps) ([double]$now[0].Exact) ([string]$now[0].Backend)
+                    # Under the frame pacer: how well it holds the pace, and what holds it when it is not the PC.
+                    Get-JuicerPacerFindings $result ([int]$now[0].Fps) ([double]$now[0].Exact) ([string]$now[0].Backend) -Hz ([int]$mon.Display.Hz) -Use (Resolve-JuicerMonitorUse $mon) -GpuVendor (Get-JuicerMainGpuVendor)
                 } else {
                     New-JuicerFinding "Juego: $($result.Application)" 'Info' "Ritmo recomendado para este juego: $($cap.Fps) FPS" ($cap.Why + ' Añádelo en Juegos > Frame pacer y se aplicará solo cada vez que lo abras.')
                 }
