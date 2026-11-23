@@ -445,7 +445,7 @@ exclusiva) en la salida predeterminada, con el período mínimo del driver, y qu
 cambia de flujo si cambias de salida (auriculares que se enchufan, un driver que
 se reinicia). Se ejecuta con tu usuario (las sesiones de audio son de cada
 usuario; si Win Juicer corre como otra cuenta de administrador, ver «Un detalle
-si tu cuenta no es de administrador»), sin ventana, con prioridad baja y de uno en uno, como tarea programada
+si tu cuenta no es de administrador»), sin ventana (la tarea usa `conhost --headless`, porque Windows Terminal ignora «oculta»; las tareas de versiones anteriores se corrigen solas), con prioridad baja y de uno en uno, como tarea programada
 al iniciar sesión, y se pone en marcha en cuanto lo aplicas. Deshacer, o
 «Deshacer todo», quita la tarea y el script y cierra el flujo: el audio vuelve a
 10 ms.
@@ -647,7 +647,7 @@ ha cambiado el monitor, sus Hz o cómo lo usas, y te avisa con una
 notificación. Escribir los perfiles del driver de NVIDIA requiere permisos de
 administrador. Por eso Win Juicer se copia a `Program Files`, donde sólo un
 administrador puede cambiarlo, y la tarea ejecuta esa copia, que se actualiza
-cada vez que abres una versión nueva. Al desmarcarlo se quitan la tarea y la
+cada vez que abres una versión nueva. La tarea corre sin ventana (`conhost --headless`; la de versiones anteriores se corrige sola). Al desmarcarlo se quitan la tarea y la
 copia.
 Desde la consola, opción 0 del menú Juegos; desde la línea de órdenes,
 `-Juegos` para listarlos y `-OptimizarJuegos` para optimizarlos todos.

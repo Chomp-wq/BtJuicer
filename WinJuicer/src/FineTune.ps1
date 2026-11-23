@@ -361,15 +361,15 @@ function Register-JuicerTuneWatch {
     if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
     $script = Join-Path $dir 'vigilar-ajuste-fino.ps1'
     [IO.File]::WriteAllText($script, (Get-JuicerTuneWatchScript (Get-JuicerTunePath)), (New-Object Text.UTF8Encoding $true))
-    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $action = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$script`""
+    $action = New-JuicerHiddenTaskAction -Script $script
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
     $trigger.Delay = 'PT1M'
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Limited
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 5)
     Register-ScheduledTask -TaskName $script:TuneWatchTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Comprueba al iniciar sesión que el ajuste fino de Win Juicer sigue puesto y estable.' -Force | Out-Null
     Write-JuicerLog "Vigilancia del ajuste fino registrada: $script"
+    Repair-JuicerTaskWindows
 }
 
 function Unregister-JuicerTuneWatch {

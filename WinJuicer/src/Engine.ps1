@@ -1090,6 +1090,70 @@ function Get-JuicerWindowsBuild {
     [Environment]::OSVersion.Version.Build
 }
 
+# --- Tasks that never show a window ------------------------------------------
+# A task that launches powershell.exe with -WindowStyle Hidden in the user's session still
+# opens a window on Windows 11 when Windows Terminal is the default terminal: the console is
+# handed over to it and it ignores the flag (an empty «C:\WINDOWS\System32\WindowsPowerShell…»
+# stays on screen at every sign-in). conhost.exe --headless runs the console with no window at
+# all; it exists from Windows 10 2004 (build 19041).
+
+# Pure: what the action runs. $Build below 19041 falls back to powershell.exe directly.
+function Get-JuicerHiddenTaskCommand {
+    param([Parameter(Mandatory)][string]$Script, [string]$Arguments = '', [int]$Build = 22000, [string]$PowerShell, [string]$SystemRoot)
+    if (-not $SystemRoot) { $SystemRoot = $env:SystemRoot }
+    # Plain string joins, not Join-Path: these are Windows paths and must build the same anywhere.
+    $SystemRoot = $SystemRoot.TrimEnd('\')
+    if (-not $PowerShell) { $PowerShell = "$SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" }
+    $tail = "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$Script`""
+    if ($Arguments) { $tail += " $Arguments" }
+    if ($Build -lt 19041) { return @{ Execute = $PowerShell; Argument = $tail } }
+    @{ Execute = "$SystemRoot\System32\conhost.exe"; Argument = "--headless `"$PowerShell`" $tail" }
+}
+
+function New-JuicerHiddenTaskAction {
+    param([Parameter(Mandatory)][string]$Script, [string]$Arguments = '')
+    $build = 22000
+    try { $build = Get-JuicerWindowsBuild } catch { Write-JuicerLog "Sin versión de Windows para la tarea: $_" }
+    $c = Get-JuicerHiddenTaskCommand -Script $Script -Arguments $Arguments -Build $build
+    New-ScheduledTaskAction -Execute $c.Execute -Argument $c.Argument
+}
+
+# Pure: the command an existing action should have, or $null when it needs no change (already
+# conhost, not ours, or an old Windows without --headless).
+function Get-JuicerTaskActionFix {
+    param([string]$Execute, [string]$Argument, [int]$Build = 22000, [string]$SystemRoot)
+    if ($Build -lt 19041 -or -not $Execute -or -not $Argument) { return $null }
+    if ((Split-Path -Leaf ($Execute.Trim('"') -replace '\\', '/')) -ne 'powershell.exe') { return $null }
+    $m = [regex]::Match($Argument, '-File\s+"(?<f>[^"]+)"\s*(?<rest>.*)$')
+    if (-not $m.Success) { return $null }
+    Get-JuicerHiddenTaskCommand -Script $m.Groups['f'].Value -Arguments $m.Groups['rest'].Value.Trim() -Build $Build -PowerShell $Execute.Trim('"') -SystemRoot $SystemRoot
+}
+
+# Tasks registered by an older version run powershell.exe directly: swap only the action, so
+# triggers, principal and settings stay as they were. Never throws.
+function Repair-JuicerTaskWindows {
+    if (-not (Test-JuicerWindows)) { return }
+    try {
+        $build = Get-JuicerWindowsBuild
+        foreach ($name in @($script:AudioTask, $script:UpkeepTask, $script:TuneWatchTask)) {
+            try {
+                $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
+                if ($null -eq $task) { continue }
+                $actions = @($task.Actions)
+                if ($actions.Count -ne 1) { continue }
+                $fix = Get-JuicerTaskActionFix -Execute ([string]$actions[0].Execute) -Argument ([string]$actions[0].Arguments) -Build $build
+                if ($null -eq $fix) { continue }
+                Set-ScheduledTask -TaskName $name -Action (New-ScheduledTaskAction -Execute $fix.Execute -Argument $fix.Argument) -ErrorAction Stop | Out-Null
+                Write-JuicerLog "Tarea «$name»: ahora se ejecuta sin ventana"
+            } catch {
+                Write-JuicerLog "Tarea «$name»: no se pudo quitarle la ventana: $_"
+            }
+        }
+    } catch {
+        Write-JuicerLog "No se pudo revisar las ventanas de las tareas: $_"
+    }
+}
+
 # System Restore is the safety net for whatever the journal cannot see. Windows
 # silently skips creating a point if another was made in the last 24 hours, so
 # the result says what actually happened instead of assuming.
