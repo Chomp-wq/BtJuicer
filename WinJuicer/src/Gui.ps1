@@ -1019,6 +1019,9 @@ $script:GuiWork = @{
         # Writes: closing the window waits for them (see Add_Closing).
         $Sync.Mutating = $true
         try { [void](Repair-JuicerShield); $out.Shield = Get-JuicerShieldInfo } catch { Write-JuicerLog "No se pudo revisar la protección: $_" } finally { $Sync.Mutating = $false }
+        # Tasks of an older version that open a window at sign-in: swap their action (never throws).
+        $Sync.Mutating = $true
+        try { Repair-JuicerTaskWindows } finally { $Sync.Mutating = $false }
         $Sync.Status = 'Poniendo al día lo de tus juegos…'
         $games = @()
         $Sync.Mutating = $true

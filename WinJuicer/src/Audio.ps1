@@ -673,9 +673,9 @@ function Install-WinAudioHelper {
     # With a BOM, so Windows PowerShell 5.1 reads the accents.
     [IO.File]::WriteAllText($file, (Get-JuicerAudioHelperScript), (New-Object Text.UTF8Encoding $true))
     # Windows PowerShell 5.1 compiles the interop with its own compiler and is on every Windows 11.
-    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    # Not powershell.exe directly: Windows Terminal would show its window (see New-JuicerHiddenTaskAction).
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $action = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$file`""
+    $action = New-JuicerHiddenTaskAction -Script $file
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
     $trigger.Delay = 'PT30S'
     # As the person signed in, not elevated: audio sessions belong to the user.
@@ -685,6 +685,7 @@ function Install-WinAudioHelper {
     $script:AudioCache = $null
     Register-ScheduledTask -TaskName $script:AudioTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Mantiene el motor de audio de Windows en su período mínimo (Win Juicer).' -Force | Out-Null
     Write-JuicerLog "Audio de baja latencia: tarea registrada con $file"
+    Repair-JuicerTaskWindows
     try { Start-ScheduledTask -TaskName $script:AudioTask -ErrorAction Stop } catch { Write-JuicerLog "Audio de baja latencia: no se pudo arrancar ahora, lo hará al iniciar sesión: $_" }
 }
 

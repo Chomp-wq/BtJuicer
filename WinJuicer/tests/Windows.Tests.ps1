@@ -658,3 +658,39 @@ Describe 'Audio en Windows de verdad' -Tag 'Windows' -Skip:(-not $OnWindows) {
         $h.Installed | Should -BeOfType [bool]
     }
 }
+
+Describe 'Tareas sin ventana (conhost --headless)' {
+    It 'Windows 11: conhost --headless con la ruta completa de powershell, todo entre comillas' {
+        $c = Get-JuicerHiddenTaskCommand -Script 'C:\Program Files\WinJuicer\WinJuicer.ps1' -Arguments '-Mantener' -Build 22631 -PowerShell 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe' -SystemRoot 'C:\WINDOWS'
+        $c.Execute | Should -BeLike '*conhost.exe'
+        $c.Argument | Should -Be '--headless "C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Program Files\WinJuicer\WinJuicer.ps1" -Mantener'
+    }
+
+    It 'sin argumentos extra no deja un espacio sobrante' {
+        $c = Get-JuicerHiddenTaskCommand -Script 'C:\Users\Ana Maria\AppData\Local\WinJuicer\a.ps1' -Build 19041 -PowerShell 'C:\W\powershell.exe' -SystemRoot 'C:\W'
+        $c.Argument | Should -BeLike '--headless "C:\W\powershell.exe" *-File "C:\Users\Ana Maria\AppData\Local\WinJuicer\a.ps1"'
+    }
+
+    It 'antes de la build 19041 sigue con powershell.exe directo' {
+        $c = Get-JuicerHiddenTaskCommand -Script 'C:\a b\x.ps1' -Build 18363 -PowerShell 'C:\W\powershell.exe' -SystemRoot 'C:\W'
+        $c.Execute | Should -Be 'C:\W\powershell.exe'
+        $c.Argument | Should -Be '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\a b\x.ps1"'
+    }
+
+    It 'la reparación: sólo cambia las acciones de powershell.exe con -File' {
+        $args1 = '-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File "C:\Program Files\WinJuicer\WinJuicer.ps1" -Mantener'
+        $fix = Get-JuicerTaskActionFix -Execute 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe' -Argument $args1 -Build 22631 -SystemRoot 'C:\WINDOWS'
+        $fix.Execute | Should -BeLike '*conhost.exe'
+        $fix.Argument | Should -Be ('--headless "C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" ' + $args1)
+        # Already fixed, an old Windows, other programs and odd arguments are left alone.
+        Get-JuicerTaskActionFix -Execute 'C:\WINDOWS\System32\conhost.exe' -Argument ('--headless x ' + $args1) -Build 22631 | Should -BeNullOrEmpty
+        Get-JuicerTaskActionFix -Execute 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe' -Argument $args1 -Build 18363 | Should -BeNullOrEmpty
+        Get-JuicerTaskActionFix -Execute 'C:\Tools\otra.exe' -Argument $args1 -Build 22631 | Should -BeNullOrEmpty
+        Get-JuicerTaskActionFix -Execute 'C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe' -Argument '-Command x' -Build 22631 | Should -BeNullOrEmpty
+        Get-JuicerTaskActionFix -Execute '' -Argument '' -Build 22631 | Should -BeNullOrEmpty
+    }
+
+    It 'fuera de Windows, reparar no hace nada ni lanza' -Skip:(& (Get-Module WinJuicer) { Test-JuicerWindows }) {
+        { Repair-JuicerTaskWindows } | Should -Not -Throw
+    }
+}

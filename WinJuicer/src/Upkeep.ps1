@@ -55,6 +55,8 @@ function Invoke-JuicerUpkeep {
     # The content protection as well, its task included: one deleted by hand
     # comes back at the next sign-in.
     try { [void](Repair-JuicerShield) } catch { Write-JuicerLog "Mantener: no se pudo revisar la protección: $_" }
+    # Tasks of an older version that still open a window at sign-in.
+    Repair-JuicerTaskWindows
     # What Windows has undone since: only logged, never put back behind the user's back.
     try {
         # The caps the driver wiped are put back below, so they are not «only logged».
@@ -173,15 +175,15 @@ function Register-JuicerUpkeep {
     try { $m = Get-JuicerPrimaryMonitor } catch { Write-JuicerLog "Sin monitor: $_" }
     $state.Signature = Get-JuicerLimitSignature $m
     Save-JuicerUpkeepState $state
-    $ps = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
     $user = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $action = New-ScheduledTaskAction -Execute $ps -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$(Join-Path $dir 'WinJuicer.ps1')`" -Mantener"
+    $action = New-JuicerHiddenTaskAction -Script (Join-Path $dir 'WinJuicer.ps1') -Arguments '-Mantener'
     $trigger = New-ScheduledTaskTrigger -AtLogOn -User $user
     $trigger.Delay = 'PT2M'
     $principal = New-ScheduledTaskPrincipal -UserId $user -LogonType Interactive -RunLevel Highest
     $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Minutes 10)
     Register-ScheduledTask -TaskName $script:UpkeepTask -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Description 'Optimiza los juegos nuevos y recalcula el frame pacer si cambia el monitor (Win Juicer).' -Force | Out-Null
     Write-JuicerLog "Mantenimiento de juegos activado: $dir"
+    Repair-JuicerTaskWindows
 }
 
 function Unregister-JuicerUpkeep {
