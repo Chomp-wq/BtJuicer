@@ -2,6 +2,7 @@ package com.secretsavior.vpn
 
 import android.app.PendingIntent
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.net.ConnectivityManager
 import android.net.Network
@@ -104,6 +105,7 @@ class SaviorVpnService : VpnService() {
                 ),
             )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
+        excludeFromTunnel(builder)
         val established = try {
             builder.establish()
         } catch (e: Exception) {
@@ -147,6 +149,25 @@ class SaviorVpnService : VpnService() {
         running = true
         watchNetworks()
         reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
+    }
+
+    /**
+     * Netflix (y en general cualquier app que compruebe si hay una VPN activa, como algunos
+     * bancos) se niega a funcionar aunque ésta no toque su tráfico: sólo filtra DNS. Android no
+     * distingue una VPN que reenvía todo de una que sólo captura DNS, así que la única forma de
+     * que una app no la vea es que su tráfico no pase por el túnel en absoluto. Para las apps de
+     * [EXCLUDED_APPS], DNS incluido, sale por la red real: el filtro de contenido no les llega,
+     * pero ninguna de ellas es una vía de pornografía. Prime Video no necesita esto: no detecta
+     * la VPN.
+     */
+    private fun excludeFromTunnel(builder: Builder) {
+        for (pkg in EXCLUDED_APPS) {
+            try {
+                builder.addDisallowedApplication(pkg)
+            } catch (e: PackageManager.NameNotFoundException) {
+                // no está instalada: nada que excluir
+            }
+        }
     }
 
     /**
@@ -415,6 +436,9 @@ class SaviorVpnService : VpnService() {
         private var current: SaviorVpnService? = null
 
         private fun dns(ip: String) = InetSocketAddress(ip, 53)
+
+        /** Apps que se niegan a funcionar si ven cualquier VPN activa, sea cual sea su propósito. */
+        val EXCLUDED_APPS = listOf("com.netflix.mediaclient")
 
         @Volatile
         var running = false

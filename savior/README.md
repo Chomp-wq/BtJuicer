@@ -203,6 +203,10 @@ lo contrario:
   bloquear algo inocente y dejar pasar algo).
 - No filtra el contenido de imágenes o vídeo dentro de apps (redes sociales,
   etc.): bloquea sitios y búsquedas, no lo que una app decida mostrar.
+- **Netflix** se excluye del túnel por completo (su DNS incluido): detecta cualquier
+  VPN activa, sea cual sea su propósito, y se niega a reproducir si no. El filtro de
+  contenido no le llega, pero no es una vía de pornografía. Si otra app da el mismo
+  problema, se le puede añadir la misma excepción.
 
 Una versión más dura existe: si la app fuera **propietaria del dispositivo**
 (`adb shell dpm set-device-owner`, sólo en un teléfono sin cuentas añadidas)
