@@ -1,11 +1,17 @@
 package com.secretsavior.guard
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.os.SystemClock
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
@@ -95,6 +101,8 @@ class GuardService : AccessibilityService() {
         handler.removeCallbacks(deferred)
         handler.removeCallbacks(browserPoll)
         handler.removeCallbacks(vendorRecheck)
+        handler.removeCallbacks(settingsPass)
+        hideShields()
         super.onDestroy()
     }
 
@@ -136,6 +144,8 @@ class GuardService : AccessibilityService() {
             return
         }
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            // Fuera de Ajustes las capas sobran (el teclado o la barra de notificaciones no cuentan).
+            if (!isSettings(pkg) && !isNeutral(pkg)) hideShields()
             noteForeground(pkg)
             // La lista de Accesibilidad apaga el interruptor ahí mismo, sin pantalla aparte, y
             // en cuanto se apaga este servicio deja de existir: ya no puede cerrar nada después.
@@ -157,6 +167,10 @@ class GuardService : AccessibilityService() {
         }
         if (type == AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             onTyped(event, pkg)
+            return
+        }
+        if (isSettings(pkg)) {
+            onSettingsEvent(event)
             return
         }
         if (!isSystemSurface(pkg) && pkg !in BROWSERS) return
@@ -269,6 +283,214 @@ class GuardService : AccessibilityService() {
         if (root.packageName?.toString() != pkg) return // el evento no es de la ventana activa
         if (browser) guardBrowser(pkg, root) else guardSystemScreen(pkg, root)
     }
+
+    // --- 0. Ajustes: capas que se tragan los toques ------------------------------------
+
+    /**
+     * Cerrar una pantalla peligrosa al verla llega tarde por definición: entre que se toca una fila
+     * y que el guardián se entera pasa tiempo, y si ese toque apaga la accesibilidad, el guardián
+     * muere antes de poder cerrar nada. Por eso en Ajustes no se espera a ver: las filas que
+     * llevan a Accesibilidad o nombran a esta app quedan tapadas por una capa transparente que se
+     * traga el toque, y la fila de abajo nunca se entera.
+     *
+     * Las filas se mueven (al abrir otra pantalla, al desplazar, al buscar). Mientras se mueven,
+     * una capa tapa la pantalla entera, sin consultar nada, y en cuanto se asienta se recolocan
+     * las capas sobre las filas y se quita la grande. Desplazar con el dedo sigue funcionando: un
+     * gesto ya empezado no lo interrumpe una ventana que aparece encima.
+     */
+    private val shields = ArrayList<View>()
+    private var cover: View? = null
+    private var passQueued = false
+    private var passFirstAt = 0L
+    private var lastShieldToast = 0L
+    private val wm by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
+
+    /** La capa grande nunca se queda puesta: atascada, dejaría el teléfono sin poder tocarse. */
+    private val coverTimeout = Runnable { hideCover() }
+
+    private val settingsPass = Runnable {
+        passQueued = false
+        val root = activeRoot(prefetch = true)
+        val pkg = root?.packageName?.toString()
+        if (root == null || pkg == null || !isSettings(pkg) || !Store.isLocked(this)) {
+            hideShields()
+            return@Runnable
+        }
+        // Lo de siempre: una pantalla que ya es peligrosa (nombra a la app, es Accesibilidad,
+        // el editor de DNS privado) se cierra. Si no, se tapan sus filas peligrosas.
+        if (guardSettingsScreen(root)) return@Runnable
+        placeShields(shieldRects(root))
+        hideCover()
+    }
+
+    private fun isSettings(pkg: String) = pkg.contains(SETTINGS) && !isVendorSurface(pkg)
+
+    private fun onSettingsEvent(event: AccessibilityEvent) {
+        val now = SystemClock.elapsedRealtime()
+        // Algo se movió (pantalla nueva, desplazamiento o, en Xiaomi, entrar en otra sección sin
+        // abrir ventana): tapar todo ya, sin preguntar nada, hasta saber dónde quedan las filas.
+        // Un texto que cambia (un porcentaje, un contador) no mueve filas: ése no tapa nada.
+        val changes = event.contentChangeTypes
+        val textOnly = event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
+            changes != AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED &&
+            changes and AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE == 0
+        if (!textOnly) showCover()
+        if (!passQueued) {
+            passQueued = true
+            passFirstAt = now
+        }
+        // Se espera a que deje de moverse, pero nunca más de PASS_MAX_WAIT_MS: con una animación que
+        // no para, la pantalla no se puede quedar tapada para siempre.
+        val delay = minOf(PASS_MS, maxOf(0L, passFirstAt + PASS_MAX_WAIT_MS - now))
+        handler.removeCallbacks(settingsPass)
+        handler.postDelayed(settingsPass, delay)
+    }
+
+    /** Devuelve true si la pantalla se cerró. */
+    private fun guardSettingsScreen(root: AccessibilityNodeInfo): Boolean {
+        // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
+        if (!Status.isAdminActive(this)) return false
+        val seen = scan(root)
+        if (seen.ours) {
+            // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
+            // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
+            if (Store.inGrace() && !seen.dangerous) return false
+            block(countIt = false)
+            return true
+        }
+        // Con DNS privado estricto los navegadores quedan cerrados (ver check); hay que
+        // dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
+        if (seen.privateDns && !Status.isPrivateDnsStrict(this)) {
+            block(countIt = false)
+            return true
+        }
+        return false
+    }
+
+    /** Dónde están, en pantalla, las filas que hay que tapar. */
+    private fun shieldRects(root: AccessibilityNodeInfo): List<Rect> {
+        val screen = Rect().also { root.getBoundsInScreen(it) }
+        val maxRow = maxOf(screen.height() / 4, dp(48))
+        val out = ArrayList<Rect>()
+        var budget = MAX_SHIELD_NODES
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(root)
+        while (stack.isNotEmpty() && budget-- > 0) {
+            val n = stack.removeLast()
+            for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
+            if (n.isEditable) continue // el cuadro de búsqueda: tapado no se podría ni corregir
+            val text = n.text
+            val desc = n.contentDescription
+            if (text == null && desc == null) continue
+            val s = "${text ?: ""} ${desc ?: ""}".lowercase()
+            if (SHIELD_WORDS.none { s.contains(it) }) continue
+            // Se tapa la fila entera: el primer antepasado pulsable que no sea media pantalla.
+            var row: AccessibilityNodeInfo = n
+            var p: AccessibilityNodeInfo? = n
+            repeat(6) {
+                val cur = p ?: return@repeat
+                if (cur.isClickable) {
+                    row = cur
+                    return@repeat
+                }
+                p = cur.parent
+            }
+            val r = Rect().also { row.getBoundsInScreen(it) }
+            if (r.height() > maxRow) n.getBoundsInScreen(r)
+            if (r.isEmpty) continue
+            r.inset(-dp(6), -dp(6))
+            out += r
+        }
+        return out
+    }
+
+    private fun shieldParams(r: Rect?) = WindowManager.LayoutParams(
+        r?.width() ?: WindowManager.LayoutParams.MATCH_PARENT,
+        r?.height() ?: WindowManager.LayoutParams.MATCH_PARENT,
+        WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+        WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or
+            WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+        PixelFormat.TRANSLUCENT,
+    ).apply {
+        gravity = Gravity.TOP or Gravity.START
+        x = r?.left ?: 0
+        y = r?.top ?: 0
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        }
+    }
+
+    /** Una vista transparente que se queda con el toque; con aviso si es una fila tapada. */
+    private fun newShield(tellUser: Boolean) = View(this).apply {
+        setOnTouchListener { _, e ->
+            if (tellUser && e.actionMasked == MotionEvent.ACTION_DOWN) {
+                val now = SystemClock.elapsedRealtime()
+                if (now - lastShieldToast > TOAST_MS) {
+                    lastShieldToast = now
+                    Toast.makeText(this@GuardService, "Secret Savior: esto no se puede abrir.", Toast.LENGTH_SHORT).show()
+                }
+            }
+            true
+        }
+    }
+
+    private fun placeShields(rects: List<Rect>) {
+        try {
+            while (shields.size > rects.size) wm.removeView(shields.removeAt(shields.size - 1))
+            rects.forEachIndexed { i, r ->
+                if (i < shields.size) {
+                    wm.updateViewLayout(shields[i], shieldParams(r))
+                } else {
+                    val v = newShield(tellUser = true)
+                    wm.addView(v, shieldParams(r))
+                    shields += v
+                }
+            }
+        } catch (e: Exception) {
+            // Si no se pudo colocar alguna, se reintenta en el próximo cambio de pantalla.
+        }
+    }
+
+    private fun showCover() {
+        if (cover != null) return
+        try {
+            val v = newShield(tellUser = false)
+            wm.addView(v, shieldParams(null))
+            cover = v
+            handler.removeCallbacks(coverTimeout)
+            handler.postDelayed(coverTimeout, COVER_MAX_MS)
+        } catch (e: Exception) {
+            // sin capa grande: quedan las de las filas y el cierre de siempre
+        }
+    }
+
+    private fun hideCover() {
+        handler.removeCallbacks(coverTimeout)
+        val v = cover ?: return
+        cover = null
+        try {
+            wm.removeView(v)
+        } catch (e: Exception) {
+            // ya no estaba
+        }
+    }
+
+    private fun hideShields() {
+        handler.removeCallbacks(settingsPass)
+        passQueued = false
+        hideCover()
+        for (v in shields) {
+            try {
+                wm.removeView(v)
+            } catch (e: Exception) {
+                // ya no estaba
+            }
+        }
+        shields.clear()
+    }
+
+    private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
 
     // --- 1. Pantallas del sistema ---------------------------------------------------
 
@@ -501,7 +723,8 @@ class GuardService : AccessibilityService() {
         /** Las clases de interruptor propias de cada fabricante (Xiaomi usa SlidingButton). */
         val SWITCH_CLASSES = listOf("switch", "slidingbutton", "toggle", "checkbox")
         const val EVENTS_WATCHING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED or
+            AccessibilityEvent.TYPE_VIEW_SCROLLED
 
         /** Sólo cambios de ventana y lo que se teclea: lo único que se usa en buscadores, feeds y navegadores. */
         const val EVENTS_TYPING = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
@@ -516,6 +739,25 @@ class GuardService : AccessibilityService() {
 
         /** Cómo se llama la app en pantalla, y su paquete (algunas capas del sistema lo muestran). */
         val OURS = listOf("secret savior", "com.secretsavior")
+
+        /** Ajustes en sí (no el instalador, ni los diálogos de permisos o de VPN). */
+        const val SETTINGS = "settings"
+
+        /** Tras el último cambio de Ajustes, cuánto esperar a que la pantalla se asiente. */
+        const val PASS_MS = 70L
+
+        /** Con la pantalla cambiando sin parar, recolocar las capas al menos con esta frecuencia. */
+        const val PASS_MAX_WAIT_MS = 600L
+        const val MAX_SHIELD_NODES = 500
+
+        /** Lo más que puede durar la capa grande, pase lo que pase. */
+        const val COVER_MAX_MS = 1_500L
+
+        /**
+         * Las filas de Ajustes que se tapan: la que lleva a Accesibilidad (en cualquier nivel, también
+         * en los resultados de la búsqueda de Ajustes) y cualquiera que nombre a esta app.
+         */
+        val SHIELD_WORDS = listOf("accesibilidad", "accessibility", "secret savior", "com.secretsavior")
 
         /** Cómo se titula la pantalla de Accesibilidad al abrirse; basta un acierto para cerrarla. */
         val ACCESSIBILITY_TITLES = listOf("accesibilidad", "accessibility")
