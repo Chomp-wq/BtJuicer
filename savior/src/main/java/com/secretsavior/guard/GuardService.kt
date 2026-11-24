@@ -16,7 +16,8 @@ import com.secretsavior.data.Store
  *
  *  1. Cierra las pantallas del sistema desde las que se podría apagar la
  *     protección (ficha de la app en Ajustes, desinstalar, administradores,
- *     accesibilidad, VPN, DNS privado).
+ *     accesibilidad, VPN, DNS privado). Instalar una actualización no cuenta:
+ *     esa pantalla se deja pasar.
  *  2. Cierra el navegador si apunta a un sitio bloqueado o si el filtro DNS está
  *     caído —falla cerrado, no abierto—.
  *  3. Cierra lo que se escribe si es texto pornográfico.
@@ -134,7 +135,20 @@ class GuardService : AccessibilityService() {
             if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && isVendorSurface(pkg)) watchVendorScreen()
             return
         }
-        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) noteForeground(pkg)
+        if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            noteForeground(pkg)
+            // La lista de Accesibilidad apaga el interruptor ahí mismo, sin pantalla aparte, y
+            // en cuanto se apaga este servicio deja de existir: ya no puede cerrar nada después.
+            // Android anuncia el título de la ventana en el propio evento (lo necesitan los
+            // lectores de pantalla) antes de que la lista llegue a dibujar sus filas, así que es
+            // la única señal que llega a tiempo de cerrarla antes de poder tocar nada dentro. Sin
+            // excepciones aquí, ni la ventana de gracia: una vez bloqueada la app, Accesibilidad
+            // no se vuelve a abrir mientras el guardián siga vivo.
+            if (isSystemSurface(pkg) && isAccessibilityScreen(event)) {
+                block(countIt = false)
+                return
+            }
+        }
 
         if (pkg in BLOCKED_APPS) {
             // Aunque la red falle o la app traiga contenido en caché, no se queda abierta.
@@ -212,6 +226,11 @@ class GuardService : AccessibilityService() {
     /** La barra de notificaciones y los teclados: aparecen encima sin cambiar la app de debajo. */
     private fun isNeutral(pkg: String) = pkg == "com.android.systemui" || NEUTRAL_HINTS.any { pkg.contains(it) }
 
+    private fun isAccessibilityScreen(event: AccessibilityEvent): Boolean {
+        val title = event.text.joinToString(" ").lowercase()
+        return ACCESSIBILITY_TITLES.any { title.contains(it) }
+    }
+
     private fun setMode(newMode: Int) {
         if (mode == newMode) return
         val info = serviceInfo ?: return
@@ -264,6 +283,14 @@ class GuardService : AccessibilityService() {
             // Si aún no hay permiso de VPN, el diálogo es el de pedirlo y hay que dejarlo pasar.
             // Con permiso, cualquier diálogo que nombre a la app es el de "Desconectar".
             if (Status.isVpnPermitted(this) && scan(root).ours) block(countIt = false)
+            return
+        }
+        if (pkg.contains("packageinstaller")) {
+            // Instalar una actualización (el APK nuevo, bajado a mano o por Play Store) pasa por
+            // aquí y la pantalla nombra a la app: no es motivo para cerrarla, o nunca se podría
+            // actualizar. Sólo se cierra si además ofrece algo de la lista de peligros; la de
+            // desinstalar sí la lleva ("desinstalar"/"uninstall") y sigue bloqueada.
+            if (scan(root).dangerous) block(countIt = false)
             return
         }
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
@@ -489,6 +516,9 @@ class GuardService : AccessibilityService() {
 
         /** Cómo se llama la app en pantalla, y su paquete (algunas capas del sistema lo muestran). */
         val OURS = listOf("secret savior", "com.secretsavior")
+
+        /** Cómo se titula la pantalla de Accesibilidad al abrirse; basta un acierto para cerrarla. */
+        val ACCESSIBILITY_TITLES = listOf("accesibilidad", "accessibility")
 
         /** Si aparece alguna de éstas junto al nombre de la app, la pantalla no es de batería. */
         val DANGEROUS = listOf(
