@@ -179,6 +179,10 @@ class GuardService : AccessibilityService() {
         // contenido sin parar mientras analizan o limpian. Se miran sólo al abrir una pantalla
         // nueva, nunca durante el trabajo: si no, se las frena justo cuando más lo necesitan.
         if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
+        // En Xiaomi la ficha de cada app (con «Forzar detención» y «Desinstalar») es de la app de
+        // Seguridad. Al abrir una de sus pantallas se tapa todo hasta haberla leído: sin esto,
+        // entre que se abre y se carga su contenido daba tiempo a pulsar «Forzar detención».
+        if (isVendorSurface(pkg) && type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) showCover()
 
         // Cada comprobación recorre la ventana de otra app nodo a nodo, y cada nodo es una
         // consulta a esa app. En Ajustes lo peligroso aparece al abrir una pantalla; después,
@@ -348,9 +352,11 @@ class GuardService : AccessibilityService() {
         // Primero se tapan las filas peligrosas (la casilla de Secret Savior en Accesibilidad,
         // la fila que lleva a Accesibilidad...) y después, si la pantalla ya es peligrosa, se
         // cierra. Las dos cosas a la vez: si el cierre tarda, el toque ya cae sobre la capa.
-        placeShields(shieldRects(root))
+        val seen = scan(root)
+        if (seen.ours) oursSeenAt = SystemClock.elapsedRealtime()
+        placeShields(shieldRects(root, dangerButtons = seen.ours))
         hideCover()
-        guardSettingsScreen(root)
+        guardSettingsScreen(seen)
     }
 
     private fun isSettings(pkg: String) = pkg.contains(SETTINGS) && !isVendorSurface(pkg)
@@ -377,10 +383,13 @@ class GuardService : AccessibilityService() {
     }
 
     /** Devuelve true si la pantalla se cerró. */
-    private fun guardSettingsScreen(root: AccessibilityNodeInfo): Boolean {
+    private fun guardSettingsScreen(seen: Seen): Boolean {
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
         if (!Status.isAdminActive(this)) return false
-        val seen = scan(root)
+        if (isStopConfirmation(seen)) {
+            block(countIt = false)
+            return true
+        }
         if (seen.ours) {
             // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
             // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
@@ -397,8 +406,22 @@ class GuardService : AccessibilityService() {
         return false
     }
 
+    /** Cuándo se vio por última vez una pantalla que nombra a esta app (su ficha, su fila). */
+    private var oursSeenAt = Long.MIN_VALUE / 2
+
+    /**
+     * El diálogo de confirmación de «Forzar detención» (o desinstalar, o borrar datos) no nombra a
+     * la app: sólo pregunta. Si aparece poco después de una pantalla que sí la nombraba, es el de
+     * esta app, y se cierra. Forzar la detención es irreversible para la protección: Android saca
+     * la app de Accesibilidad, cancela sus alarmas y no le deja volver a arrancar sola.
+     */
+    private fun isStopConfirmation(seen: Seen): Boolean =
+        !seen.ours && seen.uninstall && seen.texts <= DIALOG_MAX_TEXTS &&
+            SystemClock.elapsedRealtime() - oursSeenAt < CONFIRM_WINDOW_MS
+
     /** Dónde están, en pantalla, las filas que hay que tapar. */
-    private fun shieldRects(root: AccessibilityNodeInfo): List<Rect> {
+    private fun shieldRects(root: AccessibilityNodeInfo, dangerButtons: Boolean): List<Rect> {
+        val words = if (dangerButtons) SHIELD_WORDS + UNINSTALL + ADMIN_OFF else SHIELD_WORDS
         val screen = Rect().also { root.getBoundsInScreen(it) }
         val maxRow = maxOf(screen.height() / 4, dp(48))
         val out = ArrayList<Rect>()
@@ -413,7 +436,7 @@ class GuardService : AccessibilityService() {
             val desc = n.contentDescription
             if (text == null && desc == null) continue
             val s = "${text ?: ""} ${desc ?: ""}".lowercase()
-            if (SHIELD_WORDS.none { s.contains(it) }) continue
+            if (words.none { s.contains(it) }) continue
             // Se tapa la fila entera: el primer antepasado pulsable que no sea media pantalla.
             var row: AccessibilityNodeInfo = n
             var p: AccessibilityNodeInfo? = n
@@ -608,9 +631,16 @@ class GuardService : AccessibilityService() {
         if (!isVendorSurface(pkg)) return true
         val seen = scan(root)
         if (Store.isLocked(this)) {
-            if (seen.autostartList || (seen.ours && seen.uninstall)) {
+            if (seen.ours) oursSeenAt = SystemClock.elapsedRealtime()
+            if (seen.autostartList || (seen.ours && seen.uninstall) || isStopConfirmation(seen)) {
                 block(countIt = false)
                 return true
+            }
+            // Ya cargó y no es peligrosa: fuera la capa. Si nombra a la app (una lista del
+            // optimizador, o su ficha a medio cargar) se sigue mirando unas veces más.
+            if (seen.texts >= LOADED_TEXTS) {
+                hideCover()
+                return !seen.ours
             }
             return false
         }
@@ -700,6 +730,8 @@ class GuardService : AccessibilityService() {
         val uninstall: Boolean,
         /** Una lista de interruptores titulada «autoencendido»/«autoinicio». */
         val autostartList: Boolean,
+        /** Cuántos nodos con texto tiene: pocos = la pantalla aún carga, o es un diálogo. */
+        val texts: Int,
     )
 
     /**
@@ -715,6 +747,7 @@ class GuardService : AccessibilityService() {
         var uninstall = false
         var title = false
         var toggle = false
+        var texts = 0
         var budget = MAX_NODES
         val stack = ArrayDeque<AccessibilityNodeInfo>()
         stack.add(root)
@@ -724,6 +757,7 @@ class GuardService : AccessibilityService() {
             val desc = n.contentDescription
             if (!toggle && isSwitch(n)) toggle = true
             if (text != null || desc != null) {
+                texts++
                 val s = "${text ?: ""} ${desc ?: ""}".lowercase()
                 if (!ours && OURS.any { s.contains(it) }) ours = true
                 if (!dangerous && DANGEROUS.any { s.contains(it) }) dangerous = true
@@ -733,10 +767,12 @@ class GuardService : AccessibilityService() {
             }
             for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
         }
-        return Seen(ours, dangerous, privateDns, uninstall, title && toggle)
+        return Seen(ours, dangerous, privateDns, uninstall, title && toggle, texts)
     }
 
     private fun block(countIt: Boolean) {
+        // Atrás primero: cierra un diálogo de confirmación que esté abierto; luego al inicio.
+        performGlobalAction(GLOBAL_ACTION_BACK)
         performGlobalAction(GLOBAL_ACTION_HOME)
         val now = SystemClock.elapsedRealtime()
         if (now - lastBlock > TOAST_MS) {
@@ -757,8 +793,20 @@ class GuardService : AccessibilityService() {
 
         /** El mismo sondeo con la pantalla apagada: sólo para enterarse de que se encendió. */
         const val BROWSER_IDLE_POLL_MS = 10_000L
-        const val VENDOR_RETRY_MS = 450L
-        const val VENDOR_ATTEMPTS = 6
+        const val VENDOR_RETRY_MS = 150L
+        const val VENDOR_ATTEMPTS = 10
+
+        /** Con al menos tantos textos, una pantalla de la app de Seguridad ya ha cargado. */
+        const val LOADED_TEXTS = 4
+
+        /** Un diálogo de confirmación tiene pocos textos: título, mensaje y dos botones. */
+        const val DIALOG_MAX_TEXTS = 12
+
+        /** Lo que se espera, tras ver la ficha de la app, a su diálogo de confirmación. */
+        const val CONFIRM_WINDOW_MS = 15_000L
+
+        /** En la ficha del administrador del dispositivo, el botón de quitarlo. */
+        val ADMIN_OFF = listOf("desactivar", "deactivate")
 
         /** Cómo se titula la pantalla de autoinicio en la app de seguridad del fabricante. */
         val AUTOSTART_TITLES = listOf("autoencendido", "autoinicio", "autostart", "auto-start", "inicio automático")
