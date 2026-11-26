@@ -54,7 +54,7 @@ function Write-JuicerHeader {
     if ($script:Screen) { try { [Console]::Clear() } catch { Write-Verbose 'Sin consola' } }
     Write-Host ''
     Write-Host '  WIN JUICER' -ForegroundColor Yellow -NoNewline
-    Write-Host '  exprime Windows 11, sin humo' -ForegroundColor DarkGray
+    Write-Host '  exprime Windows 10 y 11, sin humo' -ForegroundColor DarkGray
     Write-Host ('  ' + ('─' * 46)) -ForegroundColor DarkGray
     if ($script:MenuNotice) {
         Write-Host "  $($script:MenuNotice)" -ForegroundColor Yellow

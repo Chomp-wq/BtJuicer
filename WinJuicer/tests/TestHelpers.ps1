@@ -15,6 +15,11 @@ function New-FakeMachine {
         Bcd    = @{}
         Hibernate = $false
         HibernateType = 'full'
+        # What powercfg was told: '<plan>|<setting guid>' -> value, for the plugged-in and battery sides.
+        Ac = @{}
+        Dc = @{}
+        # powercfg /q answers by setting alias (the fourth argument), as the text powercfg would print.
+        Query = @{}
     }
     $run = {
         param($File, $Arguments)
@@ -29,7 +34,15 @@ function New-FakeMachine {
                     if ($fake.Plans -contains $a[1]) { [void]$fake.Plans.Add($a[2]); $out = "GUID del plan de energía: $($a[2])" } else { $code = 1 }
                 }
                 '/setactive' { if ($fake.Plans -contains $a[1]) { $fake.Active = $a[1] } else { $code = 1; $out = 'No existe' } }
-                '/delete' { if ($fake.Active -eq $a[1]) { $code = 1 } else { $fake.Plans.Remove($a[1]) } }
+                '/delete' {
+                    if ($fake.Active -eq $a[1]) { $code = 1 } else {
+                        $fake.Plans.Remove($a[1])
+                        foreach ($side in $fake.Ac, $fake.Dc) { foreach ($k in @($side.Keys)) { if ($k.StartsWith("$($a[1])|")) { $side.Remove($k) } } }
+                    }
+                }
+                '/setacvalueindex' { $fake.Ac["$($a[1])|$($a[3])"] = $a[4] }
+                '/setdcvalueindex' { $fake.Dc["$($a[1])|$($a[3])"] = $a[4] }
+                { $_ -in '/q', '/qh' } { if ($a.Count -gt 3 -and $fake.Query.ContainsKey($a[3])) { $out = $fake.Query[$a[3]] } }
                 '/hibernate' {
                     if ($a[1] -eq 'on') { $fake.Hibernate = $true }
                     elseif ($a[1] -eq 'off') { $fake.Hibernate = $false }

@@ -29,6 +29,11 @@ function Get-JuicerActivePlan {
     throw "powercfg no devolvió el plan activo: $($r.Output)"
 }
 
+# The «Power mode» overlay of the current power source, through the backend (the memory one
+# keeps it in a variable, so tests never touch powrprof.dll).
+function Get-JuicerPowerMode { & (Get-JuicerBackend).PowerModeGet }
+function Set-JuicerPowerMode { param([string]$Scheme) & (Get-JuicerBackend).PowerModeSet $Scheme }
+
 function Test-JuicerPlanExists {
     param([string]$Guid)
     $r = Invoke-JuicerNative 'powercfg.exe' @('/list')
@@ -41,10 +46,12 @@ function New-JuicerPlan {
         $r = Invoke-JuicerNative 'powercfg.exe' @('/duplicatescheme', $script:HighPerfPlan, $script:JuicerPlan)
     }
     if ($r.Code -ne 0) { throw "powercfg no pudo crear el plan: $($r.Output)" }
-    [void](Invoke-JuicerNative 'powercfg.exe' @('/changename', $script:JuicerPlan, 'Win Juicer',
-            'Máximo rendimiento: procesador sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco.'))
+    $laptop = Test-JuicerLaptop
+    $description = 'Máximo rendimiento: procesador sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco.'
+    if ($laptop) { $description = 'Máximo rendimiento enchufado: procesador sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco. Con batería, ahorro moderado.' }
+    [void](Invoke-JuicerNative 'powercfg.exe' @('/changename', $script:JuicerPlan, 'Win Juicer', $description))
     # Ultimate already has most of these; setting them makes it true whatever
-    # it was duplicated from. Only the AC side: on battery the base plan rules.
+    # it was duplicated from. The AC side is the point of the plan.
     $settings = @(
         @('54533251-82be-4824-96c1-47b60b740d00', '893dee8e-2bef-41e0-89c6-b55d0929964c', '100'), # minimum processor state
         @('54533251-82be-4824-96c1-47b60b740d00', '0cc5b647-c1df-4637-891a-dec35c318583', '100'), # core parking: min cores
@@ -55,6 +62,22 @@ function New-JuicerPlan {
     foreach ($s in $settings) {
         $r = Invoke-JuicerNative 'powercfg.exe' (@('/setacvalueindex', $script:JuicerPlan) + $s)
         if ($r.Code -ne 0) { Write-JuicerLog "powercfg no aceptó $($s -join ' '): $($r.Output)" }
+    }
+    # A duplicate of Ultimate or High Performance carries their DC values too: on a laptop that
+    # means the battery runs with the processor pinned at 100 % and nothing allowed to sleep.
+    # So the battery side gets sensible values (the plan is deleted on undo, nothing else changes).
+    if ($laptop) {
+        $battery = @(
+            @('54533251-82be-4824-96c1-47b60b740d00', '893dee8e-2bef-41e0-89c6-b55d0929964c', '5'),   # minimum processor state: 5 %
+            @('54533251-82be-4824-96c1-47b60b740d00', '0cc5b647-c1df-4637-891a-dec35c318583', '10'),  # core parking: min cores, Windows' own default (idle cores may park)
+            @('501a4d13-42af-4429-9fd1-a8218c268e20', 'ee12f906-d277-404b-b6da-e5fa1a576df5', '1'),  # PCIe link state power management: moderate
+            @('2a737441-1930-4402-8d77-b2bebba308a3', '48e6b7a6-50f5-4782-a5d4-53bb8f07e226', '1'),  # USB selective suspend: enabled
+            @('0012ee47-9041-4b5d-9b77-535fba8b1442', '6738e2c4-e8a5-4a42-b16a-e040e769756e', '600') # turn off disk after: 10 minutes
+        )
+        foreach ($s in $battery) {
+            $r = Invoke-JuicerNative 'powercfg.exe' (@('/setdcvalueindex', $script:JuicerPlan) + $s)
+            if ($r.Code -ne 0) { Write-JuicerLog "powercfg no aceptó (batería) $($s -join ' '): $($r.Output)" }
+        }
     }
 }
 
@@ -133,9 +156,22 @@ function Get-JuicerNetworkInterfaceKeys {
 # --- The catalog -----------------------------------------------------------
 
 $script:Catalog = $null
+$script:CatalogBuild = -1
 
+# The Windows build the catalog is written for: some texts and actions differ between Windows 10
+# and 11 (see $win10 in New-JuicerCatalog). 22000, the first Windows 11, when it cannot be read.
+function Get-JuicerCatalogBuild {
+    try { return [int](Get-JuicerWindowsBuild) } catch { return 22000 }
+}
+
+# Built once per build number, so a changed build (a feature update while the window is open,
+# or a test that fakes one) rebuilds the texts instead of keeping stale ones.
 function Get-JuicerCatalog {
-    if ($null -eq $script:Catalog) { $script:Catalog = @(New-JuicerCatalog) }
+    $b = Get-JuicerCatalogBuild
+    if ($null -eq $script:Catalog -or $b -ne $script:CatalogBuild) {
+        $script:Catalog = @(New-JuicerCatalog)
+        $script:CatalogBuild = $b
+    }
     $script:Catalog
 }
 
@@ -193,6 +229,9 @@ function New-JuicerCatalog {
     $fs = 'HKLM\SYSTEM\CurrentControlSet\Control\FileSystem'
     $cdm = 'HKCU\Software\Microsoft\Windows\CurrentVersion\ContentDeliveryManager'
     $adv = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Explorer\Advanced'
+    # Windows 10 (before the first Windows 11 build, 22000): a few tweaks read and act differently there.
+    $win10 = (Get-JuicerCatalogBuild) -lt 22000
+    $searchKey = 'HKCU\Software\Microsoft\Windows\CurrentVersion\Search'
 
     # --- Reparación: undo what other "optimizers" got wrong ---------------
 
@@ -306,7 +345,7 @@ function New-JuicerCatalog {
         Title = 'Plan de energía «Win Juicer»'
         What = 'Crea un plan basado en «Máximo rendimiento» de Windows, con el procesador al 100 % como mínimo, sin aparcar núcleos y sin ahorro de energía en PCIe, USB ni disco, y lo activa.'
         Gain = 'Elimina las micropausas de despertar núcleos y enlaces dormidos: mejora sobre todo los mínimos de FPS (el 1 % más lento) y la latencia. En FPS medios, poco.'
-        Cost = 'Más consumo y temperatura en reposo. En un portátil con batería, bastante menos autonomía.'
+        Cost = 'Más consumo y temperatura en reposo. En un portátil, con batería el plan usa valores de ahorro moderado (procesador al 5 % como mínimo, PCIe y USB con ahorro), pero gasta más que Equilibrado.'
         Skip = {
             if (Test-JuicerModernStandby) { return 'Este equipo usa Modern Standby y Windows sólo admite ahí el plan Equilibrado; usa «Modo de energía» en su lugar.' }
             if ((Get-JuicerCpuInfo).DualCcdX3D) { return 'Tu Ryzen X3D de dos CCD lleva los juegos al CCD con 3D V-Cache aparcando el otro, y eso sólo funciona con el plan Equilibrado. Un plan sin aparcar núcleos te haría perder rendimiento.' }
@@ -335,17 +374,21 @@ function New-JuicerCatalog {
     @{
         Id = 'energia.modo'; Category = 'Energía'; Level = 2; Impact = 'Medio'; Reboot = 'No'
         Title = 'Modo de energía: mejor rendimiento'
-        What = 'Pone «Modo de energía» de Configuración en «Mejor rendimiento» para la alimentación actual. Aplícalo con el cargador conectado.'
-        Gain = 'En equipos con Modern Standby es el único control de rendimiento que Windows respeta: sube los límites de potencia y la frecuencia del procesador.'
-        Cost = 'Más consumo y más ruido de ventiladores.'
-        Skip = { if (-not (Test-JuicerModernStandby)) { 'Sólo hace falta en equipos con Modern Standby; aquí lo cubre el plan de energía.' } }
+        What = 'Pone el control «Modo de energía» (el deslizador del icono de la batería en Windows 10; Configuración > Energía en Windows 11) en «Mejor rendimiento». Windows guarda un modo para el cargador y otro para la batería: esto cambia el de la fuente que uses ahora. Aplícalo con el cargador conectado para «Mejor rendimiento» enchufado.'
+        Gain = 'Sube los límites de potencia y la frecuencia del procesador sin cambiar de plan de energía, y vale en cualquier portátil o sobremesa con el plan Equilibrado. En equipos con Modern Standby es el único control de rendimiento que Windows respeta.'
+        Cost = 'Más consumo y más ruido de ventiladores mientras esté puesto; si lo aplicas con batería, gasta batería.'
+        # The slider only acts on the Balanced plan: with another one Windows ignores the overlay.
+        Skip = {
+            try { $plan = Get-JuicerActivePlan } catch { return 'No se pudo leer el plan de energía activo.' }
+            if ($plan -ne $script:BalancedPlan) { 'El control de modo de energía solo actúa con el plan Equilibrado.' }
+        }
         Actions = @(
             @{
                 Type = 'Custom'; Key = 'overlay'; Label = 'Modo de energía: mejor rendimiento'
-                Test = { Initialize-JuicerNative; [WinJuicer.Native]::GetPowerMode() -eq $script:BestPerformanceMode }
-                Capture = { Initialize-JuicerNative; @{ Mode = [WinJuicer.Native]::GetPowerMode() } }
-                Apply = { [WinJuicer.Native]::SetPowerMode($script:BestPerformanceMode) }
-                Restore = { param($s) Initialize-JuicerNative; [WinJuicer.Native]::SetPowerMode($s.Mode) }
+                Test = { (Get-JuicerPowerMode) -eq $script:BestPerformanceMode }
+                Capture = { @{ Mode = (Get-JuicerPowerMode) } }
+                Apply = { Set-JuicerPowerMode $script:BestPerformanceMode }
+                Restore = { param($s) Set-JuicerPowerMode $s.Mode }
             }
         )
     }
@@ -415,6 +458,8 @@ function New-JuicerCatalog {
         What = 'Deja que la propia tarjeta gráfica gestione su cola de trabajo en lugar del procesador.'
         Gain = 'Algo menos de carga en la CPU y de latencia. Es obligatoria para la generación de fotogramas de DLSS. Si tu GPU no la admite, Windows la ignora.'
         Cost = 'En algún juego concreto ha causado tirones; si te pasa, deshazla.'
+        # HAGS arrived with Windows 10 2004 (19041); before that HwSchMode is not read at all.
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 19041) { 'Necesita Windows 10 2004 (20H1) o posterior.' } }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'; Name = 'HwSchMode'; Value = 2 }
         )
@@ -520,6 +565,8 @@ function New-JuicerCatalog {
         What = 'El clic derecho abre directamente el menú completo, sin pasar por «Mostrar más opciones».'
         Gain = 'El menú nuevo de Windows 11 tarda en aparecer cuando hay extensiones instaladas; el clásico es instantáneo y lo tiene todo a la vista.'
         Cost = 'Estética: vuelve el menú de Windows 10.'
+        # The CLSID only exists in Windows 11: on Windows 10 the key would be written and do nothing.
+        Skip = { if ((Get-JuicerWindowsBuild) -lt 22000) { 'Solo en Windows 11: Windows 10 ya tiene el menú clásico.' } }
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Classes\CLSID\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\InprocServer32'; Name = ''; Kind = 'String'; Value = '' }
         )
@@ -540,16 +587,22 @@ function New-JuicerCatalog {
         What = 'Quita las sugerencias de Bing de la búsqueda del menú Inicio.'
         Gain = 'La búsqueda deja de esperar a internet: resultados locales al instante. Sólo se nota si tu conexión tarda; no da FPS.'
         Cost = 'No verás resultados web al buscar desde Inicio.'
+        # On Windows 10 the policy alone does not take the web results out of Start: it is
+        # BingSearchEnabled that does (CortanaConsent goes with it). Cortana itself is not touched.
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Policies\Microsoft\Windows\Explorer'; Name = 'DisableSearchBoxSuggestions'; Value = 1 }
+            if ($win10) {
+                @{ Type = 'Registry'; Path = $searchKey; Name = 'BingSearchEnabled'; Value = 0 }
+                @{ Type = 'Registry'; Path = $searchKey; Name = 'CortanaConsent'; Value = 0 }
+            }
         )
     }
     @{
         Id = 'ui.widgets'; Category = 'Interfaz'; Level = 2; Impact = 'Bajo'; Reboot = 'Sesion'
-        Title = 'Desactivar Widgets'
-        What = 'Desactiva el panel de Widgets (noticias, tiempo) mediante directiva.'
-        Gain = 'El panel mantiene un navegador incrustado en memoria: suele liberar entre 100 y 300 MB de RAM y algo de red.'
-        Cost = 'Desaparece el panel. Configuración puede decir «Algunas opciones las administra tu organización»: es esta directiva, nada más.'
+        Title = $(if ($win10) { 'Desactivar «Noticias e intereses»' } else { 'Desactivar Widgets' })
+        What = $(if ($win10) { 'Quita de la barra de tareas el widget de noticias y tiempo («Noticias e intereses») mediante directiva.' } else { 'Desactiva el panel de Widgets (noticias, tiempo) mediante directiva.' })
+        Gain = $(if ($win10) { 'El widget se actualiza desde internet cada poco, con un navegador incrustado en segundo plano: gasta CPU, RAM y batería aunque no lo mires.' } else { 'El panel mantiene un navegador incrustado en memoria: suele liberar entre 100 y 300 MB de RAM y algo de red.' })
+        Cost = $(if ($win10) { 'Desaparecen el tiempo y las noticias de la barra de tareas. Configuración puede decir «Algunas opciones las administra tu organización»: es esta directiva, nada más.' } else { 'Desaparece el panel. Configuración puede decir «Algunas opciones las administra tu organización»: es esta directiva, nada más.' })
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'; Name = 'AllowNewsAndInterests'; Value = 0 }
         )
@@ -585,7 +638,7 @@ function New-JuicerCatalog {
         Title = 'Sin historial de actividad'
         What = 'Impide que Windows registre y suba a tu cuenta qué programas y documentos abres.'
         Gain = 'Un registro menos que se escribe y se sincroniza de fondo.'
-        Cost = 'Ninguno: Windows 11 ya no tiene la Línea de tiempo que lo usaba. El historial del portapapeles sigue funcionando.'
+        Cost = $(if ($win10) { 'En Windows 10 pierdes la Línea de tiempo (el historial de Win+Tab): deja de registrar lo que haces y se borra lo que tenía guardado. El historial del portapapeles sigue funcionando.' } else { 'Ninguno: Windows 11 ya no tiene la Línea de tiempo que lo usaba. El historial del portapapeles sigue funcionando.' })
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'PublishUserActivities'; Value = 0 }
             @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\System'; Name = 'UploadUserActivities'; Value = 0 }
@@ -1106,6 +1159,8 @@ function Get-JuicerMyths {
         @{ Title = 'Prioridad o afinidad de audiodg.exe («para bajar la latencia del audio»)'; Why = 'audiodg.exe es el motor de audio de Windows y ya corre con prioridad alta y sus hilos de mezcla se registran en el planificador multimedia. Subirla más, o fijarlo a un núcleo, no acorta el período de mezcla, que es lo que fija la latencia; fijar la afinidad sólo lo hace competir con el juego por ese núcleo. Lo que sí acorta el período es el ajuste «Audio de baja latencia», sólo si el driver lo admite.' }
         @{ Title = 'Desactivar el HPET (BIOS o Administrador de dispositivos) «para bajar la latencia»'; Why = 'Windows 11 elige solo el mejor reloj, y lo que cuesta es forzar el HPET (que Reparación quita), no tenerlo disponible. Desactivarlo no cambia ni el audio ni la latencia de forma medible: es otro valor mágico de foro.' }
         @{ Title = 'Desactivar IPv6 o Teredo'; Why = 'No da rendimiento, y Teredo es lo que usan el chat de grupo y el multijugador de Xbox para atravesar el router: sin él, «NAT estricta».' }
+        @{ Title = 'Desactivar Cortana por directiva en Windows 10 22H2'; Why = 'Cortana ya no está en la búsqueda de esa versión: no hay nada que apagar y no ahorra nada. Lo que sí quita lo de Bing en Inicio es el ajuste «Búsqueda de Inicio sin resultados web».' }
+        @{ Title = 'Poner el procesador al 100 % mínimo con batería, o forzar el máximo rendimiento permanente en un portátil'; Why = 'Con batería, un procesador que nunca baja de frecuencia gasta la carga en horas y se calienta sin que el juego lo pida: tirones por temperatura y menos autonomía. Lo que sirve es rendir al máximo enchufado: el plan de Win Juicer lo hace y deja valores de ahorro moderados con batería, y el «Modo de energía» se aplica con el cargador puesto.' }
         @{ Title = 'Reducir los procesos svchost (SvcHostSplitThresholdInKB)'; Why = 'Agrupar servicios en menos procesos baja el número del Administrador de tareas, no el consumo, y hace que un fallo en uno tumbe a los demás.' }
     )
 }

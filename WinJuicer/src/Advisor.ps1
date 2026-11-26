@@ -27,16 +27,21 @@ function Get-JuicerAdviceRule {
     $ramGb = [Math]::Round($Hw.RamBytes / 1GB)
     $discrete = Test-JuicerAnyGpu $Hw { $_.Discrete }
     $hdd = $Hw.SystemDisk -and $Hw.SystemDisk.Media -eq 'HDD'
+    # Windows 10 (build known and before the first Windows 11): a couple of rules differ there.
+    $win10 = [int]$Hw.Build -gt 0 -and [int]$Hw.Build -lt 22000
     $modest = -not $discrete -or ($c.Threads -gt 0 -and $c.Threads -le 4) -or ($ramGb -gt 0 -and $ramGb -le 8)
     switch ($Id) {
         'energia.plan' {
             if ($c.DualCcdX3D) { return New-JuicerVerdict 'NoRecomendado' "Tu $($c.Name) necesita el plan Equilibrado para aparcar el CCD sin 3D V-Cache." }
+            if ($Hw.Laptop -and $win10) { return New-JuicerVerdict 'NoRecomendado' 'En un portátil cuesta batería y temperatura; con Windows 10 usa «Modo de energía: mejor rendimiento» (ajuste «energia.modo») enchufado.' }
             if ($Hw.Laptop) { return New-JuicerVerdict 'NoRecomendado' 'En un portátil cuesta batería y temperatura; usa el modo de energía de Windows o el del fabricante.' }
             return New-JuicerVerdict 'Recomendado' 'Sobremesa: no hay batería que cuidar, y mejora los mínimos de FPS.'
         }
         'energia.modo' {
             if ($Hw.ModernStandby) { return New-JuicerVerdict 'Recomendado' 'Tu equipo usa Modern Standby: es el único control de rendimiento que Windows respeta. Aplícalo enchufado.' }
-            return New-JuicerVerdict 'NoRecomendado' 'Sólo sirve en equipos con Modern Standby; en el tuyo manda el plan de energía.'
+            if ($Hw.Laptop -and $win10) { return New-JuicerVerdict 'Recomendado' 'Con Windows 10 es la forma de ganar rendimiento en un portátil sin dejar un plan de máximo rendimiento puesto: el deslizador del icono de la batería, en «Mejor rendimiento». Es por fuente de energía: aplícalo enchufado.' }
+            if ($Hw.Laptop) { return New-JuicerVerdict 'Opcional' 'Funciona con el plan Equilibrado y es por fuente de energía: aplícalo enchufado, y sólo si juegas con el cargador puesto.' }
+            return New-JuicerVerdict 'NoRecomendado' 'En un sobremesa manda el plan de energía; este control sólo añade lo que el plan Win Juicer ya hace.'
         }
         'energia.limitacion' {
             if ($Hw.Laptop) { return New-JuicerVerdict 'Opcional' 'En portátil cuesta batería: sólo si juegas enchufado con OBS o Discord a la vista.' }
@@ -93,6 +98,7 @@ function Get-JuicerAdviceRule {
             return New-JuicerVerdict 'Opcional' 'Si nunca buscas en la web desde Inicio, sólo ganas: la búsqueda deja de esperar a internet.'
         }
         'ui.widgets' {
+            if ($win10) { return New-JuicerVerdict 'Recomendado' '«Noticias e intereses» de la barra de tareas se actualiza desde internet en segundo plano y gasta CPU, RAM y batería sin que lo mires.' }
             if ($ramGb -gt 0 -and $ramGb -le 16) { return New-JuicerVerdict 'Recomendado' "Con $ramGb GB de RAM, liberar 100-300 MB se nota." }
             return New-JuicerVerdict 'Opcional' "Con $ramGb GB de RAM no te falta memoria: quítalos si no los miras."
         }

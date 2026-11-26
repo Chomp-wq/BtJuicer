@@ -417,6 +417,20 @@ function Get-WinNetAdapters {
 # Every physical adapter that can carry traffic, connected or not, and
 # whether IPv6 is on in it: the content protection covers them all, so that
 # a Wi-Fi that connects later is already filtered.
+# GetSystemPowerStatus through the native helper, as ConvertFrom-JuicerPowerStatus shapes it.
+# Null when it cannot be read (not Windows, or the call failed): callers fall back to WMI.
+function Get-WinPowerStatus {
+    if ([Environment]::OSVersion.Platform -ne 'Win32NT') { return $null }
+    try {
+        Initialize-JuicerNative
+        $r = [WinJuicer.Native]::GetPowerStatus()
+        ConvertFrom-JuicerPowerStatus -AcLine $r[0] -BatteryFlag $r[1] -Percent $r[2] -SystemFlag $r[3] -SecondsLeft $r[4]
+    } catch {
+        Write-Verbose "GetSystemPowerStatus falló: $_"
+        $null
+    }
+}
+
 function Get-WinNetAdaptersAll {
     , @(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -in 'Up', 'Disconnected' } | ForEach-Object {
             $v6 = $true
@@ -967,6 +981,9 @@ function New-JuicerWindowsBackend {
         AppxRemove   = ${function:Remove-WinAppx}
         AppxAdd      = ${function:Add-WinAppx}
         NetAdapters  = ${function:Get-WinNetAdapters}
+        PowerStatus  = ${function:Get-WinPowerStatus}
+        PowerModeGet = { Initialize-JuicerNative; [WinJuicer.Native]::GetPowerMode() }
+        PowerModeSet = { param([string]$Scheme) Initialize-JuicerNative; [WinJuicer.Native]::SetPowerMode($Scheme) }
         DnsSet       = ${function:Set-WinDns}
         NetAdaptersAll = ${function:Get-WinNetAdaptersAll}
         DnsProbe     = ${function:Test-WinDnsServer}
@@ -1041,6 +1058,8 @@ function New-JuicerMemoryBackend {
         FpsExact = @{}    # exe -> fractional cap (RTSS)
         FpsEngines = $null  # engines the PC has; null = just FpsBackend
         Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
+        PowerMode = '00000000-0000-0000-0000-000000000000'   # the «Power mode» overlay (all zeros = none, i.e. Balanced)
+        Power    = $null   # what PowerStatus answers (see ConvertFrom-JuicerPowerStatus); null = unreadable, the WMI fallback applies
         Audio    = $null   # the default output, as ConvertTo-JuicerAudioInfo gives it; null = no device
         AudioHelper = @{ Installed = $false; Running = $false }   # the low-latency task and its script
         Calls    = New-Object System.Collections.ArrayList
@@ -1207,6 +1226,9 @@ function New-JuicerMemoryBackend {
         PacerState  = { $script:Mem.Pacer }
         ProcRunning = { param($Exe) $script:Mem.Running -contains (ConvertTo-JuicerExeName $Exe) }
         AppIncidents = { param($Since) , @($script:Mem.Incidents | Where-Object { [datetime]$_.Time -ge $Since }) }
+        PowerStatus = { $script:Mem.Power }
+        PowerModeGet = { $script:Mem.PowerMode }
+        PowerModeSet = { param([string]$Scheme) [void]$script:Mem.Calls.Add("powermode $Scheme"); $script:Mem.PowerMode = $Scheme }
         AudioInfo   = { $script:Mem.Audio }
         AudioHelperState = { @{ Installed = [bool]$script:Mem.AudioHelper.Installed; Running = [bool]$script:Mem.AudioHelper.Running } }
         AudioHelperInstall = {

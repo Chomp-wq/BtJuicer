@@ -102,9 +102,34 @@ function Get-JuicerMemoryPlan {
     $plan
 }
 
-# True when Windows says the PC runs on battery (false on a desktop, unplugged-less
-# or unreadable). One place so that tests can mock it.
+# GetSystemPowerStatus raw fields to what the rest of Win Juicer reads:
+# @{ HasBattery; OnBattery; Percent (-1 unknown); BatterySaver; SecondsLeft (-1 unknown) }.
+# ACLineStatus is 0 offline, 1 online, 255 unknown; BatteryFlag has bit 128 for «no battery»
+# (255 unknown); SystemStatusFlag is 1 while battery saver is on.
+function ConvertFrom-JuicerPowerStatus {
+    param([int]$AcLine = 255, [int]$BatteryFlag = 255, [int]$Percent = 255, [int]$SystemFlag = 0, [int]$SecondsLeft = -1)
+    $has = $BatteryFlag -ne 255 -and ($BatteryFlag -band 128) -eq 0
+    @{
+        HasBattery   = $has
+        # Unknown charger state is not «on battery»: better to say nothing than to nag.
+        OnBattery    = ($has -and $AcLine -eq 0)
+        Percent      = $(if ($Percent -le 100) { $Percent } else { -1 })
+        BatterySaver = ($SystemFlag -eq 1)
+        SecondsLeft  = $(if ($SecondsLeft -ge 0) { $SecondsLeft } else { -1 })
+    }
+}
+
+# The power source as the backend reads it (kernel32 GetSystemPowerStatus); null when it cannot.
+function Get-JuicerPowerStatus {
+    try { return (& (Get-JuicerBackend).PowerStatus) } catch { Write-Verbose "Sin estado de energía: $_"; return $null }
+}
+
+# True when Windows says the PC runs on battery (false on a desktop, with no battery
+# or when unreadable). One place so that tests can mock it. GetSystemPowerStatus first;
+# WMI only if that call fails.
 function Test-JuicerOnBattery {
+    $p = Get-JuicerPowerStatus
+    if ($p) { return [bool]($p.HasBattery -and $p.OnBattery) }
     if (-not (Test-JuicerWindows)) { return $false }
     try { return (@(Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Where-Object { $_.PowerOnline -eq $false }).Count -gt 0) } catch { Write-Verbose "Sin batería: $_"; return $false }
 }
