@@ -389,6 +389,7 @@ Sólo actúan si encuentran el problema; si todo está bien, no escriben nada.
 | Modo de energía «Mejor rendimiento» (cualquier equipo con el plan Equilibrado) | Rendimiento | Medio |
 | Sin limitación de energía para programas en segundo plano | Rendimiento | Bajo |
 | Inicio rápido, con el archivo de hibernación reducido | Seguro | Medio |
+| Hibernar tras 3 horas de suspensión con batería (sólo portátiles con hibernación; a la carta) | A la carta | Bajo |
 
 El plan propio parte del «Máximo rendimiento» (Ultimate Performance) de
 Windows y tiene un GUID fijo: ejecutar la herramienta dos veces no crea dos
@@ -1099,6 +1100,7 @@ llamando a casa por su cuenta.
 | Sin fecha de último acceso en NTFS | Rendimiento | Bajo |
 | Sin algoritmo de Nagle (sólo juegos TCP, como los MMO; sólo los adaptadores que hay al aplicarlo) | Rendimiento | Bajo |
 | Sin indexado de búsqueda | Extremo | Bajo |
+| Activar el Sensor de almacenamiento (sólo el interruptor general; a la carta) | A la carta | Bajo |
 
 ### Actualizaciones
 
@@ -1377,7 +1379,8 @@ dentro de lo activado, los más lentos van primero.
 Justo antes de aplicar el primer cambio, Win Juicer toma una **medida
 inicial**: tiempo del último arranque (el que cronometra Windows), programas,
 tareas y servicios de inicio, procesos y servicios en marcha, memoria en uso y
-espacio libre. «Medir antes y después» (o `-Medir`) mide otra vez y lo compara,
+espacio libre (y, en un portátil, la salud de la batería y la última
+reanudación; ver **Portátiles**). «Medir antes y después» (o `-Medir`) mide otra vez y lo compara,
 en verde lo que ha mejorado. El arranque sólo cambia después de reiniciar, y la
 memoria y los procesos dependen de lo que tengas abierto: lo justo es medir las
 dos veces recién reiniciado y con todo cerrado (si no, lo avisa). Windows no
@@ -1386,6 +1389,68 @@ tras apagar), así que cada medida guarda si el Inicio rápido estaba activado; 
 la inicial y la actual difieren, el arranque se compara con un aviso de que son
 de distinto tipo (reiniciar siempre hace un arranque completo). «Nueva medida
 inicial» empieza la comparación desde ahora.
+
+### Portátiles
+
+En un portátil (lo decide el chasis, no la batería: un sobremesa con SAI no lo
+es) el diagnóstico añade una parte **Portátil**. Todo es lectura, está en
+español y, si algo no se puede leer o no se entiende (Windows imprime sus
+herramientas en el idioma del sistema), no sale nada en vez de una frase
+equivocada:
+
+- **Batería:** `powercfg /batteryreport` en XML, en un archivo temporal dentro
+  de la carpeta de Win Juicer que se borra al leerlo. Con la capacidad de diseño,
+  la de carga completa y los ciclos: «Tu batería conserva el 71 % de su
+  capacidad original (412 ciclos)», Info; **Medio por debajo del 60 %**. Si
+  casi siempre está enchufado (o no se sabe), recuerda que muchos fabricantes
+  limitan la carga al 80 % desde su propio programa; Win Juicer **no escribe
+  nunca** en esos ajustes. Ese porcentaje se guarda en cada medida de
+  **Antes y después**, para ver cómo baja con los meses.
+- **Reanudación:** el registro de rendimiento de Windows (evento 300) dice
+  cuánto tardó la última salida de la suspensión: «La última reanudación tardó
+  3,2 s», Info; **Medio a partir de 10 s**. Windows no documenta bien los campos
+  de ese evento, así que se leen con cuidado y, si ninguno parece un tiempo
+  creíble, no sale nada. También se compara en Antes y después.
+- **Qué lo despierta y qué lo mantiene despierto:** `powercfg /lastwake`,
+  `/waketimers` y `/requests`: lo último que despertó al portátil (un adaptador
+  de red, un temporizador), las tareas con permiso para despertarlo y los
+  procesos que impiden la suspensión. Es lo que explica un portátil que se
+  descarga solo en la mochila.
+- **Estados de suspensión:** `powercfg /a`, en llano: si usa la suspensión
+  clásica (S3) o **Modern Standby** (S0), y si tiene hibernación e Inicio rápido.
+- **Drivers:** el Wi-Fi con más de tres años (Bajo) y el del chipset si hasta el
+  más reciente tiene más de tres. Los que vienen con Windows no cuentan: llevan
+  la fecha del propio sistema. La gráfica ya tiene su aviso en Gráfica (sin
+  driver, «el escritorio va a tirones»; la integrada desde un año).
+- **8 GB de RAM:** consejos concretos (Edge «Pestañas en suspensión», Chrome
+  «Ahorro de memoria», revisar la pestaña Arranque), y **Medio si la memoria
+  comprometida pasa del 85 %**. La compresión de memoria se respeta: si estaba
+  apagada, lo dice y cómo volver a encenderla; Win Juicer nunca la apaga.
+
+Dos ajustes **a la carta**, deshacibles desde el diario:
+
+- **Hibernar tras 3 horas de suspensión con batería** (sólo portátiles con la
+  hibernación activada; si no, sale «no aplica» con el motivo). Cambia «Hibernar
+  después de», lado batería, del plan activo: no gasta batería en la mochila y
+  al abrirlo vuelves a donde estabas. No es lo mismo que apagar la hibernación,
+  que no hacemos: ésta la necesita encendida.
+- **Activar el Sensor de almacenamiento:** sólo el interruptor general (valor
+  `01` de `StoragePolicy`); la frecuencia (`2048`, por defecto «cuando quede poco
+  espacio») y lo demás se quedan como estén. El diagnóstico lo sugiere cuando el
+  disco va justo de sitio y Windows lo tiene apagado. Si además usas la limpieza
+  de Descargas del Sensor, éste decide por la fecha de último acceso: con «Sin
+  fecha de último acceso en NTFS» aplicado, dejará de acertar.
+
+**Fluidez del escritorio.** Cada medida de «Medir antes y después» incluye una
+prueba pequeña y repetible: abre una ventana nueva del Explorador sobre una
+carpeta temporal y mide hasta que aparece, y arranca el Bloc de notas hasta que
+tiene ventana; cada una tres veces, y se guarda la mediana. Se ven unas
+ventanas abrirse y cerrarse durante unos segundos. Se guarda con la **fuente de
+energía** (enchufado o con batería), y sólo se compara con otra medida de la
+misma: un portátil con batería rinde menos a propósito, y compararlo con uno
+enchufado no es justo (lo dice). La medida que se hace sola antes del primer
+cambio no incluye la prueba, para no abrir ventanas sin que lo pidas: para
+tener el «antes» de fluidez, pulsa «Nueva medida inicial» antes de aplicar.
 
 ### Exportar e importar
 
@@ -1494,6 +1559,7 @@ WinJuicer/
   src/Apps.ps1            instalar con winget
   src/Config.ps1          exportar e importar la configuración
   src/Measure.ps1         antes y después: medir y comparar
+  src/Laptop.ps1          portátiles: batería, reanudación, qué despierta al equipo, suspensión, drivers
   src/Library.ps1         los juegos instalados y su .exe, y configurarlos en un paso
   src/Covers.ps1          portadas de la galería: caché de Steam, logos de Xbox, tiendas, icono
   src/Upkeep.ps1          mantener los juegos optimizados al iniciar sesión

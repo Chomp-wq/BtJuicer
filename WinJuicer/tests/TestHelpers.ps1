@@ -41,7 +41,13 @@ function New-FakeMachine {
                     }
                 }
                 '/setacvalueindex' { $fake.Ac["$($a[1])|$($a[3])"] = $a[4] }
-                '/setdcvalueindex' { $fake.Dc["$($a[1])|$($a[3])"] = $a[4] }
+                '/setdcvalueindex' {
+                    $fake.Dc["$($a[1])|$($a[3])"] = $a[4]
+                    # «Hibernar después de»: what /qh answers follows what was written, for the active plan.
+                    if ($a[3] -eq '9d7815a6-7ee4-497e-8888-515a05f02364' -and $a[1] -eq $fake.Active) {
+                        $fake.Query['HIBERNATEIDLE'] = ('  Current AC Power Setting Index: 0x{0:x8}' -f 0) + "`n" + ('  Current DC Power Setting Index: 0x{0:x8}' -f [int]$a[4])
+                    }
+                }
                 { $_ -in '/q', '/qh' } { if ($a.Count -gt 3 -and $fake.Query.ContainsKey($a[3])) { $out = $fake.Query[$a[3]] } }
                 '/hibernate' {
                     if ($a[1] -eq 'on') { $fake.Hibernate = $true }

@@ -48,6 +48,14 @@ function Get-JuicerAdviceRule {
             if ($c.Hybrid) { return New-JuicerVerdict 'Recomendado' 'Procesador híbrido: evita que OBS, Discord o el navegador acaben en los núcleos de eficiencia mientras juegas.' }
             return New-JuicerVerdict 'Recomendado' 'Sobremesa: no cuesta batería.'
         }
+        'energia.hibernar' {
+            if ($Hw.Laptop -and $Hw.ModernStandby) { return New-JuicerVerdict 'Opcional' 'Tu portátil usa Modern Standby, que gasta más en suspensión: si lo dejas suspendido horas en la mochila, evita encontrarte la batería a cero.' }
+            if ($Hw.Laptop) { return New-JuicerVerdict 'Opcional' 'Si sueles dejarlo suspendido horas sin cargador, evita encontrarte la batería a cero. Si lo abres a menudo pasadas esas horas, tarda unos segundos más.' }
+            return New-JuicerVerdict 'NoRecomendado' 'Un sobremesa no tiene batería que se vacíe.'
+        }
+        'disco.sensor' {
+            return New-JuicerVerdict 'Opcional' 'Útil si el disco va justo de espacio y no limpias a mano; si tienes de sobra, no hace falta.'
+        }
         'juegos.modo' {
             if ($c.DualCcdX3D) { return New-JuicerVerdict 'Recomendado' "Imprescindible en tu $($c.Name): el reparto entre CCD depende de él." }
         }
