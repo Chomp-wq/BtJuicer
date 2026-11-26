@@ -164,6 +164,14 @@ class GuardService : AccessibilityService() {
                 closeSystemScreen()
                 return
             }
+            // Lo mismo con la ficha de la app (la de «Forzar detención» y «Desinstalar»): si el
+            // propio aviso de la ventana ya la nombra, se cierra sin leer nada más. Fuera quedan la
+            // ventana de gracia (las pantallas de batería y autoencendido que se abren desde la app)
+            // y la activación del administrador, que el usuario necesita poder ver.
+            if (isSettings(pkg) && namesUs(event) && !Store.inGrace() && Status.isAdminActive(this)) {
+                closeSystemScreen()
+                return
+            }
         }
 
         if (pkg in BLOCKED_APPS) {
@@ -180,14 +188,6 @@ class GuardService : AccessibilityService() {
             return
         }
         if (!isSystemSurface(pkg) && pkg !in BROWSERS) return
-        // Las apps de seguridad/optimización del fabricante (Xiaomi, Samsung...) cambian de
-        // contenido sin parar mientras analizan o limpian. Se miran sólo al abrir una pantalla
-        // nueva, nunca durante el trabajo: si no, se las frena justo cuando más lo necesitan.
-        if (isVendorSurface(pkg) && type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) return
-        // En Xiaomi la ficha de cada app (con «Forzar detención» y «Desinstalar») es de la app de
-        // Seguridad. Al abrir una de sus pantallas se tapa todo hasta haberla leído: sin esto,
-        // entre que se abre y se carga su contenido daba tiempo a pulsar «Forzar detención».
-        if (isVendorSurface(pkg) && type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) showCover()
 
         // Cada comprobación recorre la ventana de otra app nodo a nodo, y cada nodo es una
         // consulta a esa app. En Ajustes lo peligroso aparece al abrir una pantalla; después,
@@ -268,7 +268,6 @@ class GuardService : AccessibilityService() {
         }
 
     private fun modeFor(pkg: String) = when {
-        isVendorSurface(pkg) -> MODE_VENDOR
         pkg in BROWSERS -> MODE_BROWSER
         pkg in SEARCH_APPS || pkg in FEED_APPS -> MODE_TEXT
         isSystemSurface(pkg) -> MODE_WATCH
@@ -361,10 +360,21 @@ class GuardService : AccessibilityService() {
         if (seen.ours) oursSeenAt = SystemClock.elapsedRealtime()
         placeShields(shieldRects(root, dangerButtons = seen.ours))
         hideCover()
-        guardSettingsScreen(seen)
+        guardSettingsScreen(seen, vendor = isVendorSurface(pkg))
     }
 
-    private fun isSettings(pkg: String) = pkg.contains(SETTINGS) && !isVendorSurface(pkg)
+    /**
+     * Ajustes y la app de Seguridad del fabricante: las dos se vigilan igual, con capas y cambios de
+     * contenido. En Xiaomi la ficha de cada app es de Seguridad, y se abre a menudo sin ventana
+     * nueva: mirándola sólo al abrirse ventanas, el guardián nunca se enteraba.
+     */
+    private fun isSettings(pkg: String) = pkg.contains(SETTINGS) || isVendorSurface(pkg)
+
+    /** El aviso de la ventana (su título, lo que anuncia a los lectores de pantalla) nombra a esta app. */
+    private fun namesUs(event: AccessibilityEvent): Boolean {
+        val s = (event.text.joinToString(" ") + " " + (event.contentDescription ?: "")).lowercase()
+        return OURS.any { s.contains(it) }
+    }
 
     private fun onSettingsEvent(event: AccessibilityEvent) {
         val now = SystemClock.elapsedRealtime()
@@ -388,12 +398,21 @@ class GuardService : AccessibilityService() {
     }
 
     /** Devuelve true si la pantalla se cerró. */
-    private fun guardSettingsScreen(seen: Seen): Boolean {
+    private fun guardSettingsScreen(seen: Seen, vendor: Boolean): Boolean {
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
         if (!Status.isAdminActive(this)) return false
         if (isStopConfirmation(seen)) {
             closeSystemScreen()
             return true
+        }
+        if (vendor) {
+            // En la app de Seguridad las listas del optimizador nombran a la app sin peligro: sólo
+            // se cierran su ficha (forzar detención, desinstalar, borrar datos) y el autoencendido.
+            if (seen.autostartList || (seen.ours && seen.uninstall)) {
+                closeSystemScreen()
+                return true
+            }
+            return false
         }
         if (seen.ours) {
             // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
@@ -810,7 +829,6 @@ class GuardService : AccessibilityService() {
         const val PATROL_MS = 30_000L
         const val MODE_OFF = 0
         const val MODE_WATCH = 1
-        const val MODE_VENDOR = 2
         const val MODE_TEXT = 3
         const val MODE_BROWSER = 4
         const val BROWSER_POLL_MS = 1_500L
