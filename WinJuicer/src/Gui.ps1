@@ -1668,14 +1668,20 @@ function Show-JuicerGuiPowerAndDns {
     $c = $script:Gui.C
     $plan = $script:Gui.Snapshot.States['energia.plan']
     $mode = $script:Gui.Snapshot.States['energia.modo']
-    $script:Gui.PlanId = if ($plan -and $plan.State -ne 'NoAplica') { 'energia.plan' } elseif ($mode -and $mode.State -ne 'NoAplica') { 'energia.modo' } else { $null }
+    $planOk = $plan -and $plan.State -ne 'NoAplica'
+    $modeOk = $mode -and $mode.State -ne 'NoAplica'
+    $a = $script:Gui.Advice['energia.plan']
+    $am = $script:Gui.Advice['energia.modo']
+    # On a laptop the advisor recommends the power mode and not the plan (battery, heat): the buttons follow it.
+    $preferMode = $modeOk -and $am -and $am.Verdict -eq 'Recomendado' -and $a -and $a.Verdict -eq 'NoRecomendado'
+    $script:Gui.PlanId = if ($planOk -and -not $preferMode) { 'energia.plan' } elseif ($modeOk) { 'energia.modo' } else { $null }
     $note = switch ($script:Gui.PlanId) {
         'energia.plan' { 'Plan «Win Juicer»: Máximo rendimiento, sin aparcar núcleos ni ahorro en PCIe, USB ni disco. ' + $(if ($plan.State -eq 'Aplicado') { 'Activo.' } else { 'No activo.' }) }
-        'energia.modo' { 'Este equipo usa Modern Standby: lo que vale aquí es «Modo de energía: mejor rendimiento». ' + $(if ($mode.State -eq 'Aplicado') { 'Activo.' } else { 'No activo.' }) }
+        'energia.modo' { '«Modo de energía: mejor rendimiento», el control del icono de la batería, para la fuente que uses ahora: aplícalo con el cargador conectado. ' + $(if ($mode.State -eq 'Aplicado') { 'Activo.' } else { 'No activo.' }) }
         default { if ($plan -and $plan.Reason) { $plan.Reason } else { 'No disponible en este equipo.' } }
     }
-    $a = $script:Gui.Advice['energia.plan']
     if ($script:Gui.PlanId -eq 'energia.plan' -and $a -and $a.Verdict -eq 'NoRecomendado') { $note += " $($a.Reason)" }
+    if ($script:Gui.PlanId -eq 'energia.modo' -and $am) { $note += " $($am.Reason)" }
     $c.PlanNote.Text = $note
     $c.BtnPlanAdd.Visibility = $(if ($script:Gui.PlanId) { 'Visible' } else { 'Collapsed' })
     $c.BtnPlanRemove.Visibility = $c.BtnPlanAdd.Visibility

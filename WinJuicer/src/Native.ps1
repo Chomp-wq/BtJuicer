@@ -191,6 +191,30 @@ namespace WinJuicer {
             return caps[20] != 0;
         }
 
+        // kernel32 GetSystemPowerStatus: the one place Windows says whether the PC runs on the
+        // charger, whether there is a battery at all and whether battery saver is on. Plain
+        // fields (no struct marshalling out of the class) so PowerShell reads them directly.
+        [StructLayout(LayoutKind.Sequential)]
+        struct SYSTEM_POWER_STATUS {
+            public byte ACLineStatus;
+            public byte BatteryFlag;
+            public byte BatteryLifePercent;
+            public byte SystemStatusFlag;
+            public int BatteryLifeTime;
+            public int BatteryFullLifeTime;
+        }
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        static extern bool GetSystemPowerStatus(out SYSTEM_POWER_STATUS status);
+
+        // ACLineStatus, BatteryFlag, BatteryLifePercent, SystemStatusFlag (1 = battery saver on),
+        // BatteryLifeTime, BatteryFullLifeTime, as the API gives them (255 / -1 = unknown).
+        public static int[] GetPowerStatus() {
+            SYSTEM_POWER_STATUS s;
+            if (!GetSystemPowerStatus(out s)) throw new Win32Exception();
+            return new int[] { s.ACLineStatus, s.BatteryFlag, s.BatteryLifePercent, s.SystemStatusFlag, s.BatteryLifeTime, s.BatteryFullLifeTime };
+        }
+
         // The "Power mode" slider. Not in the SDK headers, but exported by
         // powrprof.dll since Windows 10 1709 and what Settings itself calls.
         [DllImport("powrprof.dll")]

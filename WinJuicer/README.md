@@ -1,6 +1,13 @@
 ﻿# Win Juicer
 
-Exprime Windows 11 para jugar y para cargar rápido, sin humo y con vuelta atrás.
+Exprime Windows 10 y 11 para jugar y para cargar rápido, sin humo y con vuelta atrás.
+
+Funciona en **Windows 10 (22H2, compilación 19045) y en Windows 11**. Algunos
+ajustes sólo existen en Windows 11 (el menú contextual clásico, la barra de
+tareas a la izquierda, Copilot, Recall, la galería del Explorador…): en Windows 10
+salen como **no aplica**, con el motivo, y no se escribe nada. Otros se explican
+distinto según la versión («Noticias e intereses» en Windows 10, Widgets en
+Windows 11) y alguno hace más cosas en Windows 10 (la búsqueda de Inicio).
 
 La mayoría de «optimizadores» son una lista de claves de registro copiadas de
 foros: la mitad no hace nada y la otra mitad rompe algo. Win Juicer hace lo
@@ -170,7 +177,7 @@ aplicarlo (V).
 
 No se queda residente ni se conecta a internet salvo para lo que lo necesita
 (winget, reinstalar una app de la Tienda, .NET 3.5). Funciona con Windows
-PowerShell 5.1, la que ya trae Windows 11, y también con PowerShell 7.
+PowerShell 5.1, la que ya trae Windows 10 y 11, y también con PowerShell 7.
 
 ### Desde la línea de órdenes
 
@@ -250,7 +257,8 @@ recomendado** aquí, y por qué. Algunos ejemplos de cómo cambia:
 | Si tu equipo… | Win Juicer… |
 |---|---|
 | es un sobremesa | recomienda el plan de máximo rendimiento y quitar la limitación de energía |
-| es un portátil | no lo recomienda (batería y calor); con Modern Standby, usa el «Modo de energía» |
+| es un portátil | no recomienda el plan de máximo rendimiento (batería y calor); recomienda el «Modo de energía» (en Windows 10 y con Modern Standby; en Windows 11, opcional) para jugar enchufado |
+| tiene Windows 10 | recomienda quitar «Noticias e intereses» de la barra de tareas (se refresca desde internet en segundo plano) |
 | tiene un Ryzen 9 X3D de dos CCD (7900X3D, 7950X3D, 9900X3D, 9950X3D) | **no aplica** el plan sin aparcar núcleos: rompería el reparto de juegos al CCD con 3D V-Cache; y marca Game Bar como necesaria |
 | tiene un Intel híbrido (núcleos P y E) | destaca quitar la limitación de energía, para que OBS o Discord no acaben en núcleos lentos |
 | tiene una RTX 40 o posterior | recomienda la programación de GPU por hardware: la necesita la generación de fotogramas de DLSS |
@@ -378,7 +386,7 @@ Sólo actúan si encuentran el problema; si todo está bien, no escriben nada.
 | Ajuste | Nivel | Impacto |
 |---|---|---|
 | Plan «Win Juicer»: Máximo rendimiento, sin aparcar núcleos ni ahorro en PCIe/USB/disco | Rendimiento | Medio |
-| Modo de energía «Mejor rendimiento» (portátiles con Modern Standby) | Rendimiento | Medio |
+| Modo de energía «Mejor rendimiento» (cualquier equipo con el plan Equilibrado) | Rendimiento | Medio |
 | Sin limitación de energía para programas en segundo plano | Rendimiento | Bajo |
 | Inicio rápido, con el archivo de hibernación reducido | Seguro | Medio |
 
@@ -387,12 +395,29 @@ Windows y tiene un GUID fijo: ejecutar la herramienta dos veces no crea dos
 planes, y deshacer lo borra. En la ventana son los botones «Añadir y activar» y
 «Quitar». En un Ryzen X3D de dos CCD no se ofrece.
 
+**En un portátil**, el plan también escribe valores para la batería (si no,
+heredaría los de «Máximo rendimiento»: procesador clavado al 100 % y nada
+durmiendo): procesador al 5 % como mínimo, aparcado de núcleos por defecto,
+ahorro moderado en PCIe, suspensión selectiva de USB activada y disco que se
+apaga a los 10 minutos. Enchufado sigue siendo el máximo. Deshacer borra el plan
+entero, valores de batería incluidos.
+
+**Modo de energía** es el control que Windows 10 pone en el icono de la batería
+(y Windows 11 en Configuración > Energía). Sólo actúa con el plan **Equilibrado**:
+con otro, el ajuste sale como no aplica («el control de modo de energía solo
+actúa con el plan Equilibrado»). Windows guarda un modo **por fuente**, uno
+enchufado y otro con batería: el ajuste cambia el de la fuente que uses al
+aplicarlo, así que **aplícalo con el cargador conectado** para tener «Mejor
+rendimiento» enchufado sin gastar batería. En un portátil con Windows 10 es el
+ajuste de energía recomendado, en lugar del plan. Win Juicer no cuenta como
+«deshecho por Windows» el modo de la batería cuando estás con batería.
+
 ### Juegos
 
 | Ajuste | Nivel | Impacto |
 |---|---|---|
 | Modo juego | Seguro | Bajo |
-| Programación de GPU acelerada por hardware | Seguro | Bajo |
+| Programación de GPU acelerada por hardware (desde Windows 10 2004) | Seguro | Bajo |
 | Optimizaciones para juegos en ventana (modelo flip en DX10/11) | Seguro | Medio |
 | Reserva multimedia para segundo plano al 10 % | Seguro | Bajo |
 | Frecuencia variable (VRR) también en juegos que no la piden | Rendimiento | Medio |
@@ -1041,10 +1066,10 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
 | Sin apps promocionadas que Windows instala solo | Seguro | Bajo |
 | Sin animaciones | Rendimiento | Bajo |
 | Sin transparencias | Rendimiento | Bajo |
-| Menú contextual clásico | Rendimiento | Bajo |
+| Menú contextual clásico (sólo Windows 11; Windows 10 ya lo tiene) | Rendimiento | Bajo |
 | Carpetas grandes al instante: sin detectar el tipo de cada carpeta | Rendimiento | Medio |
-| Búsqueda de Inicio sin resultados de Bing | Rendimiento | Bajo |
-| Sin Widgets | Rendimiento | Bajo |
+| Búsqueda de Inicio sin resultados de Bing (en Windows 10 también `BingSearchEnabled` y `CortanaConsent`, que es lo que de verdad los quita) | Rendimiento | Bajo |
+| Sin Widgets (en Windows 10, sin «Noticias e intereses»: se refresca desde internet y gasta CPU, RAM y batería) | Rendimiento | Bajo |
 
 ### Privacidad
 
@@ -1053,7 +1078,7 @@ llamando a casa por su cuenta.
 
 | Ajuste | Nivel | Impacto |
 |---|---|---|
-| Sin historial de actividad | Seguro | Bajo |
+| Sin historial de actividad (en Windows 10 se pierde la Línea de tiempo de Win+Tab) | Seguro | Bajo |
 | Sin identificador de publicidad ni encuestas | Seguro | Bajo |
 | Telemetría al mínimo y sin sus tareas (adiós a los picos de CompatTelRunner) | Rendimiento | Bajo |
 | Sin apps de fabricantes al conectar dispositivos | Rendimiento | Bajo |
@@ -1122,9 +1147,15 @@ Las apps que vienen con Windows, sólo las que estén instaladas, en tres grupos
   Dev Home, Películas y TV, Mapas, Cortana y las promociones preinstaladas
   (Spotify, Netflix, Disney+, Prime Video, TikTok, Candy Crush).
 - **Opcionales:** Copilot, Outlook nuevo, Teams, To Do, Enlace Móvil, Notas
-  rápidas, Grabadora, Reloj, Cámara, Reproductor multimedia, WhatsApp…
+  rápidas, Grabadora, Reloj, Cámara, Reproductor multimedia, WhatsApp, Skype…
 - **Con cuidado:** la app Xbox, Xbox Game Bar y el proveedor de identidad de
-  Xbox. Se confirman una a una.
+  Xbox; en Windows 10, también **Paint 3D** (no es el Paint de siempre, que se
+  queda, pero «Editar con Paint 3D» lo abre) y **Correo y Calendario**. Se
+  confirman una a una.
+
+En **Windows 10** salen además las apps que traía de serie: Consejos, Contactos,
+Portal de realidad mixta, 3D Builder, Visor 3D, Print 3D y Planes móviles (todas
+seguras), y Skype (opcional).
 
 Si tu equipo usa una, sale marcada como **necesaria aquí**: Game Bar en un X3D
 de dos CCD, la pila de Xbox si tienes juegos de Game Pass. La Tienda, la
@@ -1257,7 +1288,13 @@ No cambia nada:
   posterior, AMD RX 6000 o posterior, Intel Arc): NVIDIA por `nvidia-smi`, el
   resto por los rangos de memoria que Windows dio a la tarjeta.
 - **Plan de energía** (y si limita el procesador por debajo del 100 %), y si un
-  portátil está **con batería** o enchufado.
+  portátil está **con batería** o enchufado. La fuente se lee una sola vez, con
+  `GetSystemPowerStatus` de Windows (con WMI sólo si esa llamada falla).
+- **Ahorro de batería** (en Windows 11 24H2, «Ahorro de energía»), sólo en
+  portátiles y de sólo lectura: ⚠ «activo: Windows limita apps en segundo plano y
+  brillo» si lo está ahora, o ℹ «se activa al 20 %» con la carga a la que el plan
+  activo lo pone solo (`ESBATTTHRESHOLD`, lado batería; «no se activa solo» con 0).
+  Win Juicer no lo enciende ni lo apaga.
 - **El monitor**, a su frecuencia máxima o por debajo.
 
 - **Grabación de Game Bar en segundo plano**, con los mismos valores del registro
@@ -1383,7 +1420,11 @@ No borra la caché de shaders. No fuerza el HPET. No toca las claves «Games» d
 MMCSS ni `Win32PrioritySeparation`. No cambia la prioridad ni la afinidad de `audiodg.exe`, ni desactiva el HPET,
 «para bajar la latencia del audio». No limpia el registro. No quita todas las
 apps de la Tienda de golpe ni desactiva servicios en masa. No desinstala Edge a
-la fuerza. No desactiva IPv6 ni Teredo. No cambia el DNS «para bajar el ping».
+la fuerza. No desactiva IPv6 ni Teredo. No cambia el DNS «para bajar el ping». No
+desactiva Cortana por directiva en Windows 10 22H2: ya no está en la búsqueda y
+no ahorra nada. No pone el procesador al 100 % mínimo con batería ni fuerza el
+máximo rendimiento permanente en un portátil: con batería gasta la carga en
+horas y calienta sin que el juego lo pida; el máximo es para enchufado.
 
 Cada una de estas cosas tiene su explicación en **No hacemos**. Resumen: o no
 hacen nada medible, o rompen algo, o las dos cosas. Varias, de hecho, las
@@ -1442,7 +1483,7 @@ WinJuicer/
   src/Backend.ps1         único punto que toca registro, servicios, apps, DNS y características
   src/Engine.ps1          estado, aplicar, verificar, deshacer, interruptores y el diario
   src/Catalog.ps1         los ajustes, con su texto, y los mitos
-  src/Native.ps1          SystemParametersInfo, modos de pantalla, Modern Standby, núcleos híbridos
+  src/Native.ps1          SystemParametersInfo, modos de pantalla, Modern Standby, estado de la batería, núcleos híbridos
   src/Audio.ps1           la salida de audio (COM: IAudioClient3), su diagnóstico y el audio de baja latencia
   src/Hardware.ps1        de qué está hecho el equipo
   src/Advisor.ps1         qué conviene a este equipo, y por qué

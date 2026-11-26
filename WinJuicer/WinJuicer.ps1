@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-    Win Juicer: exprime Windows 11 para juegos y cargas rápidas, sin humo y con vuelta atrás.
+    Win Juicer: exprime Windows 10 y 11 para juegos y cargas rápidas, sin humo y con vuelta atrás.
 
 .DESCRIPTION
     Sin parámetros abre la ventana (con -Consola, el menú de texto). Cada cambio

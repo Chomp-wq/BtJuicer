@@ -245,8 +245,14 @@ function Get-JuicerSupportFindings {
     $end = $Support.End.ToString('d')
     $days = ($Support.End - $Now).TotalDays
     if ($Support.Windows10) {
-        $extra = if ($Support.Business) { ' Salvo que tu empresa pague las actualizaciones extendidas (ESU), ya no hay parches.' } else { ' La extensión ESU para hogares terminó en octubre de 2026.' }
-        $out += New-JuicerFinding 'Sistema' 'Alto' 'Windows 10 ya no recibe actualizaciones de seguridad' ('Terminó el {0}.{1} Si el equipo lo admite, Windows 11 es gratis desde Windows Update; si no, cada fallo nuevo queda abierto.' -f $end, $extra)
+        # One finding, Medio: nothing here is an emergency, and a permanent «Alto» would only teach
+        # people to ignore the list. What it means, what helps, and how to find out about Windows 11.
+        $extra = if ($Support.Business) { ' Salvo que tu empresa pague las actualizaciones extendidas (ESU), ya no hay parches.' } else { ' La extensión ESU para hogares terminó el 13 de octubre de 2026.' }
+        $detail = ('Terminó el {0}.{1} Significa que los fallos de seguridad nuevos de Windows ya no se corrigen; Defender y el navegador se actualizan por su lado, pero no sustituyen a los parches del sistema. ' +
+            'Lo que ayuda: mantén el navegador al día, usa una cuenta estándar (sin permisos de administrador) para el día a día y ten copias de seguridad de lo que no quieras perder. ' +
+            'Para saber si tu equipo admite Windows 11: abre «Comprobación de estado del PC» (PC Health Check), o en PowerShell de administrador mira Get-Tpm (TpmPresent y TpmReady en True) y Confirm-SecureBootUEFI (True). ' +
+            'Si es compatible, Windows 11 es gratis desde Configuración > Windows Update.') -f $end, $extra
+        $out += New-JuicerFinding 'Sistema' 'Medio' 'Windows 10 ya no recibe actualizaciones de seguridad' $detail
         return $out
     }
     $how = 'Instala la versión siguiente desde Configuración > Windows Update; es gratis y conserva programas y archivos.'
@@ -276,7 +282,7 @@ function Get-JuicerSystemAudit {
     $product = if ($name) { ([string]$name.Value) -replace '^Windows 10', $(if ($build -ge 22000) { 'Windows 11' } else { 'Windows 10' }) } else { 'Windows' }
     $out += New-JuicerFinding 'Sistema' 'Info' ('{0} {1} (compilación {2}.{3})' -f $product, $(if ($ver) { $ver.Value }), $build, $(if ($ubr) { $ubr.Value } else { 0 }))
     if ($build -lt 22000) {
-        $out += New-JuicerFinding 'Sistema' 'Info' 'Win Juicer está pensado para Windows 11' 'Casi todo funciona también en Windows 10; lo que no aplica aparece como «no aplica».'
+        $out += New-JuicerFinding 'Sistema' 'Info' 'Algunos ajustes sólo existen en Windows 11' 'Win Juicer funciona en Windows 10 y 11; lo que no existe en tu versión aparece como «no aplica».'
     }
 
     $wu = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate'
@@ -360,16 +366,7 @@ function Get-JuicerHardwareAudit {
         $out += New-JuicerFinding 'Memoria' 'Info' 'No se pudo leer la memoria.'
     }
 
-    if ($laptop) {
-        try {
-            $online = @(Get-CimInstance -Namespace root/wmi -ClassName BatteryStatus -ErrorAction Stop | Where-Object { $_.PowerOnline -eq $false })
-            if ($online.Count -gt 0) {
-                $out += New-JuicerFinding 'Energía' 'Alto' 'Estás funcionando con batería' 'Con batería, el portátil limita procesador y gráfica aunque elijas el máximo rendimiento. Para jugar, conecta el cargador.'
-            }
-        } catch {
-            Write-Verbose "Sin estado de batería: $_"
-        }
-    }
+    # On battery is said once, by «Listo para jugar» (Get-JuicerReadyStatus), from the same reading.
     $out
 }
 
@@ -783,6 +780,20 @@ function Get-JuicerReadyStatus {
         if ($In.OnBattery) { & $add 'bateria' $false 'Funcionando con batería' 'El portátil limita procesador y gráfica aunque elijas el máximo rendimiento. Para jugar, conecta el cargador.' }
         else { & $add 'bateria' $true 'Enchufado a la corriente' '' }
     }
+    # Battery saver (Windows 10 «Ahorro de batería»; «Ahorro de energía» from 24H2). Read only:
+    # Win Juicer neither turns it on nor off, it says what Windows will do. Only laptops give it.
+    if ($null -ne $In.OnBattery -and ($null -ne $In.BatterySaver -or $null -ne $In.BatterySaverAt)) {
+        $nm = if ([int]$In.Build -ge 26100) { 'Ahorro de energía' } else { 'Ahorro de batería' }
+        if ($In.BatterySaver -eq $true) {
+            & $add 'ahorro' $false "${nm} activo: Windows limita apps en segundo plano y brillo" 'Con el ahorro puesto, Windows frena las apps de fondo, baja el brillo y puede limitar el procesador: no es el equipo que quieres para jugar. Conecta el cargador (se apaga solo al cargar) o desactívalo en Configuración > Sistema > Batería.'
+        } elseif ($null -ne $In.BatterySaverAt -and [int]$In.BatterySaverAt -gt 0) {
+            [void]$out.Add(@{ Key = 'ahorro'; Ok = $true; Info = $true; Title = "${nm}: se activa al $([int]$In.BatterySaverAt) %"
+                    Reason = 'Con batería, a ese nivel Windows limita las apps en segundo plano y baja el brillo. Si juegas sin cargador, notarás el recorte; enchufado no pasa. Se cambia en Configuración > Sistema > Batería.' })
+        } elseif ($null -ne $In.BatterySaverAt) {
+            [void]$out.Add(@{ Key = 'ahorro'; Ok = $true; Info = $true; Title = "${nm}: no se activa solo"
+                    Reason = 'Windows sólo lo pone si lo activas tú a mano.' })
+        }
+    }
     $hz = [int]$In.MonitorHz
     $max = [int]$In.MonitorMaxHz
     if ($hz -gt 0 -and $max -gt 0) {
@@ -853,9 +864,25 @@ function Get-JuicerGameDvrState {
     $null
 }
 
+# Battery saver, read only: whether it is on now (GetSystemPowerStatus) and the charge at which
+# the active power plan turns it on by itself (ESBATTTHRESHOLD, battery side; 0 = never). Each
+# is null when it cannot be read.
+function Get-JuicerBatterySaverState {
+    $o = @{ On = $null; At = $null }
+    try {
+        $ps = Get-JuicerPowerStatus
+        if ($ps) { $o.On = [bool]$ps.BatterySaver }
+    } catch { Write-Verbose "Sin estado del ahorro de batería: $_" }
+    try {
+        $esb = ConvertFrom-JuicerPowerSetting (Invoke-JuicerNative 'powercfg.exe' @('/qh', 'SCHEME_CURRENT', 'SUB_ENERGYSAVER', 'ESBATTTHRESHOLD')).Output
+        if ($esb) { $o.At = [int]$esb.DC }
+    } catch { Write-Verbose "Sin umbral del ahorro de batería: $_" }
+    $o
+}
+
 # Reads this PC for Get-JuicerReadyStatus. Each part on its own: one that fails is unknown.
 function Get-JuicerReadyInputs {
-    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; VrrOptimize = $null; MonitorUse = ''; GameDvr = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; MonitorHz = 0; MonitorMaxHz = 0; Vbs = $null; Hvci = $null; Audio = $null }
+    $in = @{ GameMode = $null; HagsConfigured = $null; HagsRestart = $false; Windowed = $null; VrrOptimize = $null; MonitorUse = ''; GameDvr = $null; Rebar = $null; PlanKind = $null; CpuMax = $null; OnBattery = $null; BatterySaver = $null; BatterySaverAt = $null; Build = 0; MonitorHz = 0; MonitorMaxHz = 0; Vbs = $null; Hvci = $null; Audio = $null }
     if (-not (Test-JuicerWindows)) { return $in }
     try {
         # Windows 11 has it on until someone turns it off: a missing value is «on».
@@ -911,8 +938,11 @@ function Get-JuicerReadyInputs {
     } catch { Write-Verbose "Sin plan de energía: $_" }
     if ($hw -and $hw.Laptop) {
         # Read again: the profile is from when Win Juicer opened, and the charger may have moved since.
-        $in.OnBattery = [bool]$hw.OnBattery
-        $in.OnBattery = Test-JuicerOnBattery
+        $in.OnBattery = [bool](Test-JuicerOnBattery)
+        $in.Build = [int]$hw.Build
+        $saver = Get-JuicerBatterySaverState
+        $in.BatterySaver = $saver.On
+        $in.BatterySaverAt = $saver.At
     }
     $in.Audio = Get-JuicerAudioInfo
     try {
