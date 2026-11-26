@@ -14,6 +14,7 @@ import android.view.View
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
 import com.secretsavior.data.Store
 
@@ -212,7 +213,7 @@ class GuardService : AccessibilityService() {
      */
     private fun noteForeground(pkg: String) {
         if (pkg == foreground || isNeutral(pkg)) return
-        val active = activeRoot(prefetch = false)?.packageName?.toString() ?: pkg
+        val active = appRoot(prefetch = false)?.packageName?.toString() ?: pkg
         if (active == packageName || isNeutral(active)) return
         foreground = active
         setMode(modeFor(active))
@@ -222,6 +223,34 @@ class GuardService : AccessibilityService() {
      * Por defecto Android trae con la raíz hasta 50 nodos más, por si se piden luego. Desde
      * Android 13 se puede pedir sólo la raíz, y la app de delante trabaja menos.
      */
+    /**
+     * La ventana de la app que hay delante, sin contar las capas de este servicio. No vale
+     * preguntar por la "ventana activa": en cuanto se toca una de nuestras capas, Android pasa a
+     * considerarla a ella la activa, y el guardián creía que ya no estaba en Ajustes, quitaba
+     * todas las capas y no cerraba nada. Un toque en la capa bastaba para desarmarlo. Se recorren
+     * las ventanas de arriba abajo y se toma la primera de una app que no sea ésta, ni el teclado
+     * ni la barra del sistema.
+     */
+    private fun appRoot(prefetch: Boolean): AccessibilityNodeInfo? {
+        try {
+            for (w in windows) {
+                if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
+                    w.type != AccessibilityWindowInfo.TYPE_SYSTEM
+                ) {
+                    continue
+                }
+                val r = w.root ?: continue
+                val p = r.packageName?.toString() ?: continue
+                if (p == packageName || isNeutral(p)) continue
+                return r
+            }
+        } catch (e: Exception) {
+            // sin lista de ventanas: lo de siempre
+        }
+        val r = activeRoot(prefetch) ?: return null
+        return if (r.packageName?.toString() == packageName) null else r
+    }
+
     private fun activeRoot(prefetch: Boolean): AccessibilityNodeInfo? =
         if (!prefetch && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             getRootInActiveWindow(0)
@@ -279,7 +308,7 @@ class GuardService : AccessibilityService() {
         }
         // Para el navegador basta la raíz: luego se pide la barra por su id. En Ajustes se
         // recorre la pantalla, y ahí traer nodos por adelantado ahorra viajes.
-        val root = activeRoot(prefetch = !browser) ?: return
+        val root = appRoot(prefetch = !browser) ?: return
         if (root.packageName?.toString() != pkg) return // el evento no es de la ventana activa
         if (browser) guardBrowser(pkg, root) else guardSystemScreen(pkg, root)
     }
@@ -310,17 +339,18 @@ class GuardService : AccessibilityService() {
 
     private val settingsPass = Runnable {
         passQueued = false
-        val root = activeRoot(prefetch = true)
+        val root = appRoot(prefetch = true)
         val pkg = root?.packageName?.toString()
         if (root == null || pkg == null || !isSettings(pkg) || !Store.isLocked(this)) {
             hideShields()
             return@Runnable
         }
-        // Lo de siempre: una pantalla que ya es peligrosa (nombra a la app, es Accesibilidad,
-        // el editor de DNS privado) se cierra. Si no, se tapan sus filas peligrosas.
-        if (guardSettingsScreen(root)) return@Runnable
+        // Primero se tapan las filas peligrosas (la casilla de Secret Savior en Accesibilidad,
+        // la fila que lleva a Accesibilidad...) y después, si la pantalla ya es peligrosa, se
+        // cierra. Las dos cosas a la vez: si el cierre tarda, el toque ya cae sobre la capa.
         placeShields(shieldRects(root))
         hideCover()
+        guardSettingsScreen(root)
     }
 
     private fun isSettings(pkg: String) = pkg.contains(SETTINGS) && !isVendorSurface(pkg)
@@ -400,6 +430,19 @@ class GuardService : AccessibilityService() {
             if (r.isEmpty) continue
             r.inset(-dp(6), -dp(6))
             out += r
+            // La casilla de esta app (en Accesibilidad, en autoinicio...): aunque el interruptor
+            // no esté dentro de la misma fila pulsable que el nombre, se tapa también el bloque
+            // que contiene a los dos.
+            if (OURS.any { s.contains(it) }) {
+                rowOf(n)?.let { (block, sw) ->
+                    val b = Rect().also { block.getBoundsInScreen(it) }
+                    if (b.isEmpty || b.height() > maxRow) b.set(Rect().also { sw.getBoundsInScreen(it) })
+                    if (!b.isEmpty) {
+                        b.inset(-dp(8), -dp(8))
+                        out += b
+                    }
+                }
+            }
         }
         return out
     }
@@ -560,7 +603,7 @@ class GuardService : AccessibilityService() {
 
     /** Devuelve true si no hace falta seguir mirando esta pantalla. */
     private fun vendorCheck(): Boolean {
-        val root = activeRoot(prefetch = true) ?: return false
+        val root = appRoot(prefetch = true) ?: return false
         val pkg = root.packageName?.toString() ?: return false
         if (!isVendorSurface(pkg)) return true
         val seen = scan(root)
