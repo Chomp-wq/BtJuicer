@@ -144,6 +144,11 @@ class GuardService : AccessibilityService() {
             if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && isVendorSurface(pkg)) watchVendorScreen()
             return
         }
+        // Tras un intento, las pantallas del sistema se cierran nada más asomar.
+        if (inLockout() && isSystemSurface(pkg) && type != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
+            closeSystemScreen()
+            return
+        }
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             // Fuera de Ajustes las capas sobran (el teclado o la barra de notificaciones no cuentan).
             if (!isSettings(pkg) && !isNeutral(pkg)) hideShields()
@@ -156,7 +161,7 @@ class GuardService : AccessibilityService() {
             // excepciones aquí, ni la ventana de gracia: una vez bloqueada la app, Accesibilidad
             // no se vuelve a abrir mientras el guardián siga vivo.
             if (isSystemSurface(pkg) && isAccessibilityScreen(event)) {
-                block(countIt = false)
+                closeSystemScreen()
                 return
             }
         }
@@ -387,20 +392,20 @@ class GuardService : AccessibilityService() {
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
         if (!Status.isAdminActive(this)) return false
         if (isStopConfirmation(seen)) {
-            block(countIt = false)
+            closeSystemScreen()
             return true
         }
         if (seen.ours) {
             // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
             // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
             if (Store.inGrace() && !seen.dangerous) return false
-            block(countIt = false)
+            closeSystemScreen()
             return true
         }
         // Con DNS privado estricto los navegadores quedan cerrados (ver check); hay que
         // dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
         if (seen.privateDns && !Status.isPrivateDnsStrict(this)) {
-            block(countIt = false)
+            closeSystemScreen()
             return true
         }
         return false
@@ -496,6 +501,9 @@ class GuardService : AccessibilityService() {
                     lastShieldToast = now
                     Toast.makeText(this@GuardService, "Secret Savior: esto no se puede abrir.", Toast.LENGTH_SHORT).show()
                 }
+                // Tocar lo que está tapado ya es la intención: se cierra la pantalla entera, sin
+                // esperar a ver qué abre el siguiente toque.
+                handler.post { closeSystemScreen() }
             }
             true
         }
@@ -570,7 +578,7 @@ class GuardService : AccessibilityService() {
         if (pkg.contains("vpndialogs")) {
             // Si aún no hay permiso de VPN, el diálogo es el de pedirlo y hay que dejarlo pasar.
             // Con permiso, cualquier diálogo que nombre a la app es el de "Desconectar".
-            if (Status.isVpnPermitted(this) && scan(root).ours) block(countIt = false)
+            if (Status.isVpnPermitted(this) && scan(root).ours) closeSystemScreen()
             return
         }
         if (pkg.contains("packageinstaller")) {
@@ -578,7 +586,7 @@ class GuardService : AccessibilityService() {
             // aquí y la pantalla nombra a la app: no es motivo para cerrarla, o nunca se podría
             // actualizar. Sólo se cierra si además ofrece algo de la lista de peligros; la de
             // desinstalar sí la lleva ("desinstalar"/"uninstall") y sigue bloqueada.
-            if (scan(root).dangerous) block(countIt = false)
+            if (scan(root).dangerous) closeSystemScreen()
             return
         }
         // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
@@ -588,12 +596,12 @@ class GuardService : AccessibilityService() {
             // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
             // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
             if (Store.inGrace() && !seen.dangerous) return
-            block(countIt = false)
+            closeSystemScreen()
             return
         }
         // Con DNS privado estricto los navegadores quedan cerrados (ver check); hay que
         // dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
-        if (seen.privateDns && !Status.isPrivateDnsStrict(this)) block(countIt = false)
+        if (seen.privateDns && !Status.isPrivateDnsStrict(this)) closeSystemScreen()
     }
 
     // --- Autoencendido (apps de seguridad del fabricante) -----------------------------
@@ -633,7 +641,7 @@ class GuardService : AccessibilityService() {
         if (Store.isLocked(this)) {
             if (seen.ours) oursSeenAt = SystemClock.elapsedRealtime()
             if (seen.autostartList || (seen.ours && seen.uninstall) || isStopConfirmation(seen)) {
-                block(countIt = false)
+                closeSystemScreen()
                 return true
             }
             // Ya cargó y no es peligrosa: fuera la capa. Si nombra a la app (una lista del
@@ -770,6 +778,22 @@ class GuardService : AccessibilityService() {
         return Seen(ours, dangerous, privateDns, uninstall, title && toggle, texts)
     }
 
+    /** Hasta cuándo Ajustes y la app de Seguridad se cierran nada más abrirse. */
+    private var lockoutUntil = Long.MIN_VALUE / 2
+
+    /**
+     * Cierra una pantalla del sistema por ser peligrosa, y lo toma como un intento: durante
+     * [LOCKOUT_MS] (que cada intento renueva) Ajustes, el instalador y la app de Seguridad del
+     * fabricante se cierran en cuanto se abren, sin esperar a leerlos. Leer una pantalla tarda, y
+     * tocando muchas veces seguidas alguna vez se llegaba al botón antes que el guardián.
+     */
+    private fun closeSystemScreen() {
+        lockoutUntil = SystemClock.elapsedRealtime() + LOCKOUT_MS
+        block(countIt = false)
+    }
+
+    private fun inLockout() = SystemClock.elapsedRealtime() < lockoutUntil
+
     private fun block(countIt: Boolean) {
         // Atrás primero: cierra un diálogo de confirmación que esté abierto; luego al inicio.
         performGlobalAction(GLOBAL_ACTION_BACK)
@@ -793,6 +817,8 @@ class GuardService : AccessibilityService() {
 
         /** El mismo sondeo con la pantalla apagada: sólo para enterarse de que se encendió. */
         const val BROWSER_IDLE_POLL_MS = 10_000L
+        /** Tras un intento de abrir algo peligroso, cuánto tiempo se cierran Ajustes y Seguridad. */
+        const val LOCKOUT_MS = 30_000L
         const val VENDOR_RETRY_MS = 150L
         const val VENDOR_ATTEMPTS = 10
 
