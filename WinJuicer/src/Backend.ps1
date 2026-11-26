@@ -954,6 +954,116 @@ function Set-WinNvSetting {
     try { [WinJuicer.NvDrs]::SetDword($Exe, $Id, $(if ($null -ne $Value) { [long]$Value } else { -1 })) } catch { throw (Get-WinNvApiFailure $_) }
 }
 
+# The drivers Laptop.ps1 judges by age: display, network and system devices, with the date
+# Windows has on record for each (Win32_PnPSignedDriver). Slow (a few seconds), so only the
+# diagnosis asks. Date is $null when Windows has none.
+function Get-WinPnpDrivers {
+    , @(Get-CimInstance Win32_PnPSignedDriver -ErrorAction Stop | Where-Object { $_.DeviceClass -in 'DISPLAY', 'NET', 'SYSTEM' } | ForEach-Object {
+            @{
+                Class = [string]$_.DeviceClass; Name = [string]$_.DeviceName; Manufacturer = [string]$_.Manufacturer
+                Provider = [string]$_.DriverProviderName; Version = [string]$_.DriverVersion
+                Date = $(if ($_.DriverDate) { [datetime]$_.DriverDate } else { $null })
+            }
+        })
+}
+
+# Memory compression (Get-MMAgent) and how much of the commit limit (RAM plus paging file) is
+# promised, in %: the «% Committed Bytes In Use» counter, read from its WMI class so that it
+# does not depend on the language of Windows (the counter path is translated). Each part is
+# $null when it cannot be read.
+function Get-WinMemoryState {
+    $s = @{ Compression = $null; CommitPct = $null }
+    try { $s.Compression = [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression } catch { Write-Verbose "Sin compresión de memoria: $_" }
+    try {
+        $p = Get-CimInstance Win32_PerfFormattedData_PerfOS_Memory -ErrorAction Stop | Select-Object -First 1
+        if ($p) { $s.CommitPct = [double]$p.PercentCommittedBytesInUse }
+    } catch { Write-Verbose "Sin memoria comprometida: $_" }
+    $s
+}
+
+# Milliseconds from asking for a new File Explorer window on a throwaway folder until the
+# window exists (found through Shell.Application by that folder's unique name), then the
+# window is closed. $null when it never showed up.
+function Measure-WinExplorerWindow {
+    $dir = Join-Path ([IO.Path]::GetTempPath()) ('wjmedida-' + [guid]::NewGuid().ToString('N'))
+    $leaf = Split-Path -Leaf $dir
+    $shell = $null
+    try {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        $shell = New-Object -ComObject Shell.Application
+        $found = $null
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        Start-Process -FilePath 'explorer.exe' -ArgumentList ('/n,"{0}"' -f $dir)
+        while (-not $found -and $sw.ElapsedMilliseconds -lt 10000) {
+            foreach ($w in @($shell.Windows())) {
+                try { if ([string]$w.LocationURL -like "*$leaf*") { $found = $w; break } } catch { Write-Verbose "Ventana ilegible: $_" }
+            }
+            if (-not $found) { Start-Sleep -Milliseconds 20 }
+        }
+        $sw.Stop()
+        if (-not $found) { return $null }
+        $ms = [int]$sw.ElapsedMilliseconds
+        try { $found.Quit() } catch { Write-Verbose "No se pudo cerrar la ventana: $_" }
+        $ms
+    } catch {
+        Write-Verbose "Sin medida del Explorador: $_"
+        $null
+    } finally {
+        if ($shell) { [void][Runtime.InteropServices.Marshal]::ReleaseComObject($shell) }
+        Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+# Milliseconds from starting notepad.exe until it has a window, which is then closed. $null
+# when it never got one (the new Notepad of Windows 11 hands over to another process).
+function Measure-WinNotepadWindow {
+    $p = $null
+    try {
+        $sw = [Diagnostics.Stopwatch]::StartNew()
+        $p = Start-Process -FilePath 'notepad.exe' -PassThru
+        while ($sw.ElapsedMilliseconds -lt 10000) {
+            $p.Refresh()
+            if ($p.HasExited) { return $null }
+            if ($p.MainWindowHandle -ne [IntPtr]::Zero) { break }
+            Start-Sleep -Milliseconds 10
+        }
+        $sw.Stop()
+        if ($p.MainWindowHandle -eq [IntPtr]::Zero) { return $null }
+        [int]$sw.ElapsedMilliseconds
+    } catch {
+        Write-Verbose "Sin medida del Bloc de notas: $_"
+        $null
+    } finally {
+        if ($p) {
+            try {
+                if (-not $p.HasExited) {
+                    [void]$p.CloseMainWindow()
+                    if (-not $p.WaitForExit(3000)) { $p.Kill() }
+                }
+            } catch { Write-Verbose "No se pudo cerrar el Bloc de notas: $_" }
+            $p.Dispose()
+        }
+    }
+}
+
+# The small repeatable test of Antes y después: three runs of each, the median of what came
+# out (two good runs at least). @{ ExplorerMs; NotepadMs }, each $null when not measured.
+# It opens and closes real windows for a few seconds, so only a session with a desktop does it.
+function Measure-WinResponsiveness {
+    $result = @{ ExplorerMs = $null; NotepadMs = $null }
+    if (-not [Environment]::UserInteractive) { return $result }
+    $explorer = @(); $notepad = @()
+    foreach ($i in 1..3) {
+        $ms = Measure-WinExplorerWindow
+        if ($null -ne $ms) { $explorer += $ms }
+        $ms = Measure-WinNotepadWindow
+        if ($null -ne $ms) { $notepad += $ms }
+    }
+    if ($explorer.Count -ge 2) { $result.ExplorerMs = Get-JuicerMedian $explorer }
+    if ($notepad.Count -ge 2) { $result.NotepadMs = Get-JuicerMedian $notepad }
+    $result
+}
+
 function New-JuicerWindowsBackend {
     @{
         Name         = 'Windows'
@@ -982,6 +1092,9 @@ function New-JuicerWindowsBackend {
         AppxAdd      = ${function:Add-WinAppx}
         NetAdapters  = ${function:Get-WinNetAdapters}
         PowerStatus  = ${function:Get-WinPowerStatus}
+        Drivers      = ${function:Get-WinPnpDrivers}
+        MemoryState  = ${function:Get-WinMemoryState}
+        Responsiveness = ${function:Measure-WinResponsiveness}
         PowerModeGet = { Initialize-JuicerNative; [WinJuicer.Native]::GetPowerMode() }
         PowerModeSet = { param([string]$Scheme) Initialize-JuicerNative; [WinJuicer.Native]::SetPowerMode($Scheme) }
         DnsSet       = ${function:Set-WinDns}
@@ -1059,6 +1172,9 @@ function New-JuicerMemoryBackend {
         FpsEngines = $null  # engines the PC has; null = just FpsBackend
         Pacer = @{ RtssInstalled = $false; RtssRunning = $false; RtssGlobal = 0; RtssGames = @{}; NvGlobal = 0; NvVrrMode = -1; NvShaderCache = -1; NvShaderCacheMb = -1 }
         PowerMode = '00000000-0000-0000-0000-000000000000'   # the «Power mode» overlay (all zeros = none, i.e. Balanced)
+        Drivers  = New-Object System.Collections.ArrayList   # @{ Class; Name; Manufacturer; Provider; Version; Date }
+        MemoryState = @{ Compression = $null; CommitPct = $null }   # what MemoryState answers
+        Responsiveness = $null   # what Responsiveness answers: @{ ExplorerMs; NotepadMs }, null = not measured
         Power    = $null   # what PowerStatus answers (see ConvertFrom-JuicerPowerStatus); null = unreadable, the WMI fallback applies
         Audio    = $null   # the default output, as ConvertTo-JuicerAudioInfo gives it; null = no device
         AudioHelper = @{ Installed = $false; Running = $false }   # the low-latency task and its script
@@ -1227,6 +1343,9 @@ function New-JuicerMemoryBackend {
         ProcRunning = { param($Exe) $script:Mem.Running -contains (ConvertTo-JuicerExeName $Exe) }
         AppIncidents = { param($Since) , @($script:Mem.Incidents | Where-Object { [datetime]$_.Time -ge $Since }) }
         PowerStatus = { $script:Mem.Power }
+        Drivers     = { , @($script:Mem.Drivers) }
+        MemoryState = { $script:Mem.MemoryState }
+        Responsiveness = { $script:Mem.Responsiveness }
         PowerModeGet = { $script:Mem.PowerMode }
         PowerModeSet = { param([string]$Scheme) [void]$script:Mem.Calls.Add("powermode $Scheme"); $script:Mem.PowerMode = $Scheme }
         AudioInfo   = { $script:Mem.Audio }

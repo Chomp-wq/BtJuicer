@@ -4,7 +4,7 @@
 $script:ModuleRoot = $PSScriptRoot
 
 foreach ($file in 'Backend', 'Engine', 'Catalog', 'Native', 'Audio', 'Hardware', 'Audit', 'Tuning', 'Advisor', 'Startup', 'Games', 'Library', 'Covers', 'GameTips', 'Frames', 'Monitor', 'Limiter', 'FineTune', 'Upkeep', 'Safety', 'Shield',
-    'Debloat', 'Network', 'Apps', 'Config', 'Measure', 'Version', 'Maintenance', 'Console', 'Gui') {
+    'Debloat', 'Network', 'Apps', 'Config', 'Laptop', 'Measure', 'Version', 'Maintenance', 'Console', 'Gui') {
     $path = Join-Path (Join-Path $PSScriptRoot 'src') "$file.ps1"
     if (Test-Path -LiteralPath $path) { . $path }
 }

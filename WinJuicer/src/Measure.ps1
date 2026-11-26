@@ -3,7 +3,12 @@
 # anything is applied for the first time) and every later one is compared
 # with it. Boot time comes from Windows' own record of each boot, so it only
 # changes after a restart; memory and processes depend on what is open, so
-# they compare fairly only when both were measured the same way.
+# they compare fairly only when both were measured the same way. On a laptop it
+# also keeps the battery's health and the last resume from sleep, and every
+# explicit measurement times how fast the desktop answers (a File Explorer window
+# and Notepad, three runs each, the median): that one is only compared between
+# measurements taken on the same power source, because a laptop on battery
+# runs slower by design.
 
 function Get-JuicerMetricsPath { Join-Path (Get-JuicerHome) 'medidas.json' }
 
@@ -17,8 +22,10 @@ function Get-JuicerLastBoot {
     @{ Total = [int]$data.BootTime; Main = [int]$data.MainPathBootTime; Post = [int]$data.BootPostBootTime; When = $e[0].TimeCreated }
 }
 
+# Responsiveness opens and closes real windows for a few seconds, so only the measurements the
+# person asks for do it (not the one taken silently before the first change).
 function Get-JuicerMetrics {
-    param([string]$Label = 'Medida')
+    param([string]$Label = 'Medida', [switch]$Responsiveness)
     $m = @{ Date = (Get-Date).ToString('s'); Label = $Label }
     if (-not (Test-JuicerWindows)) { return $m }
     try {
@@ -37,6 +44,16 @@ function Get-JuicerMetrics {
         $hb = Read-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled'
         if ($null -ne $hb -and $null -ne $hb.Value) { $m.FastStartup = ([int]$hb.Value -ne 0) }
     } catch { Write-Verbose "Sin inicio rápido: $_" }
+    try { $m.PowerSource = Get-JuicerPowerSource } catch { Write-Verbose "Sin fuente de energía: $_" }
+    $lap = Get-JuicerLaptopMetrics
+    foreach ($k in @($lap.Keys)) { $m[$k] = $lap[$k] }
+    if ($Responsiveness) {
+        $resp = Invoke-JuicerResponsiveness
+        if ($resp) {
+            if ($null -ne $resp.ExplorerMs) { $m.ExplorerMs = [int]$resp.ExplorerMs }
+            if ($null -ne $resp.NotepadMs) { $m.NotepadMs = [int]$resp.NotepadMs }
+        }
+    }
     $m.Processes = @(Get-Process -ErrorAction SilentlyContinue).Count
     $m.Services = @(Get-Service -ErrorAction SilentlyContinue | Where-Object { $_.Status -eq 'Running' }).Count
     try { $m.Startup = @(Get-JuicerStartupItems | Where-Object { $_.Enabled }).Count } catch { Write-Verbose "Sin inicio: $_" }
@@ -78,6 +95,8 @@ function Format-JuicerMetricValue {
     param([double]$Value, [string]$Unit)
     switch ($Unit) {
         's' { '{0:N1} s' -f ($Value / 1000) }
+        'ms' { '{0:N0} ms' -f $Value }
+        '%' { '{0:N0} %' -f $Value }
         'B' { Format-JuicerBytes ([int64][Math]::Abs($Value)) }
         default { '{0:N0}' -f $Value }
     }
@@ -104,9 +123,21 @@ function Compare-JuicerMetrics {
         @{ Key = 'Services'; Name = 'Servicios en marcha'; Unit = ''; Higher = $false; Noise = 0.02 }
         @{ Key = 'RamUsed'; Name = 'Memoria en uso'; Unit = 'B'; Higher = $false; Noise = 0.05 }
         @{ Key = 'DiskFree'; Name = "Espacio libre en $env:SystemDrive"; Unit = 'B'; Higher = $true; Noise = 0.01 }
+        # Desktop responsiveness: only fair on the same power source (Power).
+        @{ Key = 'ExplorerMs'; Name = 'Abrir una ventana del Explorador'; Unit = 'ms'; Higher = $false; Noise = 0.1; Power = $true }
+        @{ Key = 'NotepadMs'; Name = 'Abrir el Bloc de notas'; Unit = 'ms'; Higher = $false; Noise = 0.1; Power = $true }
+        # Laptop: how long the last resume from sleep took (a new event, not the same one) and how worn the battery is.
+        @{ Key = 'ResumeMs'; Name = 'Última reanudación de la suspensión'; Unit = 's'; Higher = $false; Noise = 0.1; Date = 'ResumeDate' }
+        @{ Key = 'BatteryPct'; Name = 'Salud de la batería'; Unit = '%'; Higher = $true; Noise = 0.01 }
     )
+    $sources = @{ AC = 'enchufado'; DC = 'con batería' }
+    $sameSource = $Before.PowerSource -and $After.PowerSource -and ([string]$Before.PowerSource -eq [string]$After.PowerSource)
+    $skippedPower = $false
     foreach ($r in $rows) {
         if ($null -eq $Before[$r.Key] -or $null -eq $After[$r.Key]) { continue }
+        if ($r.Power -and -not $sameSource) { $skippedPower = $true; continue }
+        # The same event is not a new measurement.
+        if ($r.Date -and $Before[$r.Date] -and $After[$r.Date] -and ([datetime]$After[$r.Date]) -eq ([datetime]$Before[$r.Date])) { continue }
         $b = [double]$Before[$r.Key]; $a = [double]$After[$r.Key]
         # PowerShell 7 reads the dates back from JSON as DateTime, 5.1 as text.
         if ($r.Key -eq 'BootMs' -and $Before.BootDate -and $After.BootDate -and ([datetime]$After.BootDate) -eq ([datetime]$Before.BootDate)) {
@@ -121,6 +152,13 @@ function Compare-JuicerMetrics {
         $better = if ($r.Higher) { $a -gt $b } else { $a -lt $b }
         $sev = if ([Math]::Abs($change) -le $r.Noise) { 'Info' } elseif ($better) { 'Ok' } else { 'Bajo' }
         $out += New-JuicerFinding $area $sev ('{0}: {1}' -f $r.Name, (Format-JuicerMetricDelta $b $a $r.Unit))
+    }
+    if ($skippedPower) {
+        $was = if ($sources[[string]$Before.PowerSource]) { $sources[[string]$Before.PowerSource] } else { 'sin saber la fuente de energía' }
+        $now = if ($sources[[string]$After.PowerSource]) { $sources[[string]$After.PowerSource] } else { 'sin saber la fuente de energía' }
+        $out += New-JuicerFinding $area 'Info' 'La fluidez del escritorio no se compara: se midió con otra fuente de energía' "La medida inicial se tomó $was y esta $now. Con batería el portátil rinde menos a propósito, así que el resultado no sería justo. Vuelve a medir $was, o empieza una medida inicial nueva."
+    } elseif ($null -eq $Before.ExplorerMs -and $null -eq $Before.NotepadMs -and ($null -ne $After.ExplorerMs -or $null -ne $After.NotepadMs)) {
+        $out += New-JuicerFinding $area 'Info' 'La medida inicial no incluye la fluidez del escritorio' 'Pulsa «Nueva medida inicial» antes de aplicar ajustes y compárala después: la prueba abre y cierra una ventana del Explorador y el Bloc de notas tres veces cada uno, y guarda la mediana.'
     }
     # Memory and processes right after a boot and hours later are not the same
     # thing to compare.
@@ -139,10 +177,10 @@ function Invoke-JuicerMeasure {
     param([switch]$Reset)
     $list = @(Read-JuicerMetrics)
     $first = $Reset -or $list.Count -eq 0
-    $now = Get-JuicerMetrics $(if ($first) { 'Medida inicial' } else { 'Medida' })
+    $now = Get-JuicerMetrics -Label $(if ($first) { 'Medida inicial' } else { 'Medida' }) -Responsiveness
     if ($first) {
         Save-JuicerMetrics $now -Reset:$Reset
-        return (New-JuicerFinding 'Antes y después' 'Info' 'Medida inicial guardada' 'Aplica los ajustes, reinicia, espera un par de minutos y vuelve a medir: verás cuánto ha cambiado el arranque, los procesos y la memoria.')
+        return (New-JuicerFinding 'Antes y después' 'Info' 'Medida inicial guardada' 'Aplica los ajustes, reinicia, espera un par de minutos y vuelve a medir: verás cuánto ha cambiado el arranque, los procesos y la memoria. En un portátil, mide siempre con la misma fuente de energía (enchufado o con batería).')
     }
     Save-JuicerMetrics $now
     Compare-JuicerMetrics $list[0] $now

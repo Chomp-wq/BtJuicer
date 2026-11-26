@@ -419,7 +419,7 @@ function Get-JuicerGraphicsAudit {
         $gpus = @(Get-CimInstance Win32_VideoController -ErrorAction Stop)
         $real = @($gpus | Where-Object { $_.Name -notmatch $script:VirtualGpuPattern })
         if ($real.Count -eq 0 -and $gpus.Count -gt 0) {
-            $out += New-JuicerFinding 'Gráfica' 'Alto' 'No hay driver de la tarjeta gráfica' 'Windows usa el adaptador básico, sin aceleración. Instala el driver de NVIDIA, AMD o Intel desde su web.'
+            $out += New-JuicerFinding 'Gráfica' 'Alto' 'No hay driver de la tarjeta gráfica' 'Sin driver de gráficos el escritorio va a tirones: Windows usa el adaptador básico (Microsoft Basic Display Adapter), sin aceleración. Instala el driver de NVIDIA, AMD o Intel desde su web, o el que da el fabricante de tu portátil.'
         }
         foreach ($g in $real) {
             $date = $g.DriverDate
@@ -522,6 +522,7 @@ function Get-JuicerStorageAudit {
         $c = Get-CimInstance Win32_LogicalDisk -Filter "DeviceID='$sys'" -ErrorAction Stop
         $pct = 100 * $c.FreeSpace / $c.Size
         $free = '{0} libres de {1} ({2:N0} %)' -f (Format-JuicerBytes $c.FreeSpace), (Format-JuicerBytes $c.Size), $pct
+        $low = $c.FreeSpace -lt 20GB -or $pct -lt 20
         if ($c.FreeSpace -lt 20GB -or $pct -lt 10) {
             $out += New-JuicerFinding 'Disco' 'Alto' "Queda poco espacio en ${sys} $free" 'Un SSD casi lleno escribe mucho más lento, y Windows necesita sitio para la paginación y las actualizaciones. Usa Mantenimiento > Limpieza, o mueve juegos a otra unidad.'
         } elseif ($pct -lt 20) {
@@ -529,6 +530,7 @@ function Get-JuicerStorageAudit {
         } else {
             $out += New-JuicerFinding 'Disco' 'Ok' "${sys} $free"
         }
+        $out += @(Get-JuicerStorageSenseFinding -Low $low -State (Get-JuicerStorageSenseState) -Drive $sys)
     } catch {
         Write-Verbose "Sin espacio libre de ${sys}: $_"
     }
@@ -683,7 +685,7 @@ function Get-JuicerAudit {
         @('Overclock y BIOS', ${function:Get-JuicerTuningAudit}), @('Estabilidad', ${function:Get-JuicerStabilityAudit}),
         @('Gráfica', ${function:Get-JuicerGraphicsAudit}), @('Gráfica', ${function:Get-JuicerGpuTuningAudit}), @('Audio', ${function:Get-JuicerAudioAudit}), @('Combinaciones', ${function:Get-JuicerComboAudit}),
         @('Discos', ${function:Get-JuicerStorageAudit}), @('Red', ${function:Get-JuicerNetworkAudit}),
-        @('Seguridad', ${function:Get-JuicerSecurityAudit}), @('Arranque', ${function:Get-JuicerBootAudit}),
+        @('Seguridad', ${function:Get-JuicerSecurityAudit}), @('Arranque', ${function:Get-JuicerBootAudit}), @('Portátil', ${function:Get-JuicerLaptopAudit}),
         @('Programas', ${function:Get-JuicerSoftwareAudit}), @('Ajuste fino', ${function:Get-JuicerFineTuneAudit}),
         @('Ajustes', ${function:Get-JuicerCatalogAudit})
     )

@@ -439,6 +439,45 @@ function New-JuicerCatalog {
         )
     }
 
+    @{
+        Id = 'energia.hibernar'; Category = 'Energía'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Hibernar tras 3 horas de suspensión con batería'
+        What = 'En el plan de energía activo, pone «Hibernar después de», con batería, en 3 horas. Un portátil suspendido pasa solo a hibernación pasado ese tiempo. Sólo el lado de la batería: enchufado no cambia. No desactiva la hibernación (eso no se hace: se lleva por delante el inicio rápido); al contrario, la necesita activada.'
+        Gain = 'Un portátil suspendido en la mochila gasta batería (más con Modern Standby) y puede encontrarte con la batería a cero tras un fin de semana. Con la hibernación no gasta nada y al abrirlo vuelves a donde estabas.'
+        Cost = 'Si lo abres pasadas esas 3 horas, tarda unos segundos más en volver, porque lee el archivo de hibernación. Aplica sólo al plan activo ahora; si cambias de plan, ese tiene su propio valor.'
+        Skip = {
+            if (-not (Test-JuicerLaptop)) { return 'Sólo para portátiles: un equipo de sobremesa no tiene batería que se vacíe en la mochila.' }
+            if (-not (Test-JuicerHibernateAvailable)) { return 'La hibernación no está disponible o está desactivada en este equipo (el ajuste «Inicio rápido» la activa), así que no hay a qué pasar tras unas horas.' }
+            if ($null -eq (Get-JuicerHibernateIdle)) { return 'No se pudo leer el tiempo de hibernación del plan de energía activo.' }
+        }
+        Actions = @(
+            @{
+                Type = 'Custom'; Key = 'idle'; Label = 'Hibernar tras 3 horas de suspensión con batería'
+                Test = { $v = Get-JuicerHibernateIdle; $null -ne $v -and $v -gt 0 -and $v -le $script:HibernateIdleSeconds }
+                Capture = {
+                    $v = Get-JuicerHibernateIdle
+                    if ($null -eq $v) { throw 'No se pudo leer el tiempo de hibernación del plan de energía activo.' }
+                    @{ Plan = (Get-JuicerActivePlan); Dc = [int64]$v }
+                }
+                Apply = {
+                    param($s)
+                    $r = Invoke-JuicerNative 'powercfg.exe' @('/setdcvalueindex', $s.Plan, $script:SubSleepGuid, $script:HibernateIdleGuid, [string]$script:HibernateIdleSeconds)
+                    if ($r.Code -ne 0) { throw "powercfg no aceptó el tiempo de hibernación: $($r.Output)" }
+                    # Without activating the plan again, Windows keeps the old value until the next change.
+                    [void](Invoke-JuicerNative 'powercfg.exe' @('/setactive', $s.Plan))
+                }
+                Restore = {
+                    param($s)
+                    # The plan may be gone (undoing «Plan Win Juicer» deletes it): nothing is left to put back.
+                    if (-not (Test-JuicerPlanExists $s.Plan)) { return }
+                    $r = Invoke-JuicerNative 'powercfg.exe' @('/setdcvalueindex', $s.Plan, $script:SubSleepGuid, $script:HibernateIdleGuid, [string][int64]$s.Dc)
+                    if ($r.Code -ne 0) { throw "powercfg no pudo devolver el tiempo de hibernación: $($r.Output)" }
+                    [void](Invoke-JuicerNative 'powercfg.exe' @('/setactive', $s.Plan))
+                }
+            }
+        )
+    }
+
     # --- Juegos ----------------------------------------------------------
 
     @{
@@ -821,6 +860,21 @@ function New-JuicerCatalog {
         Cost = 'El Sensor de almacenamiento usa esa fecha para borrar descargas que no abres desde hace tiempo y dejará de acertar.'
         Actions = @(
             @{ Type = 'Registry'; Path = $fs; Name = 'NtfsDisableLastAccessUpdate'; Value = 0x80000001L }
+        )
+    }
+
+    @{
+        Id = 'disco.sensor'; Category = 'Disco'; Level = 0; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Activar el Sensor de almacenamiento'
+        What = 'Enciende el Sensor de almacenamiento de Windows (Configuración > Sistema > Almacenamiento) con sus valores por defecto: cuando queda poco espacio en el disco, borra por su cuenta temporales y lo que lleve tiempo en la papelera. Sólo pone el interruptor general; la frecuencia y las demás opciones se quedan como estén.'
+        Gain = 'Un disco casi lleno hace que Windows vaya más lento y que fallen las actualizaciones. El Sensor lo evita sin que tengas que acordarte de limpiar.'
+        Cost = 'Borra archivos por su cuenta. Si además activas en Configuración la limpieza de Descargas, decide por la fecha de último acceso: con «No registrar la fecha de último acceso» (Disco) aplicado, dejará de acertar.'
+        Skip = {
+            $p = Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\StorageSense' 'AllowStorageSenseGlobal'
+            if ($p -and $null -ne $p.Value -and [int]$p.Value -eq 0) { return 'Una directiva del equipo (o de tu organización) desactiva el Sensor de almacenamiento.' }
+        }
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKCU\Software\Microsoft\Windows\CurrentVersion\StorageSense\Parameters\StoragePolicy'; Name = '01'; Value = 1 }
         )
     }
 
