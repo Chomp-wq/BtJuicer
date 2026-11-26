@@ -209,7 +209,9 @@ function ConvertFrom-JuicerLastWake {
             [void]$records.Add($cur)
             continue
         }
-        if ($cur -and $line -match '^\s*[^:]+?\s*:\s*(.*?)\s*$') { [void]$cur.Add([string]$Matches[1]) }
+        # $null, not falsy: a record that has just begun is an empty list, and
+        # an empty list counts as false in PowerShell.
+        if ($null -ne $cur -and $line -match '^\s*[^:]+?\s*:\s*(.*?)\s*$') { [void]$cur.Add([string]$Matches[1]) }
     }
     $names = @()
     foreach ($r in $records) {
@@ -357,7 +359,7 @@ function ConvertFrom-JuicerSleepStates {
             [void]$sections.Add($cur)
             continue
         }
-        if ($cur) { [void]$cur.Add($line) }
+        if ($null -ne $cur) { [void]$cur.Add($line) }
     }
     if ($sections.Count -lt 2) { return $null }
     $tokens = {
@@ -427,7 +429,7 @@ function Test-JuicerHibernateAvailable {
 function Get-JuicerDriverFindings {
     param([object[]]$Drivers = @(), [datetime]$Now = (Get-Date))
     $area = 'Portátil'
-    $months = { param($d) [int][Math]::Floor(($Now - [datetime]$d).TotalDays / 30.4375) }
+    $months = { param($d, $when) [int][Math]::Floor(($when - [datetime]$d).TotalDays / 30.4375) }
     $notMicrosoft = { param($d) ([string]$d.Provider + ' ' + [string]$d.Manufacturer) -notmatch 'Microsoft' }
     $wifi = '(Wi-?Fi|Wireless|WLAN|802\.11|Centrino|\bAX\d{3}\b|\bAC ?\d{4}\b)'
     $virtual = 'Virtual|Miniport|Bluetooth|\bWAN\b|Hyper-V|VPN|TAP-|Wintun|Loopback|Ethernet|Gigabit|Direct'
@@ -435,7 +437,7 @@ function Get-JuicerDriverFindings {
     foreach ($d in @($Drivers | Where-Object { $_ -and $_.Class -eq 'NET' -and $_.Date -and $_.Name -match $wifi -and $_.Name -notmatch $virtual -and (& $notMicrosoft $_) })) {
         if ($seen -contains $d.Name) { continue }
         $seen += $d.Name
-        $m = & $months $d.Date
+        $m = & $months $d.Date $Now
         if ($m -le 36) { continue }
         $where = if (([string]$d.Name + ' ' + [string]$d.Manufacturer) -match 'Intel') { 'la web de Intel: https://www.intel.com/content/www/us/en/support/detect.html' } else { 'la web de soporte de tu portátil o del fabricante del chip (Realtek, MediaTek, Qualcomm…)' }
         New-JuicerFinding $area 'Bajo' ('El driver del Wi-Fi ({0}) tiene más de {1} años (de {2})' -f $d.Name, [int][Math]::Floor([double]$m / 12), ([datetime]$d.Date).ToString('d')) "Los drivers nuevos corrigen desconexiones y reconexiones lentas tras suspender. Descarga el más reciente de $where."
@@ -443,7 +445,7 @@ function Get-JuicerDriverFindings {
     $chip = @($Drivers | Where-Object { $_ -and $_.Class -eq 'SYSTEM' -and $_.Date -and ([string]$_.Manufacturer + ' ' + [string]$_.Provider) -match 'Intel|Advanced Micro Devices|AMD' -and (& $notMicrosoft $_) } | Sort-Object { [datetime]$_.Date } -Descending)
     # The newest of them: a chipset has dozens of small devices and some never change.
     if ($chip.Count -gt 0) {
-        $m = & $months $chip[0].Date
+        $m = & $months $chip[0].Date $Now
         if ($m -gt 36) {
             New-JuicerFinding $area 'Bajo' ('El driver del chipset tiene más de {0} años (de {1})' -f [int][Math]::Floor([double]$m / 12), ([datetime]$chip[0].Date).ToString('d')) 'El del chipset trae el control de energía de la placa (suspensión, ahorro de batería). Descárgalo de la web de soporte de tu portátil, que es donde está el que ha probado el fabricante.'
         }
