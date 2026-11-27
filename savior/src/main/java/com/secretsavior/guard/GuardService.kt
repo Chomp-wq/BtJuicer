@@ -1,6 +1,12 @@
 package com.secretsavior.guard
 
 import android.accessibilityservice.AccessibilityService
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
+import android.content.res.Configuration
+import android.content.res.Resources
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.os.Build
@@ -16,7 +22,11 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Toast
+import androidx.core.content.ContextCompat
 import com.secretsavior.data.Store
+import java.util.Locale
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.Executors
 
 /**
  * El guardián. Hace tres cosas, todas locales:
@@ -30,6 +40,10 @@ import com.secretsavior.data.Store
  *  3. Cierra lo que se escribe si es texto pornográfico.
  *
  * "Cerrar" es mandar al inicio. Nada de lo que ve se guarda ni se envía.
+ *
+ * Reconocer una pantalla no depende del idioma: ver [Labels] (palabras de 27 idiomas y las que
+ * lee de los propios Ajustes), [WinKind] (clase de la ventana) y los ids de las vistas. Qué se
+ * hace con lo reconocido está en [Policy], que no usa Android y se prueba aparte.
  */
 class GuardService : AccessibilityService() {
 
@@ -64,6 +78,9 @@ class GuardService : AccessibilityService() {
     /** Se pide una vez; null si el sistema no lo da (se sondea como con pantalla encendida). */
     private val power by lazy { getSystemService(PowerManager::class.java) }
 
+    /** Hilo para lo que no debe ir en el principal: preguntar por navegadores, leer recursos. */
+    private val bg: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+
     /**
      * En vez de suscribirse a los cambios de contenido del navegador (la web los emite sin
      * parar), se relee la barra de direcciones cada [BROWSER_POLL_MS] (cada [BROWSER_IDLE_POLL_MS] con la pantalla apagada): es una sola consulta.
@@ -72,7 +89,7 @@ class GuardService : AccessibilityService() {
     private val browserPoll = object : Runnable {
         override fun run() {
             val pkg = foreground
-            if (mode != MODE_BROWSER || pkg == null || pkg !in BROWSERS) return
+            if (mode != MODE_BROWSER || pkg == null || !isBrowser(pkg)) return
             // Con la pantalla apagada no llega ningún cambio de ventana y el navegador sigue
             // "delante": no vale la pena una consulta cada 1,5 s mientras la CPU esté despierta.
             val interactive = power?.isInteractive != false
@@ -92,6 +109,9 @@ class GuardService : AccessibilityService() {
         // No se sabe qué hay delante: se empieza mirando todo y el primer cambio de ventana afina.
         mode = -1
         foreground = null
+        refreshLabels()
+        refreshBrowsers()
+        registerPackageReceiver()
         setMode(MODE_WATCH)
         handler.removeCallbacks(tick)
         handler.post(tick)
@@ -103,17 +123,164 @@ class GuardService : AccessibilityService() {
         handler.removeCallbacks(browserPoll)
         handler.removeCallbacks(vendorRecheck)
         handler.removeCallbacks(settingsPass)
+        handler.removeCallbacks(hideCoverSoon)
         hideShields()
+        pkgReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (e: Exception) {
+                // ya no estaba
+            }
+        }
+        pkgReceiver = null
+        try {
+            bg.shutdown()
+        } catch (e: Exception) {
+            // sin hilo auxiliar
+        }
         super.onDestroy()
     }
 
     override fun onInterrupt() = Unit
 
+    /** Cambió el idioma (u otra configuración): las palabras de pantalla son otras. */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        refreshLabels()
+    }
+
+    // --- Idioma y navegadores -----------------------------------------------------------
+
+    /**
+     * Las palabras del idioma actual. Se construye al momento con la tabla incorporada (es poco
+     * trabajo) y luego, en un hilo aparte, con lo que se lee de los recursos de Ajustes y de las
+     * apps del fabricante; un fallo ahí no importa. Mientras tanto vale la primera.
+     */
+    @Volatile
+    private var labels: Labels = Labels.build("es")
+    private var labelsLocale: Locale? = null
+    private var ownLabel: String = "Secret Savior"
+
+    private fun lab(): Labels {
+        val loc = resources.configuration.locales.get(0)
+        if (loc != labelsLocale) refreshLabels()
+        return labels
+    }
+
+    private fun refreshLabels() {
+        val loc = resources.configuration.locales.get(0)
+        labelsLocale = loc
+        ownLabel = try {
+            applicationInfo.loadLabel(packageManager).toString()
+        } catch (e: Exception) {
+            "Secret Savior"
+        }
+        val lang = loc.language
+        val script = loc.script
+        val country = loc.country
+        labels = Labels.build(lang, script, country, null, ownLabel)
+        try {
+            bg.execute {
+                try {
+                    val l = Labels.build(lang, script, country, systemStrings(), ownLabel)
+                    if (labelsLocale == loc) labels = l
+                } catch (e: Exception) {
+                    // se queda con la tabla incorporada
+                }
+            }
+        } catch (e: Exception) {
+            // servicio ya parado
+        }
+    }
+
+    /**
+     * Lee un texto de los recursos de otra app. En Android 11+ hace falta que el manifiesto
+     * declare el paquete en `<queries>`; sin eso devuelve null y se usa sólo la tabla.
+     */
+    private fun systemStrings(): ResLookup {
+        val cache = HashMap<String, Resources?>()
+        return ResLookup { pkg, name ->
+            val res = cache.getOrPut(pkg) {
+                try {
+                    packageManager.getResourcesForApplication(pkg)
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            val id = res?.getIdentifier(name, "string", pkg) ?: 0
+            if (id != 0) res?.getString(id) else null
+        }
+    }
+
+    private fun isBrowser(pkg: String) = pkg in Browsers.all()
+
+    private fun refreshBrowsers() {
+        try {
+            bg.execute { Browsers.refresh(applicationContext) }
+        } catch (e: Exception) {
+            // servicio ya parado
+        }
+    }
+
+    private var pkgReceiver: BroadcastReceiver? = null
+
+    /** Un navegador recién instalado o actualizado tiene que entrar en la lista sin esperar. */
+    private fun registerPackageReceiver() {
+        if (pkgReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                refreshBrowsers()
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_PACKAGE_ADDED).apply {
+            addAction(Intent.ACTION_PACKAGE_REPLACED)
+            addDataScheme("package")
+        }
+        try {
+            ContextCompat.registerReceiver(this, r, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            pkgReceiver = r
+        } catch (e: Exception) {
+            // sin receptor: la lista se refresca al reconectar el servicio
+        }
+    }
+
+    // --- Pequeñas cachés ------------------------------------------------------------------
+
+    private var adminAt = Long.MIN_VALUE / 2
+    private var adminVal = false
+
+    /** Preguntar al DevicePolicyManager es una llamada entre procesos: no en cada evento. */
+    private fun adminActive(): Boolean {
+        val now = SystemClock.elapsedRealtime()
+        if (now - adminAt > ADMIN_CACHE_MS) {
+            adminVal = Status.isAdminActive(this)
+            adminAt = now
+        }
+        return adminVal
+    }
+
+    private var devBlockedVal = false
+
+    /** De ida: una vez cerradas las opciones de desarrollador, ya no se miran las preferencias. */
+    private fun devBlocked(): Boolean {
+        if (!devBlockedVal) devBlockedVal = Store.devOptionsBlocked(this)
+        return devBlockedVal
+    }
+
+    private fun graceKind(): Policy.Grace? = when (Store.grace()) {
+        Store.Grace.BATTERY -> Policy.Grace.BATTERY
+        Store.Grace.AUTOSTART -> Policy.Grace.AUTOSTART
+        Store.Grace.NOTIFICATION_ACCESS -> Policy.Grace.NOTIFICATION_ACCESS
+        Store.Grace.ALWAYS_ON_VPN -> Policy.Grace.ALWAYS_ON_VPN
+        Store.Grace.AUTO_REVOKE -> Policy.Grace.AUTO_REVOKE
+        null -> null
+    }
+
     /** Comprobación periódica: levanta el filtro y avisa si falta algo que sólo el usuario puede dar. */
     private fun patrol() {
         if (!Store.isLocked(this)) return
         val vpnOk = Watchdog.ensure(this)
-        val broken = !vpnOk || !Status.isAdminActive(this)
+        val broken = !vpnOk || !adminActive()
         if (!broken) {
             nags = 0
             return
@@ -150,27 +317,23 @@ class GuardService : AccessibilityService() {
             return
         }
         if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (pkg == SYSTEMUI) {
+                guardSystemUi(event)
+                return
+            }
             // Fuera de Ajustes las capas sobran (el teclado o la barra de notificaciones no cuentan).
             if (!isSettings(pkg) && !isNeutral(pkg)) hideShields()
             noteForeground(pkg)
-            // La lista de Accesibilidad apaga el interruptor ahí mismo, sin pantalla aparte, y
-            // en cuanto se apaga este servicio deja de existir: ya no puede cerrar nada después.
-            // Android anuncia el título de la ventana en el propio evento (lo necesitan los
-            // lectores de pantalla) antes de que la lista llegue a dibujar sus filas, así que es
-            // la única señal que llega a tiempo de cerrarla antes de poder tocar nada dentro. Sin
-            // excepciones aquí, ni la ventana de gracia: una vez bloqueada la app, Accesibilidad
-            // no se vuelve a abrir mientras el guardián siga vivo.
-            if (isSystemSurface(pkg) && isAccessibilityScreen(event)) {
-                closeSystemScreen()
-                return
-            }
-            // Lo mismo con la ficha de la app (la de «Forzar detención» y «Desinstalar»): si el
-            // propio aviso de la ventana ya la nombra, se cierra sin leer nada más. Fuera quedan la
-            // ventana de gracia (las pantallas de batería y autoencendido que se abren desde la app)
-            // y la activación del administrador, que el usuario necesita poder ver.
-            if (isSettings(pkg) && namesUs(event) && !Store.inGrace() && Status.isAdminActive(this)) {
-                closeSystemScreen()
-                return
+            if (isSystemSurface(pkg)) {
+                noteWindowClass(pkg, event)
+                // La lista de Accesibilidad apaga el interruptor ahí mismo, sin pantalla aparte, y
+                // en cuanto se apaga este servicio deja de existir: ya no puede cerrar nada después.
+                // Android anuncia el título y la clase de la ventana en el propio evento (lo necesitan
+                // los lectores de pantalla) antes de que la lista llegue a dibujar sus filas, así que
+                // es la única señal que llega a tiempo de cerrarla antes de poder tocar nada dentro.
+                // Lo mismo con la ficha de la app (la de «Forzar detención» y «Desinstalar») si el
+                // aviso ya la nombra, y con usuarios/segundo espacio y opciones de desarrollador.
+                if (guardWindowEvent(pkg, event)) return
             }
         }
 
@@ -187,14 +350,15 @@ class GuardService : AccessibilityService() {
             onSettingsEvent(event)
             return
         }
-        if (!isSystemSurface(pkg) && pkg !in BROWSERS) return
+        val browser = isBrowser(pkg)
+        if (!isSystemSurface(pkg) && !browser) return
 
         // Cada comprobación recorre la ventana de otra app nodo a nodo, y cada nodo es una
         // consulta a esa app. En Ajustes lo peligroso aparece al abrir una pantalla; después,
         // sólo hay desplazamientos, que no hace falta mirar. Los navegadores sí cambian de
         // dirección sin abrir ventana nueva, y para ellos la comprobación es barata (una consulta).
         val now = SystemClock.elapsedRealtime()
-        if (pkg !in BROWSERS) {
+        if (!browser) {
             if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
                 surfaceOpenedAt = now
             } else if (now - surfaceOpenedAt > SCAN_WINDOW_MS) {
@@ -216,6 +380,66 @@ class GuardService : AccessibilityService() {
     }
 
     /**
+     * Android 13+: el gestor de «aplicaciones activas» (SystemUI) lista las apps con servicios en
+     * primer plano y deja pararlas con un botón; parar éste dejaría el filtro caído. Si el aviso de
+     * esa ventana nombra a la app junto a una palabra de parar, se pulsa «Atrás» y nada más (no se
+     * suscribe a los cambios de SystemUI: la barra de notificaciones cambia sin parar).
+     */
+    private fun guardSystemUi(event: AccessibilityEvent) {
+        if (!adminActive()) return
+        val m = windowTextMask(lab(), event)
+        if (m and Concept.OURS != 0 && m and (Concept.FORCE_STOP or Concept.FORCE_STOP_WEAK) != 0) {
+            performGlobalAction(GLOBAL_ACTION_BACK)
+        }
+    }
+
+    /** Lo que anuncia el evento de una ventana (su título, su descripción), mirado con el autómata. */
+    private fun windowTextMask(l: Labels, event: AccessibilityEvent): Int {
+        var m = l.mask(event.contentDescription)
+        for (t in event.text) m = m or l.mask(t)
+        return m
+    }
+
+    /** Clase de la ventana de Ajustes/fabricante que hay delante, y de qué paquete es. */
+    private var winKind = 0
+    private var winPkg: String? = null
+
+    /**
+     * Se recuerda por ventana: el nombre de la clase no depende del idioma. Un diálogo encima (la
+     * confirmación de «Forzar detención») no borra lo recordado de la pantalla de debajo.
+     */
+    private fun noteWindowClass(pkg: String, event: AccessibilityEvent) {
+        if (pkg != winPkg) {
+            winPkg = pkg
+            winKind = 0
+        }
+        val cls = event.className ?: return
+        val k = WinKind.of(cls)
+        if (k != 0) winKind = k else if (!WinKind.isTransient(cls)) winKind = 0
+    }
+
+    /** Devuelve true si la pantalla se cerró. */
+    private fun guardWindowEvent(pkg: String, event: AccessibilityEvent): Boolean {
+        val l = lab()
+        val settingsLike = isSettings(pkg)
+        val titleMask = windowTextMask(l, event)
+        var usersTitle = false
+        if (settingsLike) for (t in event.text) if (l.isUsersTitle(t)) usersTitle = true
+        val close = Policy.eventClose(
+            settingsLike = settingsLike,
+            titleMask = titleMask,
+            kind = winKind,
+            usersTitle = usersTitle,
+            adminActive = adminActive(),
+            grace = graceKind(),
+            strict = !l.known,
+            devBlocked = devBlocked(),
+        )
+        if (close) closeSystemScreen()
+        return close
+    }
+
+    /**
      * Qué app hay delante. El paquete del evento no basta: el teclado, una burbuja de chat o
      * un diálogo también cambian de ventana sin que cambie la app que se está usando. Se
      * pregunta qué ventana tiene el foco, y sólo cuando el paquete es nuevo.
@@ -229,18 +453,19 @@ class GuardService : AccessibilityService() {
     }
 
     /**
-     * Por defecto Android trae con la raíz hasta 50 nodos más, por si se piden luego. Desde
-     * Android 13 se puede pedir sólo la raíz, y la app de delante trabaja menos.
-     */
-    /**
      * La ventana de la app que hay delante, sin contar las capas de este servicio. No vale
      * preguntar por la "ventana activa": en cuanto se toca una de nuestras capas, Android pasa a
      * considerarla a ella la activa, y el guardián creía que ya no estaba en Ajustes, quitaba
      * todas las capas y no cerraba nada. Un toque en la capa bastaba para desarmarlo. Se recorren
      * las ventanas de arriba abajo y se toma la primera de una app que no sea ésta, ni el teclado
      * ni la barra del sistema.
+     *
+     * Por defecto Android trae con la raíz hasta 50 nodos más, por si se piden luego. Desde
+     * Android 13 se elige: sólo la raíz (para mirar una barra de direcciones) o todo el árbol por
+     * adelantado (para recorrer una pantalla de Ajustes, donde cada nodo suelto es un viaje).
      */
     private fun appRoot(prefetch: Boolean): AccessibilityNodeInfo? {
+        val flags = if (prefetch) PREFETCH else 0
         try {
             for (w in windows) {
                 if (w.type != AccessibilityWindowInfo.TYPE_APPLICATION &&
@@ -248,7 +473,8 @@ class GuardService : AccessibilityService() {
                 ) {
                     continue
                 }
-                val r = w.root ?: continue
+                val r = (if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) w.getRoot(flags) else w.root)
+                    ?: continue
                 val p = r.packageName?.toString() ?: continue
                 if (p == packageName || isNeutral(p)) continue
                 return r
@@ -261,26 +487,21 @@ class GuardService : AccessibilityService() {
     }
 
     private fun activeRoot(prefetch: Boolean): AccessibilityNodeInfo? =
-        if (!prefetch && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            getRootInActiveWindow(0)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            getRootInActiveWindow(if (prefetch) PREFETCH else 0)
         } else {
             rootInActiveWindow
         }
 
     private fun modeFor(pkg: String) = when {
-        pkg in BROWSERS -> MODE_BROWSER
+        isBrowser(pkg) -> MODE_BROWSER
         pkg in SEARCH_APPS || pkg in FEED_APPS -> MODE_TEXT
         isSystemSurface(pkg) -> MODE_WATCH
         else -> MODE_OFF
     }
 
     /** La barra de notificaciones y los teclados: aparecen encima sin cambiar la app de debajo. */
-    private fun isNeutral(pkg: String) = pkg == "com.android.systemui" || NEUTRAL_HINTS.any { pkg.contains(it) }
-
-    private fun isAccessibilityScreen(event: AccessibilityEvent): Boolean {
-        val title = event.text.joinToString(" ").lowercase()
-        return ACCESSIBILITY_TITLES.any { title.contains(it) }
-    }
+    private fun isNeutral(pkg: String) = pkg == SYSTEMUI || NEUTRAL_HINTS.any { pkg.contains(it) }
 
     private fun setMode(newMode: Int) {
         if (mode == newMode) return
@@ -299,7 +520,7 @@ class GuardService : AccessibilityService() {
     private fun onTyped(event: AccessibilityEvent, pkg: String) {
         // Sólo donde se busca contenido. WhatsApp, SMS y el resto de chats quedan fuera: esto
         // protege de lo que se busca, no limita con quién se habla.
-        val wide = pkg in BROWSERS || pkg in SEARCH_APPS
+        val wide = isBrowser(pkg) || pkg in SEARCH_APPS
         if (!wide && pkg !in FEED_APPS) return
         if (event.isPassword) return
         val text = event.text.joinToString(" ")
@@ -307,7 +528,7 @@ class GuardService : AccessibilityService() {
     }
 
     private fun check(pkg: String) {
-        val browser = pkg in BROWSERS
+        val browser = isBrowser(pkg)
         if (browser && !isProtected()) {
             // Sin filtro no hay navegación. Se trae la app para que el usuario lo repare.
             block(countIt = false)
@@ -334,18 +555,32 @@ class GuardService : AccessibilityService() {
      * una capa tapa la pantalla entera, sin consultar nada, y en cuanto se asienta se recolocan
      * las capas sobre las filas y se quita la grande. Desplazar con el dedo sigue funcionando: un
      * gesto ya empezado no lo interrumpe una ventana que aparece encima.
+     *
+     * La capa grande no se quita hasta que un recorrido vea la pantalla cargada (el de una pantalla
+     * a medio cargar ve tan poco que no distingue la ficha de la app de cualquier otra): si ve
+     * demasiado poco se vuelve a mirar cada [PASS_MS], y tope [COVER_MAX_MS] (más para fichas de
+     * app) tras el cual la capa se va siempre.
      */
     private val shields = ArrayList<View>()
     private var cover: View? = null
+    private var coverStartAt = 0L
+    private var coverDeadline = 0L
+    private var coverCooldownUntil = 0L
     private var passQueued = false
     private var passFirstAt = 0L
     private var lastShieldToast = 0L
     private val wm by lazy { getSystemService(WINDOW_SERVICE) as WindowManager }
 
     /** La capa grande nunca se queda puesta: atascada, dejaría el teléfono sin poder tocarse. */
-    private val coverTimeout = Runnable { hideCover() }
+    private val coverTimeout = Runnable {
+        coverCooldownUntil = SystemClock.elapsedRealtime() + COVER_COOLDOWN_MS
+        hideCover()
+    }
 
-    private val settingsPass = Runnable {
+    /** Tras cerrar la pantalla, la capa se queda un instante para tapar el cierre y luego se va. */
+    private val hideCoverSoon = Runnable { hideCover() }
+
+    private val settingsPass: Runnable = Runnable {
         passQueued = false
         val root = appRoot(prefetch = true)
         val pkg = root?.packageName?.toString()
@@ -353,14 +588,27 @@ class GuardService : AccessibilityService() {
             hideShields()
             return@Runnable
         }
-        // Primero se tapan las filas peligrosas (la casilla de Secret Savior en Accesibilidad,
-        // la fila que lleva a Accesibilidad...) y después, si la pantalla ya es peligrosa, se
-        // cierra. Las dos cosas a la vez: si el cierre tarda, el toque ya cae sobre la capa.
-        val seen = scan(root)
-        if (seen.ours) oursSeenAt = SystemClock.elapsedRealtime()
-        placeShields(shieldRects(root, dangerButtons = seen.ours))
+        // Un solo recorrido de la pantalla lo mira todo: qué conceptos hay (para decidir) y qué
+        // nodos son candidatos a taparse (para colocar las capas). Primero se tapan las filas
+        // peligrosas y después, si la pantalla ya es peligrosa, se cierra: si el cierre tarda, el
+        // toque ya cae sobre la capa.
+        val p = analyze(root, collect = true)
+        val now = SystemClock.elapsedRealtime()
+        if (p.mask and Concept.OURS != 0) oursSeenAt = now
+        val v = Policy.decide(policyInput(pkg, p))
+        placeShields(shieldRects(root, p, v))
+        if (v.close) {
+            closeSystemScreen()
+            handler.removeCallbacks(hideCoverSoon)
+            handler.postDelayed(hideCoverSoon, COVER_AFTER_CLOSE_MS)
+            return@Runnable
+        }
+        if (v.keepCover && cover != null && now < coverDeadline) {
+            passQueued = true
+            handler.postDelayed(settingsPass, PASS_MS)
+            return@Runnable
+        }
         hideCover()
-        guardSettingsScreen(seen, vendor = isVendorSurface(pkg))
     }
 
     /**
@@ -369,12 +617,6 @@ class GuardService : AccessibilityService() {
      * nueva: mirándola sólo al abrirse ventanas, el guardián nunca se enteraba.
      */
     private fun isSettings(pkg: String) = pkg.contains(SETTINGS) || isVendorSurface(pkg)
-
-    /** El aviso de la ventana (su título, lo que anuncia a los lectores de pantalla) nombra a esta app. */
-    private fun namesUs(event: AccessibilityEvent): Boolean {
-        val s = (event.text.joinToString(" ") + " " + (event.contentDescription ?: "")).lowercase()
-        return OURS.any { s.contains(it) }
-    }
 
     private fun onSettingsEvent(event: AccessibilityEvent) {
         val now = SystemClock.elapsedRealtime()
@@ -385,7 +627,12 @@ class GuardService : AccessibilityService() {
         val textOnly = event.eventType == AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED &&
             changes != AccessibilityEvent.CONTENT_CHANGE_TYPE_UNDEFINED &&
             changes and AccessibilityEvent.CONTENT_CHANGE_TYPE_SUBTREE == 0
-        if (!textOnly) showCover()
+        if (!textOnly) {
+            showCover(
+                if (winKind and WinKind.APP_DETAILS != 0) COVER_APP_DETAILS_MS else COVER_MAX_MS,
+                fresh = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            )
+        }
         if (!passQueued) {
             passQueued = true
             passFirstAt = now
@@ -397,99 +644,86 @@ class GuardService : AccessibilityService() {
         handler.postDelayed(settingsPass, delay)
     }
 
-    /** Devuelve true si la pantalla se cerró. */
-    private fun guardSettingsScreen(seen: Seen, vendor: Boolean): Boolean {
-        // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
-        if (!Status.isAdminActive(this)) return false
-        if (isStopConfirmation(seen)) {
-            closeSystemScreen()
-            return true
-        }
-        if (vendor) {
-            // En la app de Seguridad las listas del optimizador nombran a la app sin peligro: sólo
-            // se cierran su ficha (forzar detención, desinstalar, borrar datos) y el autoencendido.
-            if (seen.autostartList || (seen.ours && seen.uninstall)) {
-                closeSystemScreen()
-                return true
-            }
-            return false
-        }
-        if (seen.ours) {
-            // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
-            // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
-            if (Store.inGrace() && !seen.dangerous) return false
-            closeSystemScreen()
-            return true
-        }
-        // Con DNS privado estricto los navegadores quedan cerrados (ver check); hay que
-        // dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
-        if (seen.privateDns && !Status.isPrivateDnsStrict(this)) {
-            closeSystemScreen()
-            return true
-        }
-        return false
+    private fun surfaceOf(pkg: String) = when {
+        pkg.contains("vpndialogs") -> Policy.Surface.VPN_DIALOGS
+        pkg.contains("packageinstaller") -> Policy.Surface.INSTALLER
+        isVendorSurface(pkg) -> Policy.Surface.VENDOR
+        pkg.contains(SETTINGS) -> Policy.Surface.SETTINGS
+        else -> Policy.Surface.PERMISSIONS
     }
 
-    /** Cuándo se vio por última vez una pantalla que nombra a esta app (su ficha, su fila). */
-    private var oursSeenAt = Long.MIN_VALUE / 2
+    private fun policyInput(pkg: String, p: Pass): Policy.Input {
+        val surface = surfaceOf(pkg)
+        val kind = if (pkg == winPkg) winKind else 0
+        return Policy.Input(
+            surface = surface,
+            mask = p.mask,
+            kind = kind,
+            dangerId = p.dangerId,
+            texts = p.texts,
+            autostartList = (p.mask and Concept.AUTOSTART != 0 && p.toggle) || kind and WinKind.AUTOSTART != 0,
+            strict = !lab().known,
+            grace = graceKind(),
+            adminActive = adminActive(),
+            privateDnsStrict = p.mask and Concept.PRIVATE_DNS_EDITOR != 0 && Status.isPrivateDnsStrict(this),
+            vpnPermitted = surface == Policy.Surface.VPN_DIALOGS && Status.isVpnPermitted(this),
+            devBlocked = devBlocked(),
+            recentOurs = SystemClock.elapsedRealtime() - oursSeenAt < CONFIRM_WINDOW_MS,
+            secondSpaceSurface = pkg.contains("securitycore"),
+        )
+    }
 
     /**
-     * El diálogo de confirmación de «Forzar detención» (o desinstalar, o borrar datos) no nombra a
-     * la app: sólo pregunta. Si aparece poco después de una pantalla que sí la nombraba, es el de
+     * Cuándo se vio por última vez una pantalla que nombra a esta app (su ficha, su fila). El
+     * diálogo de confirmación de «Forzar detención» (o desinstalar, o borrar datos) no nombra a la
+     * app: sólo pregunta. Si aparece poco después de una pantalla que sí la nombraba, es el de
      * esta app, y se cierra. Forzar la detención es irreversible para la protección: Android saca
      * la app de Accesibilidad, cancela sus alarmas y no le deja volver a arrancar sola.
      */
-    private fun isStopConfirmation(seen: Seen): Boolean =
-        !seen.ours && seen.uninstall && seen.texts <= DIALOG_MAX_TEXTS &&
-            SystemClock.elapsedRealtime() - oursSeenAt < CONFIRM_WINDOW_MS
+    private var oursSeenAt = Long.MIN_VALUE / 2
 
     /** Dónde están, en pantalla, las filas que hay que tapar. */
-    private fun shieldRects(root: AccessibilityNodeInfo, dangerButtons: Boolean): List<Rect> {
-        val words = if (dangerButtons) SHIELD_WORDS + UNINSTALL + ADMIN_OFF else SHIELD_WORDS
+    private fun shieldRects(root: AccessibilityNodeInfo, p: Pass, v: Policy.Verdict): List<Rect> {
+        if (p.cands.isEmpty()) return emptyList()
         val screen = Rect().also { root.getBoundsInScreen(it) }
         val maxRow = maxOf(screen.height() / 4, dp(48))
         val out = ArrayList<Rect>()
-        var budget = MAX_SHIELD_NODES
-        val stack = ArrayDeque<AccessibilityNodeInfo>()
-        stack.add(root)
-        while (stack.isNotEmpty() && budget-- > 0) {
-            val n = stack.removeLast()
-            for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
-            if (n.isEditable) continue // el cuadro de búsqueda: tapado no se podría ni corregir
-            val text = n.text
-            val desc = n.contentDescription
-            if (text == null && desc == null) continue
-            val s = "${text ?: ""} ${desc ?: ""}".lowercase()
-            if (words.none { s.contains(it) }) continue
+        for (c in p.cands) {
+            val hit = c.mask and v.shield != 0 ||
+                (v.shieldOurs && c.mask and Concept.OURS != 0) ||
+                (v.shieldIds && c.mask and Concept.DANGER_ID != 0)
+            if (!hit) continue
+            val n = c.node
             // Se tapa la fila entera: el primer antepasado pulsable que no sea media pantalla.
             var row: AccessibilityNodeInfo = n
-            var p: AccessibilityNodeInfo? = n
+            var anc: AccessibilityNodeInfo? = n
             repeat(6) {
-                val cur = p ?: return@repeat
+                val cur = anc ?: return@repeat
                 if (cur.isClickable) {
                     row = cur
                     return@repeat
                 }
-                p = cur.parent
+                anc = cur.parent
             }
             val r = Rect().also { row.getBoundsInScreen(it) }
             if (r.height() > maxRow) n.getBoundsInScreen(r)
             if (r.isEmpty) continue
             r.inset(-dp(6), -dp(6))
-            out += r
+            if (out.none { it == r }) out += r
             // La casilla de esta app (en Accesibilidad, en autoinicio...): aunque el interruptor
             // no esté dentro de la misma fila pulsable que el nombre, se tapa también el bloque
             // que contiene a los dos.
-            if (OURS.any { s.contains(it) }) {
+            if (v.shieldOurs && c.mask and Concept.OURS != 0) {
                 rowOf(n)?.let { (block, sw) ->
                     val b = Rect().also { block.getBoundsInScreen(it) }
                     if (b.isEmpty || b.height() > maxRow) b.set(Rect().also { sw.getBoundsInScreen(it) })
                     if (!b.isEmpty) {
                         b.inset(-dp(8), -dp(8))
-                        out += b
+                        if (out.none { it == b }) out += b
                     }
                 }
             }
+            if (out.size >= MAX_SHIELDS) break
         }
         return out
     }
@@ -545,14 +779,31 @@ class GuardService : AccessibilityService() {
         }
     }
 
-    private fun showCover() {
-        if (cover != null) return
+    /**
+     * [fresh]: una ventana nueva. Pasado el tope de la capa, los cambios de contenido de la misma
+     * pantalla no la vuelven a poner enseguida (una animación sin fin la dejaría puesta siempre).
+     */
+    private fun showCover(maxMs: Long, fresh: Boolean) {
+        val now = SystemClock.elapsedRealtime()
+        if (cover != null) {
+            // Sólo se alarga el tope hasta el que corresponde a la clase de pantalla, contado
+            // desde que se puso la capa: nunca se renueva con cada evento.
+            if (coverStartAt + maxMs > coverDeadline) {
+                coverDeadline = coverStartAt + maxMs
+                handler.removeCallbacks(coverTimeout)
+                handler.postDelayed(coverTimeout, maxOf(0L, coverDeadline - now))
+            }
+            return
+        }
+        if (!fresh && now < coverCooldownUntil) return
         try {
             val v = newShield(tellUser = false)
             wm.addView(v, shieldParams(null))
             cover = v
+            coverStartAt = now
+            coverDeadline = now + maxMs
             handler.removeCallbacks(coverTimeout)
-            handler.postDelayed(coverTimeout, COVER_MAX_MS)
+            handler.postDelayed(coverTimeout, maxMs)
         } catch (e: Exception) {
             // sin capa grande: quedan las de las filas y el cierre de siempre
         }
@@ -587,40 +838,12 @@ class GuardService : AccessibilityService() {
 
     // --- 1. Pantallas del sistema ---------------------------------------------------
 
+    /** Instalador, diálogos de VPN y permisos: sin capas, sólo se lee y se cierra. */
     private fun guardSystemScreen(pkg: String, root: AccessibilityNodeInfo) {
-        if (isVendorSurface(pkg)) {
-            // Que la lista de apps del optimizador nombre a Secret Savior no es motivo para
-            // cerrarlo: sólo la ficha de desinstalar/parar y la pantalla de autoencendido.
-            watchVendorScreen()
-            return
-        }
-        if (pkg.contains("vpndialogs")) {
-            // Si aún no hay permiso de VPN, el diálogo es el de pedirlo y hay que dejarlo pasar.
-            // Con permiso, cualquier diálogo que nombre a la app es el de "Desconectar".
-            if (Status.isVpnPermitted(this) && scan(root).ours) closeSystemScreen()
-            return
-        }
-        if (pkg.contains("packageinstaller")) {
-            // Instalar una actualización (el APK nuevo, bajado a mano o por Play Store) pasa por
-            // aquí y la pantalla nombra a la app: no es motivo para cerrarla, o nunca se podría
-            // actualizar. Sólo se cierra si además ofrece algo de la lista de peligros; la de
-            // desinstalar sí la lleva ("desinstalar"/"uninstall") y sigue bloqueada.
-            if (scan(root).dangerous) closeSystemScreen()
-            return
-        }
-        // Sin administrador activo el usuario necesita llegar a la pantalla de activarlo.
-        if (!Status.isAdminActive(this)) return
-        val seen = scan(root)
-        if (seen.ours) {
-            // Tras pulsar «excluir de batería»/«autoinicio» en la app: dejar esas pantallas,
-            // pero nunca las que ofrecen desinstalar, parar, administrar o desconectar.
-            if (Store.inGrace() && !seen.dangerous) return
-            closeSystemScreen()
-            return
-        }
-        // Con DNS privado estricto los navegadores quedan cerrados (ver check); hay que
-        // dejar llegar al editor para quitarlo, o se quedarían cerrados para siempre.
-        if (seen.privateDns && !Status.isPrivateDnsStrict(this)) closeSystemScreen()
+        if (isSettings(pkg)) return // Ajustes y el fabricante los lleva settingsPass
+        val p = analyze(root, collect = false)
+        val v = Policy.decide(policyInput(pkg, p))
+        if (v.close) closeSystemScreen()
     }
 
     // --- Autoencendido (apps de seguridad del fabricante) -----------------------------
@@ -629,9 +852,10 @@ class GuardService : AccessibilityService() {
      * En Xiaomi apagar el autoencendido de una app la detiene a la fuerza y Android desactiva
      * entonces su accesibilidad: no hay forma de reencenderlo después, y tapar el interruptor
      * pierde la carrera contra quien toca rápido (la lista se reordena con una animación). Por
-     * eso, con el bloqueo activo, la pantalla de autoencendido se cierra entera, y se
-     * habilita antes, en la configuración inicial. Se mira sólo al abrir una pantalla nueva
-     * y unas veces más mientras carga la lista: nunca mientras el optimizador trabaja.
+     * eso, con el bloqueo activo, la pantalla de autoencendido se cierra entera (lo decide
+     * [Policy]), y se habilita antes, en la configuración inicial. Aquí, sin bloqueo, sólo se
+     * observa si el usuario la abre y Secret Savior está activado: es lo que exige la
+     * configuración inicial. Se mira al abrir una pantalla nueva y unas veces más mientras carga.
      */
     private var vendorAttempts = 0
     private var vendorQueued = false
@@ -656,24 +880,11 @@ class GuardService : AccessibilityService() {
         val root = appRoot(prefetch = true) ?: return false
         val pkg = root.packageName?.toString() ?: return false
         if (!isVendorSurface(pkg)) return true
-        val seen = scan(root)
-        if (Store.isLocked(this)) {
-            if (seen.ours) oursSeenAt = SystemClock.elapsedRealtime()
-            if (seen.autostartList || (seen.ours && seen.uninstall) || isStopConfirmation(seen)) {
-                closeSystemScreen()
-                return true
-            }
-            // Ya cargó y no es peligrosa: fuera la capa. Si nombra a la app (una lista del
-            // optimizador, o su ficha a medio cargar) se sigue mirando unas veces más.
-            if (seen.texts >= LOADED_TEXTS) {
-                hideCover()
-                return !seen.ours
-            }
-            return false
-        }
-        // Aún sin bloquear: sólo observar. Si el usuario abre la pantalla de autoencendido y
-        // Secret Savior está activado, se anota; es lo que exige la configuración inicial.
-        if (seen.autostartList && autostartOn(root)) {
+        if (Store.isLocked(this)) return true // de aquí en adelante lo lleva settingsPass
+        val p = analyze(root, collect = false)
+        val kind = if (pkg == winPkg) winKind else 0
+        val autostartList = (p.mask and Concept.AUTOSTART != 0 && p.toggle) || kind and WinKind.AUTOSTART != 0
+        if (autostartList && autostartOn(root)) {
             Store.setAutostartSeen(this)
             return true
         }
@@ -681,7 +892,7 @@ class GuardService : AccessibilityService() {
     }
 
     private fun autostartOn(root: AccessibilityNodeInfo): Boolean =
-        root.findAccessibilityNodeInfosByText("Secret Savior").any { rowOf(it)?.second?.isChecked == true }
+        root.findAccessibilityNodeInfosByText(ownLabel).any { rowOf(it)?.second?.isChecked == true }
 
     /** La fila (el ancestro más bajo con algún interruptor) y su interruptor. */
     private fun rowOf(label: AccessibilityNodeInfo): Pair<AccessibilityNodeInfo, AccessibilityNodeInfo>? {
@@ -694,8 +905,12 @@ class GuardService : AccessibilityService() {
         return null
     }
 
-    private fun isSwitch(n: AccessibilityNodeInfo): Boolean =
-        n.isCheckable || SWITCH_CLASSES.any { n.className?.toString()?.lowercase()?.contains(it) == true }
+    private fun isSwitch(n: AccessibilityNodeInfo): Boolean {
+        if (n.isCheckable) return true
+        val cls = n.className ?: return false
+        for (s in SWITCH_CLASSES) if (Labels.containsIc(cls, s)) return true
+        return false
+    }
 
     private fun firstCheckable(root: AccessibilityNodeInfo): AccessibilityNodeInfo? {
         var budget = 80
@@ -728,7 +943,8 @@ class GuardService : AccessibilityService() {
     /**
      * La barra de direcciones se pide por su id: una sola consulta que resuelve la propia
      * app, en vez de recorrer cientos de nodos. El id de cada navegador se averigua una vez.
-     * Para uno desconocido no se recorre nada: el filtro DNS ya lo cubre.
+     * Para uno desconocido, cuyo id no está en la lista, se hace una búsqueda acotada
+     * (≤ [GENERIC_URL_NODES] nodos, como mucho una vez cada [RETRY_ID_MS]).
      */
     private fun urlBarText(pkg: String, root: AccessibilityNodeInfo): String? {
         urlBarIds[pkg]?.let { return textOf(root, it) }
@@ -741,7 +957,25 @@ class GuardService : AccessibilityService() {
                 return textOf(root, id)
             }
         }
+        genericUrlBarId(root)?.let { id ->
+            urlBarIds[pkg] = id
+            return textOf(root, id)
+        }
         urlBarMisses[pkg] = now
+        return null
+    }
+
+    /** El primer nodo con texto (o editable) cuyo id parece de barra de direcciones. */
+    private fun genericUrlBarId(root: AccessibilityNodeInfo): String? {
+        var budget = GENERIC_URL_NODES
+        val stack = ArrayDeque<AccessibilityNodeInfo>()
+        stack.add(root)
+        while (stack.isNotEmpty() && budget-- > 0) {
+            val n = stack.removeLast()
+            val id = n.viewIdResourceName
+            if (id != null && UrlBar.isUrlBarId(id) && (n.isEditable || !n.text.isNullOrEmpty())) return id
+            for (i in n.childCount - 1 downTo 0) n.getChild(i)?.let(stack::add)
+        }
         return null
     }
 
@@ -750,51 +984,69 @@ class GuardService : AccessibilityService() {
 
     // --- utilidades -----------------------------------------------------------------
 
-    private class Seen(
-        val ours: Boolean,
-        val dangerous: Boolean,
-        val privateDns: Boolean,
-        val uninstall: Boolean,
-        /** Una lista de interruptores titulada «autoencendido»/«autoinicio». */
-        val autostartList: Boolean,
+    /** Un nodo que puede tener que taparse, con sus conceptos. */
+    private class Cand(val node: AccessibilityNodeInfo, val mask: Int)
+
+    /** Lo que se vio en una pantalla de una sola pasada. Se reutiliza: no reserva por recorrido. */
+    private class Pass {
+        var mask = 0
+        var dangerId = false
+        var toggle = false
+
         /** Cuántos nodos con texto tiene: pocos = la pantalla aún carga, o es un diálogo. */
-        val texts: Int,
-    )
+        var texts = 0
+        val cands = ArrayList<Cand>()
+
+        fun reset() {
+            mask = 0
+            dangerId = false
+            toggle = false
+            texts = 0
+            cands.clear()
+        }
+    }
+
+    private val pass = Pass()
+    private val walk = ArrayDeque<AccessibilityNodeInfo>()
 
     /**
-     * Un solo recorrido de la ventana, con tope de nodos, que mira las tres listas a la vez.
-     * La búsqueda por texto del sistema sería más barata, pero las pantallas de Ajustes
-     * hechas con Compose (la ficha de la app en Android 14+) no la contestan. Sólo corre en
-     * apps de sistema y, como mucho, una vez cada [SETTLE_MS].
+     * Un solo recorrido de la ventana, con tope de nodos. Antes eran dos (uno para decidir y otro
+     * para colocar las capas) y cada `getChild` es un viaje a Ajustes. El autómata mira el texto y
+     * la descripción por separado: no se junta ni se pasa a minúsculas ninguna cadena por nodo.
+     * La búsqueda por texto del sistema sería más barata, pero las pantallas de Ajustes hechas con
+     * Compose (la ficha de la app en Android 14+) no la contestan. Sólo corre en apps de sistema
+     * y, como mucho, una vez cada [SETTLE_MS] (o cada [PASS_MS] mientras carga).
      */
-    private fun scan(root: AccessibilityNodeInfo): Seen {
-        var ours = false
-        var dangerous = false
-        var privateDns = false
-        var uninstall = false
-        var title = false
-        var toggle = false
-        var texts = 0
-        var budget = MAX_NODES
-        val stack = ArrayDeque<AccessibilityNodeInfo>()
+    private fun analyze(root: AccessibilityNodeInfo, collect: Boolean): Pass {
+        val p = pass
+        p.reset()
+        val l = lab()
+        var budget = if (collect) MAX_PASS_NODES else MAX_NODES
+        val stack = walk
+        stack.clear()
         stack.add(root)
         while (stack.isNotEmpty() && budget-- > 0) {
             val n = stack.removeLast()
+            if (!p.toggle && isSwitch(n)) p.toggle = true
+            val dangerId = Labels.isDangerId(n.viewIdResourceName)
+            if (dangerId) p.dangerId = true
             val text = n.text
             val desc = n.contentDescription
-            if (!toggle && isSwitch(n)) toggle = true
+            var m = 0
             if (text != null || desc != null) {
-                texts++
-                val s = "${text ?: ""} ${desc ?: ""}".lowercase()
-                if (!ours && OURS.any { s.contains(it) }) ours = true
-                if (!dangerous && DANGEROUS.any { s.contains(it) }) dangerous = true
-                if (!privateDns && PRIVATE_DNS_EDITOR.any { s.contains(it) }) privateDns = true
-                if (!uninstall && UNINSTALL.any { s.contains(it) }) uninstall = true
-                if (!title && AUTOSTART_TITLES.any { s.contains(it) }) title = true
+                p.texts++
+                m = l.mask(text) or l.mask(desc)
+                p.mask = p.mask or m
+            }
+            if (collect && p.cands.size < MAX_CANDS) {
+                // El cuadro de búsqueda no se tapa: tapado no se podría ni corregir.
+                val cm = if (dangerId) m or Concept.DANGER_ID else m
+                if (cm and SHIELDABLE != 0 && !n.isEditable) p.cands += Cand(n, cm)
             }
             for (i in 0 until n.childCount) n.getChild(i)?.let(stack::add)
         }
-        return Seen(ours, dangerous, privateDns, uninstall, title && toggle, texts)
+        stack.clear()
+        return p
     }
 
     /** Hasta cuándo Ajustes y la app de Seguridad se cierran nada más abrirse. */
@@ -826,6 +1078,7 @@ class GuardService : AccessibilityService() {
     }
 
     private companion object {
+        const val SYSTEMUI = "com.android.systemui"
         const val PATROL_MS = 30_000L
         const val MODE_OFF = 0
         const val MODE_WATCH = 1
@@ -835,25 +1088,17 @@ class GuardService : AccessibilityService() {
 
         /** El mismo sondeo con la pantalla apagada: sólo para enterarse de que se encendió. */
         const val BROWSER_IDLE_POLL_MS = 10_000L
+
         /** Tras un intento de abrir algo peligroso, cuánto tiempo se cierran Ajustes y Seguridad. */
         const val LOCKOUT_MS = 30_000L
         const val VENDOR_RETRY_MS = 150L
         const val VENDOR_ATTEMPTS = 10
 
-        /** Con al menos tantos textos, una pantalla de la app de Seguridad ya ha cargado. */
-        const val LOADED_TEXTS = 4
-
-        /** Un diálogo de confirmación tiene pocos textos: título, mensaje y dos botones. */
-        const val DIALOG_MAX_TEXTS = 12
-
         /** Lo que se espera, tras ver la ficha de la app, a su diálogo de confirmación. */
         const val CONFIRM_WINDOW_MS = 15_000L
 
-        /** En la ficha del administrador del dispositivo, el botón de quitarlo. */
-        val ADMIN_OFF = listOf("desactivar", "deactivate")
-
-        /** Cómo se titula la pantalla de autoinicio en la app de seguridad del fabricante. */
-        val AUTOSTART_TITLES = listOf("autoencendido", "autoinicio", "autostart", "auto-start", "inicio automático")
+        /** Cuánto vale la respuesta de «¿es administradora?» (una llamada entre procesos). */
+        const val ADMIN_CACHE_MS = 2_000L
 
         /** Las clases de interruptor propias de cada fabricante (Xiaomi usa SlidingButton). */
         val SWITCH_CLASSES = listOf("switch", "slidingbutton", "toggle", "checkbox")
@@ -868,12 +1113,22 @@ class GuardService : AccessibilityService() {
         val NAG_STEPS_MS = longArrayOf(60_000L, 180_000L, 600_000L, 1_800_000L)
         const val TOAST_MS = 3_000L
         const val MAX_NODES = 250
+
+        /** Con capas, el recorrido es uno solo y cubre lo que antes cubrían dos (250 + 500). */
+        const val MAX_PASS_NODES = 500
+        const val MAX_CANDS = 80
+        const val MAX_SHIELDS = 40
+        const val GENERIC_URL_NODES = 150
         const val SETTLE_MS = 500L
         const val SCAN_WINDOW_MS = 4_000L
         const val RETRY_ID_MS = 60_000L
 
-        /** Cómo se llama la app en pantalla, y su paquete (algunas capas del sistema lo muestran). */
-        val OURS = listOf("secret savior", "com.secretsavior")
+        /** Android 13+: traer el árbol entero por adelantado (menos viajes que nodo a nodo). */
+        val PREFETCH = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            AccessibilityNodeInfo.FLAG_PREFETCH_DESCENDANTS_HYBRID
+        } else {
+            0
+        }
 
         /** Ajustes en sí (no el instalador, ni los diálogos de permisos o de VPN). */
         const val SETTINGS = "settings"
@@ -883,49 +1138,35 @@ class GuardService : AccessibilityService() {
 
         /** Con la pantalla cambiando sin parar, recolocar las capas al menos con esta frecuencia. */
         const val PASS_MAX_WAIT_MS = 600L
-        const val MAX_SHIELD_NODES = 500
 
-        /** Lo más que puede durar la capa grande, pase lo que pase. */
+        /** Lo más que puede durar la capa grande, pase lo que pase (más en la ficha de una app). */
         const val COVER_MAX_MS = 1_500L
+        const val COVER_APP_DETAILS_MS = 2_500L
 
-        /**
-         * Las filas de Ajustes que se tapan: la que lleva a Accesibilidad (en cualquier nivel, también
-         * en los resultados de la búsqueda de Ajustes) y cualquiera que nombre a esta app.
-         */
-        val SHIELD_WORDS = listOf("accesibilidad", "accessibility", "secret savior", "com.secretsavior")
+        /** Tras agotar el tope, los cambios de contenido de la misma pantalla no la vuelven a poner. */
+        const val COVER_COOLDOWN_MS = 1_500L
 
-        /** Cómo se titula la pantalla de Accesibilidad al abrirse; basta un acierto para cerrarla. */
-        val ACCESSIBILITY_TITLES = listOf("accesibilidad", "accessibility")
+        /** Tras cerrar una pantalla, cuánto sigue la capa tapando el cierre. */
+        const val COVER_AFTER_CLOSE_MS = 400L
 
-        /** Si aparece alguna de éstas junto al nombre de la app, la pantalla no es de batería. */
-        val DANGEROUS = listOf(
-            "desinstalar", "uninstall", "forzar", "force stop", "borrar datos", "clear data",
-            "almacenamiento", "storage", "administrador", "administrator", "accesibilidad",
-            "accessibility", "desconectar", "disconnect", "olvidar", "forget", "vpn",
-        )
-
-        /** Lo que sólo ofrece la ficha de una app para quitarla o pararla. */
-        val UNINSTALL = listOf(
-            "desinstalar", "uninstall", "forzar detención", "forzar detencion", "force stop", "borrar datos", "clear data",
-        )
-
-        /**
-         * El campo para escribir el servidor de DNS privado. La fila "DNS privado:
-         * Automático" de la pantalla de red no lo contiene, así que Wi-Fi y red
-         * siguen accesibles.
-         */
-        val PRIVATE_DNS_EDITOR = listOf(
-            "provider hostname", "proveedor de dns privado", "provedor de dns privado",
-            "fournisseur de dns privé", "dns-anbieters",
-        )
+        /** Los conceptos cuyas filas pueden llegar a taparse: lo demás no se guarda como candidato. */
+        const val SHIELDABLE = Concept.ACCESSIBILITY or Concept.USERS_SECOND_SPACE or Concept.DEVELOPER_OPTIONS or
+            Concept.BUILD_NUMBER or Concept.OURS or Concept.STRONG or Concept.WEAK or
+            Concept.DEACTIVATE_ADMIN or Concept.VPN_DISCONNECT_FORGET or Concept.LOCKDOWN_TOGGLE or
+            Concept.DANGER_ID
 
         /** Ajustes, instalador, permisos y VPN: aquí nombrar a la app ya basta para cerrar. */
         val SYSTEM_SURFACES = listOf(
             "settings", "packageinstaller", "permissioncontroller", "vpndialogs",
         )
 
-        /** Seguridad y optimización de cada fabricante: sólo se cierra su ficha de desinstalar. */
-        val VENDOR_SURFACES = listOf("securitycenter", "safecenter", "systemmanager", "devicecare", "lool")
+        /**
+         * Seguridad y optimización de cada fabricante: sólo se cierra su ficha de desinstalar.
+         * powerkeeper = batería por app de Xiaomi; securitycore = Segundo espacio de Xiaomi.
+         */
+        val VENDOR_SURFACES = listOf(
+            "securitycenter", "safecenter", "systemmanager", "devicecare", "lool", "powerkeeper", "securitycore",
+        )
 
         /** Ids exactos (sin el paquete) de la barra de direcciones de los navegadores comunes. */
         val URL_BAR_IDS = listOf(
@@ -933,18 +1174,17 @@ class GuardService : AccessibilityService() {
             "omnibarTextInput", "url_field", "search_box_text",
         )
 
-        val BROWSERS = setOf(
-            "com.android.chrome", "com.chrome.beta", "com.chrome.dev", "com.chrome.canary",
-            "com.google.android.apps.chrome", "org.mozilla.firefox", "org.mozilla.firefox_beta",
-            "org.mozilla.fenix", "org.mozilla.focus", "org.mozilla.klar", "com.sec.android.app.sbrowser",
-            "com.brave.browser", "com.microsoft.emmx", "com.opera.browser", "com.opera.mini.native",
-            "com.duckduckgo.mobile.android", "com.kiwibrowser.browser", "com.vivaldi.browser",
-            "com.UCMobile.intl", "com.android.browser", "com.mi.globalbrowser", "com.huawei.browser",
-            "org.chromium.webview_shell", "org.torproject.torbrowser",
+        /**
+         * Apps que se cierran en cuanto se abren. X / Twitter y su versión ligera por su contenido.
+         * Las demás esquivan el filtro DNS por diseño: Tor Browser (release y alpha) y Orbot (la
+         * VPN de Tor) mandan el tráfico por una red que resuelve los nombres fuera del teléfono, y
+         * Aloha trae una VPN propia. Sólo van paquetes verificados; los que no, fuera.
+         */
+        val BLOCKED_APPS = setOf(
+            "com.twitter.android", "com.twitter.android.lite",
+            "org.torproject.torbrowser", "org.torproject.torbrowser_alpha", "org.torproject.android",
+            "com.aloha.browser",
         )
-
-        /** Apps que se cierran en cuanto se abren: X / Twitter y su versión ligera. */
-        val BLOCKED_APPS = setOf("com.twitter.android", "com.twitter.android.lite")
 
         /**
          * Telegram y Reddit: canales y comunidades con contenido para adultos. Aquí sólo
