@@ -963,6 +963,9 @@ function Undo-JuicerTweak {
         Write-JuicerLog "ERROR deshacer ${Id}: $($errors -join '; ')"
         return (New-JuicerResult $info 'Error' ($errors -join '; '))
     }
+    # A game's frame pacer may also wait in the queue for the game to close: undone here,
+    # that queued change must not put it back later.
+    if ($Id -like 'fps:*') { Clear-JuicerPacerPending $Id.Substring(4) }
     Write-JuicerLog "Deshecho $Id"
     New-JuicerResult $info 'Deshecho'
 }

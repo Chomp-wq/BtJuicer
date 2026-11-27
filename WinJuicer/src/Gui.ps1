@@ -1334,8 +1334,10 @@ function Get-JuicerTweakChanges {
 # Failed: runs when the work failed (no result), to undo what the caller set
 # up front (a "loaded" flag, a checkbox the user had already flipped).
 function Start-JuicerGuiTask {
-    param([string]$Status, [string]$Work, [hashtable]$Arguments = @{}, [scriptblock]$Done, [switch]$First, [switch]$Quiet, [scriptblock]$Failed)
-    if ($script:Gui.Task) {
+    param([string]$Status, [string]$Work, [hashtable]$Arguments = @{}, [scriptblock]$Done, [switch]$First, [switch]$Quiet, [scriptblock]$Failed, [switch]$Dequeued)
+    # Background work started from another task's Done (the next batch of covers) goes behind
+    # what is already waiting, which is what the person asked for meanwhile.
+    if ($script:Gui.Task -or ($Quiet -and -not $Dequeued -and $script:Gui.Queue.Count -gt 0)) {
         $dup = $Arguments.Count -eq 0 -and @($script:Gui.Queue | Where-Object { $_.Work -eq $Work -and $_.Arguments.Count -eq 0 }).Count -gt 0
         if (-not $dup) {
             $item = @{ Status = $Status; Work = $Work; Arguments = $Arguments; Done = $Done; Quiet = [bool]$Quiet; Failed = $Failed }
@@ -1420,7 +1422,7 @@ function Complete-JuicerGuiTask {
     if (-not $script:Gui.Task -and $script:Gui.Queue.Count -gt 0) {
         $next = $script:Gui.Queue[0]
         $script:Gui.Queue.RemoveAt(0)
-        Start-JuicerGuiTask $next.Status $next.Work $next.Arguments $next.Done -Quiet:([bool]$next.Quiet) -Failed $next.Failed
+        Start-JuicerGuiTask $next.Status $next.Work $next.Arguments $next.Done -Quiet:([bool]$next.Quiet) -Failed $next.Failed -Dequeued
     }
 }
 
