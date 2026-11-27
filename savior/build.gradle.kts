@@ -12,8 +12,8 @@ android {
         applicationId = "com.secretsavior"
         minSdk = 26
         targetSdk = 35
-        versionCode = 22
-        versionName = "3.1"
+        versionCode = 23
+        versionName = "4.0"
     }
 
     signingConfigs {
@@ -30,6 +30,8 @@ android {
 
     buildTypes {
         release {
+            // La misma clave que la de depuración: el APK de release se instala encima del actual.
+            signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(

@@ -116,6 +116,12 @@
             </intent-filter>
         </receiver>
 
+        <!-- Vincular sin ordenador: recibe el código de la notificación con campo de respuesta
+             (provision/Provisioner.kt). Sólo lo llama el sistema con un intent explícito. -->
+        <receiver
+            android:name=".provision.ProvisionReceiver"
+            android:exported="false" />
+
         <receiver
             android:name=".guard.BootReceiver"
             android:exported="true">
