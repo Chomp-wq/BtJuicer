@@ -46,22 +46,32 @@ object Status {
             .isIgnoringBatteryOptimizations(c.packageName)
 
     /** Propietaria del dispositivo: la versión dura (sin forzar detención, sin modo seguro...). */
-    fun isDeviceOwner(c: Context): Boolean =
+    fun isDeviceOwner(c: Context): Boolean = try {
         (c.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager).isDeviceOwnerApp(c.packageName)
+    } catch (e: Exception) {
+        false
+    }
 
     /** Concedido una vez por ADB: deja a la app reencender su propia accesibilidad. */
     fun hasSecureSettings(c: Context): Boolean =
         c.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 
     /** Acceso a notificaciones: es lo que hace que Android vuelva a levantar la app tras forzar su detención. */
-    fun isReviveEnabled(c: Context): Boolean =
+    fun isReviveEnabled(c: Context): Boolean = try {
         (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
             .isNotificationListenerAccessGranted(ComponentName(c, ReviveListener::class.java))
+    } catch (e: Exception) {
+        false
+    }
 
     /** null si no se sabe (Android 9 o anterior, o el filtro aún no ha arrancado). */
     fun isAlwaysOnVpn(): Boolean? = SaviorVpnService.alwaysOn
 
     /** «Pausar la actividad si no se usa» apagado: si no, Android puede detener la app sola. */
     fun isAutoRevokeExempt(c: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || c.packageManager.isAutoRevokeWhitelisted
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || try {
+            c.packageManager.isAutoRevokeWhitelisted
+        } catch (e: Exception) {
+            false
+        }
 }

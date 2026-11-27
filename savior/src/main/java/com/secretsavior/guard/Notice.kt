@@ -6,6 +6,8 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
+import android.os.SystemClock
+import android.util.Log
 import com.secretsavior.MainActivity
 import com.secretsavior.R
 
@@ -33,5 +35,45 @@ object Notice {
             .setOngoing(true)
             .setContentIntent(open)
             .build()
+    }
+
+    // --- Avisos: desde Android 10 no se puede abrir una actividad desde segundo plano ---
+
+    const val ALERT_FILTER = 2
+    const val ALERT_GUARD = 3
+    private const val ALERT_CHANNEL = "alerts"
+    private const val ALERT_GAP_MS = 10 * 60_000L
+
+    private val gates = HashMap<Int, Throttle>()
+
+    /**
+     * Aviso de alta importancia, con un mínimo de 10 min entre avisos del mismo tipo; al
+     * tocarlo se abre la app. Nunca lanza (sin permiso de notificaciones simplemente no sale).
+     */
+    fun alert(c: Context, id: Int, title: String, text: String) {
+        try {
+            val gate = synchronized(gates) { gates.getOrPut(id) { Throttle(ALERT_GAP_MS) } }
+            if (!gate.tryPass(SystemClock.elapsedRealtime())) return
+            val nm = c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            nm.createNotificationChannel(
+                NotificationChannel(ALERT_CHANNEL, c.getString(R.string.alert_channel), NotificationManager.IMPORTANCE_HIGH),
+            )
+            val open = PendingIntent.getActivity(
+                c, id, Intent(c, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+            )
+            nm.notify(
+                id,
+                Notification.Builder(c, ALERT_CHANNEL)
+                    .setSmallIcon(R.drawable.ic_notification)
+                    .setContentTitle(title)
+                    .setContentText(text)
+                    .setStyle(Notification.BigTextStyle().bigText(text))
+                    .setAutoCancel(true)
+                    .setContentIntent(open)
+                    .build(),
+            )
+        } catch (e: Exception) {
+            Log.w("SecretSavior", "no se pudo avisar", e)
+        }
     }
 }

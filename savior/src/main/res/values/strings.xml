@@ -4,4 +4,11 @@
 
     <string name="guard_description">Secret Savior vigila las pantallas de Ajustes desde las que se podría apagar la protección y bloquea el texto pornográfico. Nada de lo que lee sale del teléfono ni se guarda.</string>
     <string name="admin_warning">Desactivar al administrador permitiría desinstalar Secret Savior. Esta app existe para que eso no sea fácil: piensa en por qué la instalaste.</string>
+    <string name="alert_channel">Avisos</string>
+    <string name="alert_filter_title">El filtro está parado</string>
+    <string name="alert_filter_text">Android no dejó que Secret Savior lo reiniciara solo. Toca para repararlo. Si quitas la restricción de batería de la app, se reiniciará sin ayuda.</string>
+    <string name="alert_nag_title">Secret Savior necesita tu atención</string>
+    <string name="alert_nag_text">Algo de la protección se apagó. Toca para repararlo.</string>
+    <string name="alert_guard_title">El guardián está apagado</string>
+    <string name="alert_guard_text">La accesibilidad de Secret Savior se desactivó. Toca para volver a encenderla.</string>
 </resources>

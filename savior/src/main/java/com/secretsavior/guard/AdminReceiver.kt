@@ -13,6 +13,16 @@ import com.secretsavior.data.Store
  */
 class AdminReceiver : DeviceAdminReceiver() {
 
+    /**
+     * El administrador se pide al final, con «Activar y bloquear»: es el momento en que se
+     * bloquea. También ocurre al volverse propietaria del dispositivo (que lo activa sola).
+     */
+    override fun onEnabled(context: Context, intent: Intent) {
+        Store.lock(context)
+        Store.setPendingCommit(context, false)
+        Watchdog.ensure(context)
+    }
+
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence =
         context.getString(R.string.admin_warning)
 

@@ -22,6 +22,9 @@ object Store {
      * Bloqueada = el usuario pulsó "activar", o el sistema aún tiene a la app
      * como administrador. Lo segundo importa: si alguien borra los datos de la
      * app, el administrador sigue ahí y el bloqueo no se evapora con ellos.
+     *
+     * Por eso el administrador se pide *el último* (botón «Activar y bloquear»): pedirlo
+     * antes bloquearía la app a mitad de la configuración.
      */
     fun isLocked(c: Context): Boolean {
         if (lockedCache) return true // es de ida: una vez bloqueada no vuelve atrás
