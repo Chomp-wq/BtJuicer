@@ -12,8 +12,8 @@ android {
         applicationId = "com.secretsavior"
         minSdk = 26
         targetSdk = 35
-        versionCode = 23
-        versionName = "4.0"
+        versionCode = 24
+        versionName = "4.0.1"
     }
 
     signingConfigs {
@@ -57,6 +57,9 @@ android {
 
 dependencies {
     implementation(libs.androidx.core.ktx)
+    // PackageManagerCompat devuelve un ListenableFuture; core sólo arrastra el artefacto vacío
+    // (9999.0-empty), que no trae la interfaz: se fija la versión real para compilar y para ejecutar.
+    implementation("com.google.guava:listenablefuture:1.0") { version { strictly("1.0") } }
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.androidx.activity.compose)

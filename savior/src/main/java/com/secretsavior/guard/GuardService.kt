@@ -158,6 +158,7 @@ class GuardService : AccessibilityService() {
             handler.removeCallbacks(tick)
             handler.removeCallbacks(deferred)
             handler.removeCallbacks(browserPoll)
+            handler.removeCallbacks(vendorContentCheck)
             handler.removeCallbacks(vendorRecheck)
             handler.removeCallbacks(settingsPass)
             handler.removeCallbacks(hideCoverSoon)
@@ -403,11 +404,11 @@ class GuardService : AccessibilityService() {
         if (pkg == packageName) return
         val type = event.eventType
         if (!Store.isLocked(this)) {
-            setMode(MODE_OFF)
-            // Configuración inicial: anotar que el autoencendido de esta app está activado.
-            if (type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED && isVendorSurface(pkg)) watchVendorScreen()
+            onSetupEvent(event, pkg, type)
             return
         }
+        // Con el bloqueo no queda modo de configuración (puede haberse activado a mitad de pantalla).
+        if (mode == MODE_AUTOSTART) setMode(MODE_OFF)
         // Tras un intento, las pantallas del sistema se cierran nada más asomar.
         if (inLockout() && isSystemSurface(pkg) && type != AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED) {
             closeSystemScreen()
@@ -612,6 +613,8 @@ class GuardService : AccessibilityService() {
         val info = serviceInfo ?: return
         info.eventTypes = when (newMode) {
             MODE_WATCH -> EVENTS_WATCHING or AccessibilityEvent.TYPE_WINDOWS_CHANGED
+            MODE_AUTOSTART -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED or AccessibilityEvent.TYPE_VIEW_SCROLLED
             MODE_TEXT, MODE_BROWSER -> EVENTS_TYPING
             else -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         }
@@ -1079,6 +1082,43 @@ class GuardService : AccessibilityService() {
     // --- Autoencendido (apps de seguridad del fabricante) -----------------------------
 
     /**
+     * Sin bloqueo sólo se vigila la pantalla de autoencendido del fabricante. Su lista es un
+     * RecyclerView: la fila de esta app puede estar fuera de la vista y sólo aparece al desplazar,
+     * y desplazar no genera cambio de ventana. Por eso, mientras esa pantalla está delante (y sólo
+     * entonces) se piden también cambios de contenido y desplazamientos, y se repite la
+     * comprobación con un mínimo de [VENDOR_CONTENT_MS] entre una y otra. Al salir se vuelve a
+     * MODE_OFF con el siguiente cambio de ventana (el teclado o la cortina no cuentan).
+     */
+    private fun onSetupEvent(event: AccessibilityEvent, pkg: String, type: Int) {
+        val vendor = isVendorSurface(pkg)
+        if (type != AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
+            if (mode == MODE_AUTOSTART && vendor) scheduleVendorContentCheck() else if (mode != MODE_AUTOSTART) setMode(MODE_OFF)
+            return
+        }
+        if (isNeutral(pkg)) return
+        if (vendor) noteWindowClass(pkg, event)
+        val autostart = vendor && !Store.autostartSeen(this) &&
+            (winKind and WinKind.AUTOSTART != 0 || winAutoTitle)
+        setMode(if (autostart) MODE_AUTOSTART else MODE_OFF)
+        if (!autostart) handler.removeCallbacks(vendorContentCheck)
+        if (vendor) watchVendorScreen()
+    }
+
+    private var vendorContentQueued = false
+    private val vendorContentCheck: Runnable = Runnable {
+        vendorContentQueued = false
+        guarded("autoencendido (contenido)") {
+            if (mode == MODE_AUTOSTART && !Store.isLocked(this) && vendorCheck()) setMode(MODE_OFF)
+        }
+    }
+
+    private fun scheduleVendorContentCheck() {
+        if (vendorContentQueued) return
+        vendorContentQueued = true
+        handler.postDelayed(vendorContentCheck, VENDOR_CONTENT_MS)
+    }
+
+    /**
      * En Xiaomi apagar el autoencendido de una app la detiene a la fuerza y Android desactiva
      * entonces su accesibilidad: no hay forma de reencenderlo después, y tapar el interruptor
      * pierde la carrera contra quien toca rápido (la lista se reordena con una animación). Por
@@ -1123,18 +1163,40 @@ class GuardService : AccessibilityService() {
         return false
     }
 
-    private fun autostartOn(root: AccessibilityNodeInfo): Boolean =
-        root.findAccessibilityNodeInfosByText(ownLabel).any { rowOf(it)?.second?.isChecked == true }
+    /** La fila se busca por la etiqueta de la app y, si la lista muestra el paquete, por éste. */
+    private fun autostartOn(root: AccessibilityNodeInfo): Boolean {
+        for (key in arrayOf(ownLabel, packageName)) {
+            val found = try { root.findAccessibilityNodeInfosByText(key) } catch (e: Throwable) { null } ?: continue
+            if (found.any { rowOf(it)?.second?.let(::switchIsOn) == true }) return true
+        }
+        return false
+    }
 
-    /** La fila (el ancestro más bajo con algún interruptor) y su interruptor. */
+    /** `isChecked`, o lo que diga el estado/descripción/texto (el SlidingButton de MIUI no siempre marca). */
+    private fun switchIsOn(sw: AccessibilityNodeInfo): Boolean {
+        val state = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) sw.stateDescription else null
+        return SwitchText.isOn(sw.isChecked, state, sw.contentDescription, sw.text)
+    }
+
+    /**
+     * La fila (el ancestro más bajo con algún interruptor) y su interruptor. No se sube por una
+     * lista: ahí «el primer interruptor» sería el de otra app.
+     */
     private fun rowOf(label: AccessibilityNodeInfo): Pair<AccessibilityNodeInfo, AccessibilityNodeInfo>? {
         var n: AccessibilityNodeInfo? = label
         repeat(6) {
             val parent = n?.parent ?: return null
             n = parent
+            if (isListLike(parent)) return null
             firstCheckable(parent)?.let { return parent to it }
         }
         return null
+    }
+
+    private fun isListLike(n: AccessibilityNodeInfo): Boolean {
+        val cls = n.className ?: return false
+        return Labels.containsIc(cls, "recyclerview") || Labels.containsIc(cls, "listview") ||
+            Labels.containsIc(cls, "scrollview")
     }
 
     private fun isSwitch(n: AccessibilityNodeInfo): Boolean {
@@ -1319,6 +1381,10 @@ class GuardService : AccessibilityService() {
         const val MODE_WATCH = 1
         const val MODE_TEXT = 3
         const val MODE_BROWSER = 4
+
+        /** Sin bloqueo y con la pantalla de autoencendido delante: además, contenido y desplazamientos. */
+        const val MODE_AUTOSTART = 5
+        const val VENDOR_CONTENT_MS = 300L
         const val BROWSER_POLL_MS = 1_500L
 
         /** El mismo sondeo con la pantalla apagada: sólo para enterarse de que se encendió. */

@@ -127,8 +127,41 @@ object Store {
     fun autostartSeen(c: Context): Boolean = prefs(c).getBoolean("autostart_seen", false)
 
     fun setAutostartSeen(c: Context) {
+        if (isLocked(c)) return // ya bloqueada no se confirma nada a mano
         if (!autostartSeen(c)) prefs(c).edit().putBoolean("autostart_seen", true).apply()
     }
+
+    /*
+     * Ayudas de la configuración inicial para móviles que no informan de un ajuste (MIUI). Sólo
+     * existen antes de bloquear: con el bloqueo activo ninguna cambia nada ni sustituye a lo
+     * detectado, y las filas de la pantalla bloqueada siguen mostrando el estado real.
+     */
+    private fun flag(c: Context, key: String) = prefs(c).getBoolean(key, false)
+
+    private fun setFlag(c: Context, key: String) {
+        if (isLocked(c)) return
+        if (!flag(c, key)) prefs(c).edit().putBoolean(key, true).apply()
+    }
+
+    /** El usuario ya abrió esa pantalla desde la app (condición para ofrecer «ya está»). */
+    fun autostartOpened(c: Context) = flag(c, "autostart_opened")
+    fun setAutostartOpened(c: Context) = setFlag(c, "autostart_opened")
+
+    fun batteryAsked(c: Context) = flag(c, "battery_asked")
+    fun setBatteryAsked(c: Context) = setFlag(c, "battery_asked")
+
+    fun batteryListOpened(c: Context) = flag(c, "battery_list_opened")
+    fun setBatteryListOpened(c: Context) = setFlag(c, "battery_list_opened")
+
+    /** «Continuar de todos modos» en batería: sólo cuenta para poder terminar la configuración. */
+    fun batteryContinue(c: Context) = flag(c, "battery_continue")
+    fun setBatteryContinue(c: Context) = setFlag(c, "battery_continue")
+
+    fun autoRevokeOpened(c: Context) = flag(c, "autorevoke_opened")
+    fun setAutoRevokeOpened(c: Context) = setFlag(c, "autorevoke_opened")
+
+    fun autoRevokeConfirmed(c: Context) = flag(c, "autorevoke_confirmed")
+    fun setAutoRevokeConfirmed(c: Context) = setFlag(c, "autorevoke_confirmed")
 
     /** Las razones propias, para leerlas justo cuando más falta hacen. */
     fun reason(c: Context): String = prefs(c).getString("reason", "").orEmpty()

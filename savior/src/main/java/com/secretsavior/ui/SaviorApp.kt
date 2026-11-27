@@ -72,6 +72,10 @@ interface Actions {
     fun enableAdmin()
     fun openNetworkSettings()
     fun exemptBattery()
+    fun openBatteryList()
+    fun confirmBatteryAnyway()
+    fun confirmAutostart()
+    fun confirmAutoRevoke()
     fun openAutostart()
     fun openNotificationAccess()
     fun openVpnSettings()
@@ -98,13 +102,20 @@ private data class Snapshot(
     val admin: Boolean,
     val notif: Boolean,
     val dnsStrict: Boolean,
+    /** Lo que Android responde de verdad (es lo que muestra la pantalla bloqueada). */
     val battery: Boolean,
+    val batteryAsked: Boolean,
+    val batteryList: Boolean,
+    val batteryAnyway: Boolean,
+    val autostartOpened: Boolean,
     /** Xiaomi/Redmi/POCO: el autoencendido de la app se vio activado. En otras marcas no se pide. */
     val autostart: Boolean,
     /** null = no se sabe (no bloquea). */
     val alwaysOn: Boolean?,
     val lockdown: Boolean?,
     val autoRevoke: Boolean,
+    val autoRevokeOpened: Boolean,
+    val autoRevokeManual: Boolean,
     val secure: Boolean,
     val owner: Boolean,
     val devBlocked: Boolean,
@@ -116,7 +127,8 @@ private data class Snapshot(
     val dns: SaviorVpnService.Companion.DnsHealth?,
 ) {
     /** Pasos 1–8; lo desconocido (null) no bloquea. */
-    val ready get() = vpn && guard && notif && battery && !dnsStrict && autostart && alwaysOn != false && autoRevoke
+    val ready get() = vpn && guard && notif && (battery || batteryAnyway) && !dnsStrict && autostart &&
+        alwaysOn != false && (autoRevoke || autoRevokeManual)
 }
 
 private fun <T> safe(default: T, f: () -> T): T = try { f() } catch (e: Throwable) { default }
@@ -129,10 +141,16 @@ private fun read(c: Context) = Snapshot(
     notif = safe(false) { Status.isReviveEnabled(c) },
     dnsStrict = Status.isPrivateDnsStrict(c),
     battery = Status.isBatteryExempt(c),
+    batteryAsked = Store.batteryAsked(c),
+    batteryList = Store.batteryListOpened(c),
+    batteryAnyway = Store.batteryContinue(c),
+    autostartOpened = Store.autostartOpened(c),
     autostart = !isXiaomiFamily() || Store.autostartSeen(c),
     alwaysOn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) safe(null) { Status.isAlwaysOnVpn() } else true,
     lockdown = SaviorVpnService.lockdown,
     autoRevoke = safe(true) { Status.isAutoRevokeExempt(c) },
+    autoRevokeOpened = Store.autoRevokeOpened(c),
+    autoRevokeManual = Store.autoRevokeConfirmed(c),
     secure = safe(false) { Status.hasSecureSettings(c) },
     owner = safe(false) { Status.isDeviceOwner(c) },
     devBlocked = Store.devOptionsBlocked(c),
@@ -233,10 +251,33 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
         ) { Button(onClick = a::openNotificationAccess) { Text("Abrir acceso a notificaciones") } }
 
         Step(
-            "${++n}. Batería sin restricciones", s.battery,
+            "${++n}. Batería sin restricciones", s.battery || s.batteryAnyway,
             "Obligatorio: sin esto, Android 12 o superior no deja que la app reinicie el filtro " +
-                "desde segundo plano, y muchos fabricantes lo matan para ahorrar batería.",
-        ) { Button(onClick = a::exemptBattery) { Text("Excluir de ahorro") } }
+                "desde segundo plano, y muchos fabricantes lo matan para ahorrar batería." +
+                if (isXiaomiFamily()) {
+                    " En Xiaomi son dos ajustes distintos: pulsa el botón y elige «Permitir» en el " +
+                        "diálogo de Android (es lo que se comprueba) y, aparte, en Seguridad → " +
+                        "Batería → Secret Savior elige «Sin restricciones»."
+                } else {
+                    ""
+                },
+        ) {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = a::exemptBattery) { Text("Excluir de ahorro") }
+                    if (!s.battery && s.batteryAsked) {
+                        OutlinedButton(onClick = a::openBatteryList) { Text("Abrir lista de batería") }
+                    }
+                }
+                if (!s.battery && !s.batteryAnyway && s.batteryAsked && s.batteryList) {
+                    OutlinedButton(onClick = a::confirmBatteryAnyway) { Text("Continuar de todos modos") }
+                    Text(
+                        "Sin esto Android puede no reiniciar el filtro por sí solo si se detiene.",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            }
+        }
 
         Step(
             "${++n}. Sin DNS privado estricto", !s.dnsStrict,
@@ -254,7 +295,18 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
                 "Abre la pantalla y comprueba que Secret Savior está activado: la app lo detecta " +
                     "sola (necesita el paso 2). Una vez bloqueado, esa pantalla se cierra para " +
                     "siempre, así que cambia antes el autoencendido de tus otras apps.",
-            ) { Button(onClick = a::openAutostart) { Text("Abrir autoencendido") } }
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = a::openAutostart) { Text("Abrir autoencendido") }
+                    if (!s.autostart && s.autostartOpened) {
+                        OutlinedButton(onClick = a::confirmAutostart) { Text("Ya está activado") }
+                        Text(
+                            "Si ya lo activaste y aquí sigue sin verse, es que el teléfono no lo informa.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
         }
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -269,10 +321,22 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             Step(
-                "${++n}. Pausar actividad si no se usa", s.autoRevoke,
+                "${++n}. Pausar actividad si no se usa", s.autoRevoke || s.autoRevokeManual,
                 "Apaga «Pausar la actividad de la app si no se usa» (o «Quitar permisos si no se usa»). " +
-                    "Si no, Android puede detener la app por su cuenta tras semanas sin abrirla.",
-            ) { Button(onClick = a::openAutoRevoke) { Text("Abrir permisos de la app") } }
+                    "Si no, Android puede detener la app por su cuenta tras semanas sin abrirla." +
+                    if (isXiaomiFamily()) " En Xiaomi esa opción puede no existir o no mostrarse: tras abrir la pantalla podrás confirmarlo a mano." else "",
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = a::openAutoRevoke) { Text("Abrir permisos de la app") }
+                    if (!s.autoRevoke && !s.autoRevokeManual && s.autoRevokeOpened) {
+                        OutlinedButton(onClick = a::confirmAutoRevoke) { Text("Ya está desactivado / no aparece en mi teléfono") }
+                        Text(
+                            "Si ya lo apagaste, o tu teléfono no tiene esa opción, el sistema no lo informa: confírmalo aquí.",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                }
+            }
         }
 
         Step(

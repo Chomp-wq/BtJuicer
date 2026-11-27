@@ -18,6 +18,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.IntentCompat
 import com.secretsavior.data.Store
 import com.secretsavior.guard.ReviveListener
 import com.secretsavior.guard.Safe
@@ -71,12 +72,34 @@ class MainActivity : ComponentActivity() {
 
         override fun exemptBattery() = safely("batería") {
             Store.openGrace(Store.Grace.BATTERY)
+            Store.setBatteryAsked(this@MainActivity)
             start(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
+        }
+
+        /** MIUI a veces no concede el diálogo: la lista general de ajustes sí deja hacerlo a mano. */
+        override fun openBatteryList() = safely("lista de batería") {
+            Store.openGrace(Store.Grace.BATTERY)
+            Store.setBatteryListOpened(this@MainActivity)
+            val opened = start(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            if (!opened) openAppInfo()
+        }
+
+        override fun confirmBatteryAnyway() = safely("batería a mano") {
+            if (!Store.isLocked(this@MainActivity)) Store.setBatteryContinue(this@MainActivity)
+        }
+
+        override fun confirmAutostart() = safely("autoinicio a mano") {
+            if (!Store.isLocked(this@MainActivity)) Store.setAutostartSeen(this@MainActivity)
+        }
+
+        override fun confirmAutoRevoke() = safely("pausa a mano") {
+            if (!Store.isLocked(this@MainActivity)) Store.setAutoRevokeConfirmed(this@MainActivity)
         }
 
         /** Xiaomi/Redmi/POCO matan los servicios de apps sin «Autoinicio». */
         override fun openAutostart() = safely("autoinicio") {
             Store.openGrace(Store.Grace.AUTOSTART)
+            Store.setAutostartOpened(this@MainActivity)
             val miui = Intent().setComponent(
                 ComponentName(
                     "com.miui.securitycenter",
@@ -104,9 +127,14 @@ class MainActivity : ComponentActivity() {
 
         override fun openAutoRevoke() = safely("pausar permisos") {
             Store.openGrace(Store.Grace.AUTO_REVOKE)
-            // La acción existe desde Android 11: antes no hay pantalla a la que ir.
-            val opened = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
-                start(Intent(Intent.ACTION_AUTO_REVOKE_PERMISSIONS, Uri.parse("package:$packageName")))
+            Store.setAutoRevokeOpened(this@MainActivity)
+            // androidx elige la pantalla de cada versión; en MIUI puede no existir ese interruptor.
+            val opened = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && try {
+                start(IntentCompat.createManageUnusedAppRestrictionsIntent(this@MainActivity, packageName))
+            } catch (t: Throwable) {
+                Safe.failed("intent de pausa por inactividad", t)
+                false
+            }
             if (!opened) openAppInfo()
         }
 
@@ -198,7 +226,10 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        safely("al volver") { if (Store.isLocked(this)) Watchdog.ensure(this) }
+        safely("al volver") {
+            if (Store.isLocked(this)) Watchdog.ensure(this)
+            Status.refreshUnusedRestrictions(this)
+        }
     }
 
     private fun startVpn() = safely("arrancar el filtro") {

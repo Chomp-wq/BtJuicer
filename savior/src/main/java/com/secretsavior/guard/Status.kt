@@ -9,8 +9,12 @@ import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.provider.Settings
+import androidx.core.content.PackageManagerCompat
 import com.secretsavior.vpn.SaviorVpnService
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 /** Preguntas al sistema sobre cada una de las capas de protección. */
 object Status {
@@ -90,11 +94,48 @@ object Status {
     /** null si no se sabe (Android 9 o anterior, o el filtro aún no ha arrancado). */
     fun isAlwaysOnVpn(): Boolean? = SaviorVpnService.alwaysOn
 
-    /** «Pausar la actividad si no se usa» apagado: si no, Android puede detener la app sola. */
-    fun isAutoRevokeExempt(c: Context): Boolean =
-        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || try {
-            c.packageManager.isAutoRevokeWhitelisted
+    /**
+     * «Pausar la actividad si no se usa» apagado: si no, Android puede detener la app sola. En MIUI
+     * `isAutoRevokeWhitelisted` no refleja su propia pantalla: se pregunta a androidx, que resuelve
+     * la API 30/31 y el respaldo de versiones anteriores. La respuesta es asíncrona, así que se
+     * guarda y se refresca (al volver a la app y, como mucho cada 3 s, al consultarla).
+     */
+    fun isAutoRevokeExempt(c: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
+        if (SystemClock.elapsedRealtime() - unusedAt > UNUSED_REFRESH_MS) refreshUnusedRestrictions(c)
+        return UnusedApps.isDone(unusedStatus)
+    }
+
+    @Volatile
+    private var unusedStatus: Int? = null
+    private var unusedAt = -UNUSED_REFRESH_MS
+    private val unusedBusy = AtomicBoolean(false)
+    private val unusedBg by lazy {
+        Executors.newSingleThreadExecutor { r -> Thread(r, "savior-unused").apply { isDaemon = true } }
+    }
+
+    /** Fuera del hilo principal: el consultante puede hablar con otros procesos. */
+    fun refreshUnusedRestrictions(c: Context) {
+        unusedAt = SystemClock.elapsedRealtime()
+        if (!unusedBusy.compareAndSet(false, true)) return
+        val app = c.applicationContext
+        try {
+            unusedBg.execute {
+                try {
+                    val f = PackageManagerCompat.getUnusedAppRestrictionsStatus(app)
+                    f.addListener({
+                        unusedStatus = try { f.get() } catch (e: Throwable) { null }
+                        unusedBusy.set(false)
+                    }, Runnable::run)
+                } catch (e: Throwable) {
+                    Safe.failed("pausa por inactividad", e)
+                    unusedBusy.set(false)
+                }
+            }
         } catch (e: Throwable) {
-            false
+            unusedBusy.set(false)
         }
+    }
+
+    private const val UNUSED_REFRESH_MS = 3_000L
 }
