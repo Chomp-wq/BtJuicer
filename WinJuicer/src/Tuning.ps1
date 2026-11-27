@@ -96,7 +96,8 @@ function Get-JuicerStabilityFindings {
         $out += New-JuicerFinding $area 'Alto' "$($w[47]) errores de memoria corregidos (WHEA 47) en 30 días" 'La RAM está trabajando al límite: baja un escalón el XMP/EXPO, relaja los timings o sube un poco el voltaje de la memoria.'
     }
     if ($w[17] -gt 0) {
-        $out += New-JuicerFinding $area 'Medio' "$($w[17]) errores de PCIe corregidos (WHEA 17) en 30 días" 'Suelen venir de un cable riser de la gráfica, de la ranura, o del ahorro de energía del enlace. Si usas riser, fija esa ranura a PCIe 4.0 o 3.0 en la BIOS.'
+        $n = if ($w[17] -ge 500) { 'Al menos 500' } else { [string]$w[17] }
+        $out += New-JuicerFinding $area 'Medio' "$n errores de PCIe corregidos (WHEA 17) en 30 días" 'Suelen venir de un cable riser de la gráfica, de la ranura, o del ahorro de energía del enlace. Si usas riser, fija esa ranura a PCIe 4.0 o 3.0 en la BIOS.'
     }
 
     $stops = @($Bugchecks | Where-Object { $null -ne $_ })
@@ -295,12 +296,13 @@ function Get-JuicerNetworkFindings {
 
 # --- Reading the machine -----------------------------------------------------
 
-# Events of one kind since a date. Null when the log cannot be read at all,
-# so «no errors» never stands in for «could not look».
+# Events of one kind since a date, newest first and at most Max of them: a filter that can
+# match more (a flood of one event) has to be split, or its older events are never seen.
+# Null when the log cannot be read at all, so «no errors» never stands in for «could not look».
 function Get-JuicerEvents {
-    param([hashtable]$Filter)
+    param([hashtable]$Filter, [int]$Max = 500)
     try {
-        return , @(Get-WinEvent -FilterHashtable $Filter -MaxEvents 500 -ErrorAction Stop)
+        return , @(Get-WinEvent -FilterHashtable $Filter -MaxEvents $Max -ErrorAction Stop)
     } catch {
         if ("$($_.FullyQualifiedErrorId) $_" -match 'NoMatchingEventsFound|NoMatchingProvidersFound|No se encontraron|No events|not an event provider') { return , @() }
         Write-Verbose "No se pudo leer el registro de eventos: $_"
@@ -404,9 +406,13 @@ function Get-JuicerEventCount {
 function Get-JuicerStabilityAudit {
     $since = (Get-Date).AddDays(-30)
     $whea = @{}
-    $we = Get-JuicerEvents @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; StartTime = $since }
-    if ($null -eq $we) { return @(New-JuicerFinding 'Estabilidad' 'Info' 'No se pudo leer el registro de eventos del sistema.') }
-    foreach ($e in $we) { $whea[[int]$e.Id] = 1 + [int]$whea[[int]$e.Id] }
+    # One query per error: corrected PCIe errors (17) can flood the log by the thousand on some
+    # boards, and in a single query they would push the fatal ones out of the newest 500.
+    foreach ($id in 18, 19, 47, 17) {
+        $we = Get-JuicerEvents @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WHEA-Logger'; Id = $id; StartTime = $since }
+        if ($null -eq $we) { return @(New-JuicerFinding 'Estabilidad' 'Info' 'No se pudo leer el registro de eventos del sistema.') }
+        $whea[$id] = $we.Count
+    }
     $stops = Get-JuicerEvents @{ LogName = 'System'; ProviderName = 'Microsoft-Windows-WER-SystemErrorReporting'; Id = 1001; StartTime = $since }
     $codes = @(foreach ($e in @($stops | Where-Object { $_ })) {
             ConvertFrom-JuicerBugcheckText ((@($e.Properties | ForEach-Object { $_.Value }) -join ' ') + ' ' + $e.Message)

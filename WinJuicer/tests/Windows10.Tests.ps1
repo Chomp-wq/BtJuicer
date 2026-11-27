@@ -70,12 +70,29 @@ Describe 'Windows 10: textos que dependen de la versión' {
         $t.What | Should -BeLike '*Noticias e intereses*'
         $t.Gain | Should -BeLike '*batería*'
         $t.Cost | Should -BeLike '*barra de tareas*'
-        # The policy is the same one on both.
+        # Not the same policy: Windows 10 reads Feeds.admx, «Allow widgets» (Dsh) is Windows 11's.
         $planned = Resolve-JuicerActions $t
-        $planned[0].Name | Should -Be 'AllowNewsAndInterests'
+        $planned.Count | Should -Be 1
+        $planned[0].Path | Should -Be 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds'
+        $planned[0].Name | Should -Be 'EnableFeeds'
+        $planned[0].Value | Should -Be 0
         Set-FakeBuild 26100
-        (Find-JuicerTweak 'ui.widgets').Title | Should -Be 'Desactivar Widgets'
-        (Find-JuicerTweak 'ui.widgets').Gain | Should -BeLike '*100 y 300 MB*'
+        $t = Find-JuicerTweak 'ui.widgets'
+        $t.Title | Should -Be 'Desactivar Widgets'
+        $t.Gain | Should -BeLike '*100 y 300 MB*'
+        $planned = Resolve-JuicerActions $t
+        $planned.Count | Should -Be 1
+        $planned[0].Path | Should -Be 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'
+        $planned[0].Name | Should -Be 'AllowNewsAndInterests'
+    }
+
+    It '«Noticias e intereses»: en Windows 10 se aplica la directiva que Windows 10 lee, y se deshace' {
+        $t = Find-JuicerTweak 'ui.widgets'
+        (Invoke-JuicerTweak $t).Outcome | Should -Be 'Aplicado'
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds').Value | Should -Be 0
+        Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' | Should -BeNullOrEmpty
+        (Undo-JuicerTweak 'ui.widgets').Outcome | Should -Be 'Deshecho'
+        Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds' | Should -BeNullOrEmpty
     }
 
     It 'la Línea de tiempo de Windows 10 se pierde, y se dice' {
@@ -104,23 +121,25 @@ Describe 'Windows 10: búsqueda de Inicio sin resultados web' {
         $before = Get-MachineSnapshot $m
         $t = Find-JuicerTweak 'ui.busqueda'
         $planned = Resolve-JuicerActions $t
-        $planned.Count | Should -Be 3
+        $planned.Count | Should -Be 4
         (Invoke-JuicerTweak $t).Outcome | Should -Be 'Aplicado'
         $bing = Read-JuicerReg $searchKey 'BingSearchEnabled'
         $bing.Kind | Should -Be 'DWord'
         $bing.Value | Should -Be 0
         (Read-JuicerReg $searchKey 'CortanaConsent').Value | Should -Be 0
         (Read-JuicerReg 'HKCU\Software\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions').Value | Should -Be 1
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search' 'EnableDynamicContentInWSB').Value | Should -Be 0
         (Get-JuicerTweakState $t).State | Should -Be 'Aplicado'
         (Undo-JuicerTweak 'ui.busqueda').Outcome | Should -Be 'Deshecho'
         Get-MachineSnapshot $m | Should -Be $before
     }
 
-    It 'en Windows 11 sólo la directiva' {
+    It 'en Windows 11 sólo las directivas: sin sugerencias web y sin destacados' {
         Set-FakeBuild 26100
         $acts = Resolve-JuicerActions (Find-JuicerTweak 'ui.busqueda')
-        $acts.Count | Should -Be 1
+        $acts.Count | Should -Be 2
         $acts[0].Name | Should -Be 'DisableSearchBoxSuggestions'
+        $acts[1].Name | Should -Be 'EnableDynamicContentInWSB'
     }
 
     It 'con sólo la directiva (lo que había antes) queda a medias en Windows 10' {
@@ -366,11 +385,26 @@ Describe 'Debloat: apps de Windows 10' {
         (New-JuicerAppxTweak (Find-JuicerDebloatApp 'microsoft.windowscommunicationsapps')).Level | Should -Be 3
         (New-JuicerAppxTweak (Find-JuicerDebloatApp 'Microsoft.People')).Level | Should -Be 1
         $m = New-FakeMachine
+        $m.Backend.State.Appx['Microsoft.Getstarted'] = @{ Installed = $true; Provisioned = $false }
         $m.Backend.State.Appx['Microsoft.People'] = @{ Installed = $true; Provisioned = $false }
         $m.Backend.State.Appx['microsoft.windowscommunicationsapps'] = @{ Installed = $true; Provisioned = $false }
         $state = @(Get-JuicerDebloatState @{ Cpu = @{}; GamePass = $false })
-        ($state | Where-Object { $_.Name -eq 'Microsoft.People' }).Recommended | Should -BeTrue
+        ($state | Where-Object { $_.Name -eq 'Microsoft.Getstarted' }).Recommended | Should -BeTrue
+        # Retired by Microsoft: it may not come back, so never in the batch.
+        ($state | Where-Object { $_.Name -eq 'Microsoft.People' }).Recommended | Should -BeFalse
         ($state | Where-Object { $_.Name -eq 'microsoft.windowscommunicationsapps' }).Recommended | Should -BeFalse
+    }
+
+    It 'las que Microsoft retiró de la Tienda avisan de que quitarlas puede ser para siempre' {
+        foreach ($n in 'Microsoft.MSPaint', 'microsoft.windowscommunicationsapps', 'Microsoft.People', 'Microsoft.WindowsMaps', 'Microsoft.SkypeApp', 'Microsoft.3DBuilder') {
+            $a = Find-JuicerDebloatApp $n
+            $a.Retired | Should -Not -BeNullOrEmpty -Because $n
+            (New-JuicerAppxTweak $a).Cost | Should -BeLike '*para siempre*' -Because $n
+            (New-JuicerAppxTweak $a).Cost | Should -Not -BeLike '*Deshacer la reinstala*' -Because $n
+        }
+        (New-JuicerAppxTweak (Find-JuicerDebloatApp 'Microsoft.Getstarted')).Cost | Should -BeLike '*Deshacer la reinstala*'
+        (Find-JuicerDebloatApp 'Microsoft.3DBuilder').StoreId | Should -Be '9WZDNCRFJ3T6'
+        (Find-JuicerDebloatApp 'microsoft.windowscommunicationsapps').What | Should -BeLike '*1 de enero de 2025*'
     }
 }
 

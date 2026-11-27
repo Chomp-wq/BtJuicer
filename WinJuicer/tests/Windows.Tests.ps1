@@ -71,6 +71,41 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         & (Get-JuicerBackend).SvcRead 'NoExisteEsteServicio' | Should -BeNullOrEmpty
     }
 
+    # Windows Server ships it off and the repair does not apply there, so the catalog round
+    # trip never reaches Enable-MMAgent on the runner: here it does, and puts it back. The
+    # compression store lives in SysMain, which runner images switch off: it is started for
+    # the test and left as it was.
+    It 'lee y cambia la compresión de memoria, y la deja como estaba' {
+        $b = Get-JuicerBackend
+        $svc = & $b.SvcRead 'SysMain'
+        if ($null -eq $svc) { Set-ItResult -Skipped -Because 'este Windows no tiene SysMain'; return }
+        $started = $false
+        try {
+            if (-not $svc.Running) {
+                try {
+                    if ($svc.Start -eq 'Disabled') { & $b.SvcWrite 'SysMain' 'Manual' }
+                    & $b.SvcStart 'SysMain'
+                    $started = $true
+                } catch {
+                    Set-ItResult -Skipped -Because "SysMain no arranca en este equipo: $_"
+                    return
+                }
+            }
+            $was = & $b.MemCompressionGet
+            $was | Should -BeOfType [bool]
+            try {
+                & $b.MemCompressionSet (-not $was)
+                & $b.MemCompressionGet | Should -Be (-not $was)
+            } finally {
+                & $b.MemCompressionSet $was
+            }
+            & $b.MemCompressionGet | Should -Be $was
+        } finally {
+            if ($started) { try { & $b.SvcStop 'SysMain' } catch { Write-Host "    No se pudo volver a parar SysMain: $_" } }
+            if ((& $b.SvcRead 'SysMain').Start -ne $svc.Start) { & $b.SvcWrite 'SysMain' $svc.Start }
+        }
+    }
+
     It 'el catálogo entero, aplicado y deshecho, deja Windows como estaba' {
         $before = Get-RealSnapshot
         $results = @(foreach ($t in (Get-JuicerProfile 3)) { Invoke-JuicerTweak $t })

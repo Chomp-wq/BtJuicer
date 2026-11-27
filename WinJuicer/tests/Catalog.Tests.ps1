@@ -49,6 +49,13 @@ BeforeAll {
         foreach ($f in 'NetFx3', 'DirectPlay', 'Microsoft-Windows-Subsystem-Linux', 'VirtualMachinePlatform', 'Containers-DisposableClientVM', 'Microsoft-Hyper-V-All') {
             $m.Backend.State.Features[$f] = @{ Enabled = $false }
         }
+        # What other optimizers switch off and Reparación puts back.
+        Write-JuicerReg "$mm\PrefetchParameters" 'EnablePrefetcher' 'DWord' 0
+        $m.Backend.State.Compression = $false
+        $m.Backend.State.Tasks['\Microsoft\Windows\Defrag\|ScheduledDefrag'] = @{ Enabled = $false }
+        foreach ($s in 'BITS', 'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'XboxGipSvc', 'FontCache') { $m.Backend.State.Services[$s] = @{ Start = 'Disabled'; Running = $false } }
+        Write-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Services\DoSvc' 'Start' 'DWord' 4
+        Write-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers' 'TdrLevel' 'DWord' 0
         Write-JuicerReg 'HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\msedge.exe' '' 'String' 'C:\Edge\msedge.exe'
         Write-JuicerReg 'HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize' 'AppsUseLightTheme' 'DWord' 1
         $m
@@ -196,5 +203,90 @@ Describe 'Todo el catálogo a la vez' {
         @($results | Where-Object { $_.Outcome -eq 'Aplicado' }).Count | Should -BeGreaterThan 25
         [void](Undo-JuicerAll)
         Get-MachineSnapshot $m | Should -Be $before
+    }
+}
+
+Describe 'Reparaciones de lo que otros optimizadores apagan' {
+    BeforeAll {
+        $script:NewRepairs = @('reparar.precarga', 'reparar.compresion', 'reparar.descargas', 'reparar.xbox', 'reparar.fuentes', 'reparar.optimizar', 'reparar.tdr')
+        $script:Prefetch = 'HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Memory Management\PrefetchParameters'
+        $script:Gfx = 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'
+        $script:DoSvc = 'HKLM\SYSTEM\CurrentControlSet\Services\DoSvc'
+        $script:Defrag = '\Microsoft\Windows\Defrag\|ScheduledDefrag'
+        $script:Xbox = @('XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'XboxGipSvc')
+    }
+
+    It 'en un Windows sin tocar no hay nada que reparar, ni el diagnóstico lo pide, y no se cambia nada' {
+        $m = New-FakeMachine
+        Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+        # As Windows ships: Prefetch at 3, compression on, the services in manual or automatic,
+        # the weekly task on, no TdrLevel (and a TdrDelay of someone who renders, which stays).
+        Write-JuicerReg $Prefetch 'EnablePrefetcher' 'DWord' 3
+        $m.Backend.State.Tasks[$Defrag] = @{ Enabled = $true }
+        foreach ($s in @('BITS') + $Xbox) { $m.Backend.State.Services[$s] = @{ Start = 'Manual'; Running = $false } }
+        $m.Backend.State.Services['FontCache'] = @{ Start = 'Automatic'; Running = $true }
+        Write-JuicerReg $DoSvc 'Start' 'DWord' 2
+        Write-JuicerReg $Gfx 'TdrDelay' 'DWord' 8
+        $before = Get-MachineSnapshot $m
+        foreach ($id in $NewRepairs) {
+            (Get-JuicerTweakState (Find-JuicerTweak $id)).State | Should -Be 'Aplicado' -Because $id
+            (Invoke-JuicerTweak (Find-JuicerTweak $id)).Outcome | Should -Be 'YaEstaba' -Because $id
+        }
+        $audit = @(Get-JuicerCatalogAudit | Where-Object { $_.Area -eq 'Reparación' -and $_.Fix -in $NewRepairs })
+        $audit.Count | Should -Be 0
+        Get-MachineSnapshot $m | Should -Be $before
+    }
+
+    It 'con todo apagado, el diagnóstico lo dice, cada una lo devuelve a lo de Windows y deshacer lo deja como estaba' {
+        $m = New-FakeMachine
+        Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+        Write-JuicerReg $Prefetch 'EnablePrefetcher' 'DWord' 0
+        $m.Backend.State.Compression = $false
+        $m.Backend.State.Tasks[$Defrag] = @{ Enabled = $false }
+        foreach ($s in @('BITS', 'FontCache') + $Xbox) { $m.Backend.State.Services[$s] = @{ Start = 'Disabled'; Running = $false } }
+        Write-JuicerReg $DoSvc 'Start' 'DWord' 4
+        Write-JuicerReg $Gfx 'TdrLevel' 'DWord' 0
+        $before = Get-MachineSnapshot $m
+        $audit = @(Get-JuicerCatalogAudit | Where-Object { $_.Area -eq 'Reparación' })
+        foreach ($id in $NewRepairs) { @($audit | Where-Object { $_.Fix -eq $id }).Count | Should -Be 1 -Because $id }
+        foreach ($id in $NewRepairs) { (Invoke-JuicerTweak (Find-JuicerTweak $id)).Outcome | Should -Be 'Aplicado' -Because $id }
+        (Read-JuicerReg $Prefetch 'EnablePrefetcher').Value | Should -Be 3
+        $m.Backend.State.Compression | Should -BeTrue
+        $m.Backend.State.Tasks[$Defrag].Enabled | Should -BeTrue
+        foreach ($s in @('BITS') + $Xbox) { $m.Backend.State.Services[$s].Start | Should -Be 'Manual' -Because $s }
+        $m.Backend.State.Services['FontCache'].Start | Should -Be 'Automatic'
+        (Read-JuicerReg $DoSvc 'Start').Value | Should -Be 3
+        Read-JuicerReg $Gfx 'TdrLevel' | Should -BeNullOrEmpty
+        @(Get-JuicerCatalogAudit | Where-Object { $_.Area -eq 'Reparación' -and $_.Fix -in $NewRepairs }).Count | Should -Be 0
+        @(Undo-JuicerAll | Where-Object { $_.Outcome -ne 'Deshecho' }).Count | Should -Be 0
+        Get-MachineSnapshot $m | Should -Be $before
+    }
+
+    It 'lo que no es un apagado se respeta: Prefetch sin escribir, servicios en manual, TdrLevel de depuración, Optimización de distribución en manual' {
+        $m = New-FakeMachine
+        Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+        $m.Backend.State.Services['FontCache'] = @{ Start = 'Manual'; Running = $false }
+        Write-JuicerReg $Gfx 'TdrLevel' 'DWord' 1
+        Write-JuicerReg $DoSvc 'Start' 'DWord' 3
+        foreach ($id in 'reparar.precarga', 'reparar.fuentes', 'reparar.tdr', 'reparar.descargas', 'reparar.xbox', 'reparar.optimizar') {
+            (Get-JuicerTweakState (Find-JuicerTweak $id)).State | Should -Be 'Aplicado' -Because $id
+        }
+        # Prefetch left half-way (boot only) is not what Windows ships: back to 3.
+        Write-JuicerReg $Prefetch 'EnablePrefetcher' 'DWord' 2
+        (Get-JuicerTweakState (Find-JuicerTweak 'reparar.precarga')).State | Should -Be 'Pendiente'
+    }
+
+    It 'la compresión de memoria no aplica en Windows Server, ni cuando no se puede leer' {
+        $m = New-FakeMachine
+        Write-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\ProductOptions' 'ProductType' 'String' 'ServerNT'
+        $m.Backend.State.Compression = $false
+        $s = Get-JuicerTweakState (Find-JuicerTweak 'reparar.compresion')
+        $s.State | Should -Be 'NoAplica'
+        $s.Reason | Should -BeLike '*Windows Server*'
+        @(Get-JuicerCatalogAudit | Where-Object { $_.Fix -eq 'reparar.compresion' }).Count | Should -Be 0
+        Write-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\ProductOptions' 'ProductType' 'String' 'WinNT'
+        (Get-JuicerTweakState (Find-JuicerTweak 'reparar.compresion')).State | Should -Be 'Pendiente'
+        $m.Backend.State.Compression = $null
+        (Get-JuicerTweakState (Find-JuicerTweak 'reparar.compresion')).State | Should -Be 'NoAplica'
     }
 }

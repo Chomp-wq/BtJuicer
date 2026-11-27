@@ -246,8 +246,9 @@ function Get-JuicerExeName {
 }
 
 # `powercfg /waketimers`: each timer is a line with a [TAG] and the program's path, followed by
-# an indented line that, for a scheduled task, quotes the task's path. Names the task when there
-# is one, else the program. Nothing when there are no timers.
+# an indented line that, for a scheduled task, quotes the task's path, which Windows 10 and 11
+# write as 'NT TASK\Microsoft\…'. Names the task when there is one, else the program. Nothing
+# when there are no timers.
 function ConvertFrom-JuicerWakeTimers {
     param([string]$Text)
     $lines = @(Split-JuicerLines $Text)
@@ -256,7 +257,7 @@ function ConvertFrom-JuicerWakeTimers {
         if ($lines[$i] -notmatch '^\S.*\[[^\]\s]+\]\s*\S') { continue }
         $exe = Get-JuicerExeName $lines[$i]
         $task = $null
-        if ($i + 1 -lt $lines.Count -and $lines[$i + 1] -match "'(\\[^']+)'") { $task = $Matches[1].TrimStart('\') }
+        if ($i + 1 -lt $lines.Count -and $lines[$i + 1] -match "'(?:NT TASK)?(\\[^']+)'") { $task = $Matches[1].TrimStart('\') }
         $name = if ($task) { $task } else { $exe }
         if ($name -and $names -notcontains $name) { $names += $name }
     }
@@ -469,7 +470,7 @@ function Get-JuicerLowRamFindings {
         New-JuicerFinding $area 'Medio' ('La memoria comprometida está al {0:N0} %' -f [double]$State.CommitPct) 'Es la parte de lo que Windows puede prometer (RAM más archivo de paginación) que ya está prometida. Cerca del 100 % los programas empiezan a ir a tirones o a cerrarse. Cierra lo que no uses y no desactives el archivo de paginación: no ayuda.'
     }
     if ($State -and $State.Compression -eq $false) {
-        New-JuicerFinding $area 'Bajo' 'La compresión de memoria está desactivada' 'Comprimir una página en RAM es mucho más rápido que escribirla a disco, y con poca RAM se nota. Para volver a activarla, en PowerShell como administrador: Enable-MMAgent -MemoryCompression, y reinicia. Win Juicer nunca la apaga.'
+        New-JuicerFinding $area 'Bajo' 'La compresión de memoria está desactivada' 'Comprimir una página en RAM es mucho más rápido que escribirla a disco, y con poca RAM se nota. Reparación la vuelve a activar («Reactivar la compresión de memoria»), y después hay que reiniciar. Win Juicer nunca la apaga.'
     }
 }
 

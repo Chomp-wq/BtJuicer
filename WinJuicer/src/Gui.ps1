@@ -1944,7 +1944,7 @@ function Show-JuicerGuiDebloat {
             $row = New-JuicerUi StackPanel @{ Orientation = 'Horizontal' }
             [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = $a.Title }))
             if ($a.Need) { [void]$row.Children.Add((New-JuicerUi TextBlock @{ Text = '  necesaria aquí'; Foreground = '#F5B400' })) }
-            $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $a.Name; Width = 330; ToolTip = (New-JuicerTip @($a.What, $(if ($a.Need) { "Necesaria aquí: $($a.Need)" }))) }
+            $cb = New-JuicerUi CheckBox @{ Content = $row; Tag = $a.Name; Width = 330; ToolTip = (New-JuicerTip @($a.What, $(if ($a.Need) { "Necesaria aquí: $($a.Need)" }), $(if ($a.Retired) { "$($a.Retired): puede que no se pueda volver a instalar." }))) }
             $script:Gui.AppChecks[$a.Name] = @{ Check = $cb; App = $a }
             [void]$wrap.Children.Add($cb)
         }
@@ -3237,7 +3237,9 @@ function Register-JuicerGuiHandlers {
             $text = "Se quitará:`n`n" + (@($tags | ForEach-Object { if ($script:Gui.AppChecks[$_].App) { '· ' + $script:Gui.AppChecks[$_].App.Title } else { '· ' + $script:Gui.AppChecks[$_].Tweak.Title } }) -join "`n")
             if ($careful.Count -gt 0) { $text += "`n`nCon cuidado:`n" + ($careful -join "`n") }
             if ($warn.Count -gt 0) { $text += "`n`nTu equipo las usa:`n" + ($warn -join "`n") }
-            if (-not (Confirm-JuicerGui "$text`n`n¿Seguir?" $(if ($warn.Count -or $careful.Count) { 'Warning' } else { 'Question' }))) { return }
+            $gone = @($apps | Where-Object { $script:Gui.AppChecks[$_].App.Retired } | ForEach-Object { "· $($script:Gui.AppChecks[$_].App.Title): $($script:Gui.AppChecks[$_].App.Retired)" })
+            if ($gone.Count -gt 0) { $text += "`n`nPuede que no se puedan volver a instalar:`n" + ($gone -join "`n") }
+            if (-not (Confirm-JuicerGui "$text`n`n¿Seguir?" $(if ($warn.Count -or $careful.Count -or $gone.Count) { 'Warning' } else { 'Question' }))) { return }
             Start-JuicerGuiTask 'Quitando apps…' 'Run' @{ Apps = $apps; Ids = $ids; RestorePoint = [bool]$script:Gui.C.ChkRestorePoint.IsChecked } { param($r) Complete-JuicerGuiRun $r }
         }
         BtnInstallSuggested   = { foreach ($e in $script:Gui.InstallChecks.Values) { $e.Check.IsChecked = ($e.Suggested -and -not $e.Installed) } }

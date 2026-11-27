@@ -400,7 +400,7 @@ function Add-WinAppx {
     if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'winget no está disponible: instala «Instalador de aplicación» desde Microsoft Store.' }
     $script:AppxCache = $null
     $r = Invoke-WinNative 'winget.exe' @('install', '--id', $StoreId, '--source', 'msstore', '--accept-package-agreements', '--accept-source-agreements', '--silent', '--disable-interactivity') -TimeoutSec 0
-    if ($r.Code -ne 0) { throw "winget no pudo reinstalar $Name ($($r.Code)): $($r.Output)" }
+    if ($r.Code -ne 0) { throw "winget no pudo reinstalar $Name ($($r.Code)); si Microsoft la retiró de la Tienda, ya no hay de dónde: $($r.Output)" }
 }
 
 # Physical adapters that are connected. Virtual ones (VPN, Hyper-V) keep
@@ -894,13 +894,16 @@ function Test-WinProcessRunning {
 # Programs that closed with an error or stopped responding since a date,
 # from the Application log: «Application Error» 1000 (it crashed) and
 # «Application Hang» 1002 (it hung and was closed). @{ Exe; Kind; Time;
-# Module } each; null when the log cannot be read.
+# Module } each; null when the log cannot be read, or when it holds more than
+# can be read back to that date: one program crashing in a loop would push a
+# game's older crashes out, and «it never crashed before» would be a guess.
 function Read-WinAppIncidents {
     param([datetime]$Since)
     $out = @()
+    $max = 5000
     foreach ($f in @(@{ Provider = 'Application Error'; Id = 1000; Kind = 'Cierre' }, @{ Provider = 'Application Hang'; Id = 1002; Kind = 'Cuelgue' })) {
-        $ev = Get-JuicerEvents @{ LogName = 'Application'; ProviderName = $f.Provider; Id = $f.Id; StartTime = $Since }
-        if ($null -eq $ev) { return $null }
+        $ev = Get-JuicerEvents @{ LogName = 'Application'; ProviderName = $f.Provider; Id = $f.Id; StartTime = $Since } -Max $max
+        if ($null -eq $ev -or $ev.Count -ge $max) { return $null }
         foreach ($e in $ev) {
             $p = @($e.Properties | ForEach-Object { $_.Value })
             if ($p.Count -eq 0 -or -not $p[0]) { continue }
@@ -1094,6 +1097,8 @@ function New-JuicerWindowsBackend {
         PowerStatus  = ${function:Get-WinPowerStatus}
         Drivers      = ${function:Get-WinPnpDrivers}
         MemoryState  = ${function:Get-WinMemoryState}
+        MemCompressionGet = { try { [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression } catch { $null } }
+        MemCompressionSet = { param([bool]$On) if ($On) { Enable-MMAgent -MemoryCompression -ErrorAction Stop } else { Disable-MMAgent -MemoryCompression -ErrorAction Stop } }
         Responsiveness = ${function:Measure-WinResponsiveness}
         PowerModeGet = { Initialize-JuicerNative; [WinJuicer.Native]::GetPowerMode() }
         PowerModeSet = { param([string]$Scheme) Initialize-JuicerNative; [WinJuicer.Native]::SetPowerMode($Scheme) }
@@ -1174,6 +1179,7 @@ function New-JuicerMemoryBackend {
         PowerMode = '00000000-0000-0000-0000-000000000000'   # the «Power mode» overlay (all zeros = none, i.e. Balanced)
         Drivers  = New-Object System.Collections.ArrayList   # @{ Class; Name; Manufacturer; Provider; Version; Date }
         MemoryState = @{ Compression = $null; CommitPct = $null }   # what MemoryState answers
+        Compression = $true   # memory compression (Get-MMAgent), on as Windows ships; $null = unreadable
         Responsiveness = $null   # what Responsiveness answers: @{ ExplorerMs; NotepadMs }, null = not measured
         Power    = $null   # what PowerStatus answers (see ConvertFrom-JuicerPowerStatus); null = unreadable, the WMI fallback applies
         Audio    = $null   # the default output, as ConvertTo-JuicerAudioInfo gives it; null = no device
@@ -1345,6 +1351,8 @@ function New-JuicerMemoryBackend {
         PowerStatus = { $script:Mem.Power }
         Drivers     = { , @($script:Mem.Drivers) }
         MemoryState = { $script:Mem.MemoryState }
+        MemCompressionGet = { $script:Mem.Compression }
+        MemCompressionSet = { param([bool]$On) $script:Mem.Compression = $On }
         Responsiveness = { $script:Mem.Responsiveness }
         PowerModeGet = { $script:Mem.PowerMode }
         PowerModeSet = { param([string]$Scheme) [void]$script:Mem.Calls.Add("powermode $Scheme"); $script:Mem.PowerMode = $Scheme }

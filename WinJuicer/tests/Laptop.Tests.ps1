@@ -305,6 +305,13 @@ Describe 'Quién despierta al portátil y quién lo mantiene despierto' {
         @(ConvertFrom-JuicerWakeTimers 'Timer set by [SERVICE] \Device\HarddiskVolume3\Windows\system32\svchost.exe (UsoSvc) expires at 3:00:05 AM.') | Should -Be @('svchost.exe')
     }
 
+    It 'los temporizadores con la tarea como la escriben Windows 10 y 11 («NT TASK\…») también dicen la tarea' {
+        $t = "Timer set by [SERVICE] \Device\HarddiskVolume3\Windows\system32\svchost.exe (SystemEventsBroker) expires at 3:24:22 AM on 1/2/2026.`n  Reason: Windows will execute 'NT TASK\Microsoft\Windows\UpdateOrchestrator\Universal Orchestrator Start' scheduled task that requested waking the computer."
+        @(ConvertFrom-JuicerWakeTimers $t) | Should -Be @('Microsoft\Windows\UpdateOrchestrator\Universal Orchestrator Start')
+        $es = "El temporizador establecido por [SERVICE] \Device\HarddiskVolume3\Windows\system32\svchost.exe (SystemEventsBroker) expira a las 3:24:22 el 02/01/2026.`n  Motivo: Windows ejecutará la tarea programada 'NT TASK\Microsoft\Windows\UpdateOrchestrator\Reboot' que solicitó reactivar el equipo."
+        @(ConvertFrom-JuicerWakeTimers $es) | Should -Be @('Microsoft\Windows\UpdateOrchestrator\Reboot')
+    }
+
     It 'las peticiones que impiden suspender son las de Sistema y Ejecución, no las de Pantalla' {
         $en = @(ConvertFrom-JuicerPowerRequests $RequestsEn)
         $en.Count | Should -Be 2
@@ -541,7 +548,7 @@ Describe 'Portátiles con 8 GB de RAM' {
     It 'si la compresión está apagada lo dice, pero nunca la apaga' {
         $f = @(Get-JuicerLowRamFindings 8GB @{ Compression = $false; CommitPct = 50 } -1)
         @($f | Where-Object { $_.Title -like '*compresión de memoria está desactivada*' }).Count | Should -Be 1
-        @($f | Where-Object { $_.Detail -like '*Enable-MMAgent*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Detail -like '*Reactivar la compresión de memoria*' }).Count | Should -Be 1
     }
 
     It 'con más de 8 GB, o sin saber la RAM, no dice nada; lo desconocido no cuenta' {

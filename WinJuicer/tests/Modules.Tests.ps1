@@ -2801,3 +2801,31 @@ Describe 'Juegos repetidos en la galería' {
         @(Get-JuicerGames -Collectors @($col)).Count | Should -Be 2
     }
 }
+
+Describe 'Cierres de juegos en el registro de aplicaciones' {
+    It 'lee cierres y cuelgues con su programa, su hora y su módulo' {
+        Mock -ModuleName WinJuicer Get-JuicerEvents {
+            param($Filter, $Max)
+            $props = if ($Filter.Id -eq 1000) { @('Juego.exe', '1.0', 'x', 'd3d11.dll') } else { @('Juego.exe', '1.0') }
+            , @([pscustomobject]@{ Properties = @($props | ForEach-Object { [pscustomobject]@{ Value = $_ } }); TimeCreated = [datetime]'2026-11-20T10:00:00' })
+        }
+        $r = & (Get-Module WinJuicer) { Read-WinAppIncidents ([datetime]'2026-10-01') }
+        $r.Count | Should -Be 2
+        $r[0].Exe | Should -Be 'juego.exe'
+        $r[0].Kind | Should -Be 'Cierre'
+        $r[0].Module | Should -Be 'd3d11.dll'
+        $r[1].Kind | Should -Be 'Cuelgue'
+    }
+
+    It 'si hay más cierres de los que se pueden leer hasta esa fecha, no adivina: no se puede leer' {
+        # One program crashing in a loop fills the newest events; a game's older crashes would
+        # be cut off and «antes no le pasaba» would be a guess.
+        Mock -ModuleName WinJuicer Get-JuicerEvents {
+            param($Filter, $Max)
+            $one = [pscustomobject]@{ Properties = @([pscustomobject]@{ Value = 'otro.exe' }); TimeCreated = Get-Date }
+            , @(1..$Max | ForEach-Object { $one })
+        }
+        & (Get-Module WinJuicer) { Read-WinAppIncidents ([datetime]'2026-10-01') } | Should -BeNullOrEmpty
+        Should -Invoke -ModuleName WinJuicer Get-JuicerEvents -ParameterFilter { $Max -eq 5000 }
+    }
+}

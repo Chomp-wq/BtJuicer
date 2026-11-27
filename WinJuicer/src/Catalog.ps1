@@ -213,6 +213,12 @@ function Test-JuicerHomeEdition {
     $e -and ([string]$e.Value) -like 'Core*'
 }
 
+# ProductType is WinNT on Windows 10 and 11, ServerNT or LanmanNT on Windows Server.
+function Test-JuicerServerEdition {
+    $p = Read-JuicerReg 'HKLM\SYSTEM\CurrentControlSet\Control\ProductOptions' 'ProductType'
+    $null -ne $p -and [string]$p.Value -in 'ServerNT', 'LanmanNT'
+}
+
 function Test-JuicerInsider {
     $b = Read-JuicerReg 'HKLM\SOFTWARE\Microsoft\WindowsSelfHost\Applicability' 'BranchName'
     $null -ne $b -and [string]$b.Value -ne ''
@@ -243,6 +249,36 @@ function New-JuicerCatalog {
         Cost = 'Ninguno: la memoria que usa se libera al instante en cuanto otro programa la pide.'
         Actions = @(
             @{ Type = 'Service'; Name = 'SysMain'; Start = 'Automatic'; Ok = { param($c) $c.Start -in 'Automatic', 'AutomaticDelayed' } }
+        )
+    }
+    @{
+        Id = 'reparar.precarga'; Category = 'Reparación'; Level = 1; Impact = 'Medio'; Reboot = 'Reinicio'
+        Title = 'Reactivar la precarga de programas (Prefetch)'
+        What = 'Devuelve la precarga de Windows a su valor normal, para el arranque y para los programas, si otro optimizador la apagó o la dejó a medias. Si nadie la tocó, no cambia nada.'
+        Gain = 'Windows recuerda qué lee cada programa al abrirse y lo tiene a mano la vez siguiente: arranque y apertura de programas más rápidos, también con SSD. Apagarla es un consejo de la época de los discos duros, como apagar SysMain.'
+        Cost = 'Ninguno: ocupa unos pocos megas en C:\Windows\Prefetch.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = "$mm\PrefetchParameters"; Name = 'EnablePrefetcher'; Value = 3; Ok = { param($c) Test-JuicerRegAbsentOr $c 3 } }
+        )
+    }
+    @{
+        Id = 'reparar.compresion'; Category = 'Reparación'; Level = 1; Impact = 'Medio'; Reboot = 'Reinicio'
+        Title = 'Reactivar la compresión de memoria'
+        What = 'Vuelve a encender la compresión de memoria de Windows si otro optimizador la apagó (Disable-MMAgent).'
+        Gain = 'Cuando la RAM se llena, por ejemplo con un juego, el navegador y Discord abiertos, Windows comprime en la propia RAM lo que no se está usando en lugar de escribirlo al disco. Comprimir es mucho más rápido que paginar: menos tirones y ventanas que vuelven al instante. Con 8 o 16 GB es donde más se nota.'
+        Cost = 'Algo de CPU mientras comprime, y sólo cuando falta memoria. Funciona con SysMain activo, que su propia reparación devuelve.'
+        Skip = {
+            if (Test-JuicerServerEdition) { return 'En Windows Server viene apagada a propósito.' }
+            if ($null -eq (& (Get-JuicerBackend).MemCompressionGet)) { return 'No se pudo leer la compresión de memoria de este equipo.' }
+        }
+        Actions = @(
+            @{
+                Type = 'Custom'; Key = 'compression'; Label = 'Compresión de memoria: activada'
+                Test = { (& (Get-JuicerBackend).MemCompressionGet) -eq $true }
+                Capture = { @{ On = [bool](& (Get-JuicerBackend).MemCompressionGet) } }
+                Apply = { & (Get-JuicerBackend).MemCompressionSet $true }
+                Restore = { param($s) & (Get-JuicerBackend).MemCompressionSet ([bool]$s.On) }
+            }
         )
     }
     @{
@@ -335,6 +371,61 @@ function New-JuicerCatalog {
         Cost = 'Las actualizaciones vuelven a llegar.'
         Actions = @(
             @{ Type = 'Service'; Name = 'wuauserv'; Start = 'Manual'; Ok = { param($c) $c.Start -ne 'Disabled' } }
+        )
+    }
+    @{
+        Id = 'reparar.descargas'; Category = 'Reparación'; Level = 1; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Reactivar las descargas de la Tienda, Game Pass y Windows Update'
+        What = 'Si alguien deshabilitó el Servicio de transferencia inteligente en segundo plano (BITS) o el de Optimización de distribución, los deja en manual: Windows los arranca cuando hacen falta.'
+        Gain = 'La Tienda, la app Xbox (Game Pass) y Windows Update descargan a través de ellos: deshabilitados, las descargas se quedan en «Pendiente» o fallan con errores que no dicen por qué. Deshabilitarlos no da rendimiento: en manual no gastan nada hasta que algo descarga. Para no compartir tu conexión con otros equipos está «No compartir actualizaciones», en Actualizaciones.'
+        Cost = 'Ninguno.'
+        Actions = @(
+            @{ Type = 'Service'; Name = 'BITS'; Start = 'Manual'; Ok = { param($c) $c.Start -ne 'Disabled' } }
+            # Windows greys out this service's start type in the services console; the registry
+            # value is what optimizers write to disable it, and what puts it back.
+            @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Services\DoSvc'; Name = 'Start'; Value = 3; Ok = { param($c) $null -eq $c -or $c.Kind -ne 'DWord' -or [int64]$c.Value -ne 4 } }
+        )
+    }
+    @{
+        Id = 'reparar.xbox'; Category = 'Reparación'; Level = 1; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Reactivar los servicios de Xbox'
+        What = 'Si alguien los deshabilitó, deja en manual los servicios de Xbox Live (inicio de sesión, partidas guardadas en la nube y red) y el de accesorios de Xbox. En manual no arrancan hasta que un juego o un mando los pide.'
+        Gain = 'Deshabilitados no dan ni un FPS, porque en manual ya no gastan nada. Lo que hacen es romper cosas: los juegos de Game Pass y de la Tienda no inician sesión, las partidas no se sincronizan con la nube y los mandos de Xbox pierden sus ajustes y sus actualizaciones.'
+        Cost = 'Ninguno.'
+        Actions = @(
+            foreach ($n in 'XblAuthManager', 'XblGameSave', 'XboxNetApiSvc', 'XboxGipSvc') {
+                @{ Type = 'Service'; Name = $n; Start = 'Manual'; Ok = { param($c) $c.Start -ne 'Disabled' } }
+            }
+        )
+    }
+    @{
+        Id = 'reparar.fuentes'; Category = 'Reparación'; Level = 1; Impact = 'Bajo'; Reboot = 'No'
+        Title = 'Reactivar la caché de fuentes'
+        What = 'Vuelve a poner en automático el Servicio de caché de fuentes de Windows (FontCache) si alguien lo deshabilitó.'
+        Gain = 'Guarda ya procesadas las fuentes que usan los programas. Sin él, cada programa las lee y las procesa al abrirse, y todos tardan algo más en abrir. Sale en las listas de «servicios innecesarios», y no lo es.'
+        Cost = 'Ninguno: unos pocos megas de memoria.'
+        Actions = @(
+            @{ Type = 'Service'; Name = 'FontCache'; Start = 'Automatic'; Ok = { param($c) $c.Start -ne 'Disabled' } }
+        )
+    }
+    @{
+        Id = 'reparar.optimizar'; Category = 'Reparación'; Level = 1; Impact = 'Medio'; Reboot = 'No'
+        Title = 'Reactivar la optimización semanal de unidades'
+        What = 'Vuelve a habilitar la tarea programada de «Optimizar unidades» (ScheduledDefrag) si alguien la deshabilitó.'
+        Gain = 'En un SSD no desfragmenta: repasa el TRIM de todo el espacio libre, lo que mantiene su velocidad de escritura. En un disco duro sí desfragmenta, y eso acorta las cargas. Windows decide qué hace falta en cada unidad.'
+        Cost = 'Ninguno: corre en el mantenimiento automático, con el equipo sin usar.'
+        Actions = @(
+            @{ Type = 'Task'; Path = '\Microsoft\Windows\Defrag\'; Name = 'ScheduledDefrag'; Enabled = $true }
+        )
+    }
+    @{
+        Id = 'reparar.tdr'; Category = 'Reparación'; Level = 1; Impact = 'Bajo'; Reboot = 'Reinicio'
+        Title = 'Reactivar la recuperación de la gráfica (TDR)'
+        What = 'Borra «TdrLevel = 0» si una guía u otro programa lo dejó puesto: es lo que apaga la detección de cuelgues de la tarjeta gráfica.'
+        Gain = 'Con la detección activa, si la gráfica se cuelga la pantalla se queda en negro un par de segundos y el driver se recupera solo. Sin ella, el PC entero se congela y sólo queda apagarlo con el botón, perdiendo lo que no estuviera guardado.'
+        Cost = 'Ninguno. Si renderizas o calculas en la GPU tareas que tardan más de 2 segundos, lo que sirve es subir TdrDelay, que no se toca.'
+        Actions = @(
+            @{ Type = 'Registry'; Path = 'HKLM\SYSTEM\CurrentControlSet\Control\GraphicsDrivers'; Name = 'TdrLevel'; Delete = $true; Ok = { param($c) $null -eq $c -or $c.Kind -ne 'DWord' -or [int64]$c.Value -ne 0 } }
         )
     }
 
@@ -623,13 +714,15 @@ function New-JuicerCatalog {
     @{
         Id = 'ui.busqueda'; Category = 'Interfaz'; Level = 2; Impact = 'Bajo'; Reboot = 'Explorador'
         Title = 'Búsqueda de Inicio sin resultados web'
-        What = 'Quita las sugerencias de Bing de la búsqueda del menú Inicio.'
+        What = 'Quita las sugerencias de Bing de la búsqueda del menú Inicio, y los «destacados de búsqueda»: las imágenes y novedades del día que el cuadro de búsqueda descarga de internet.'
         Gain = 'La búsqueda deja de esperar a internet: resultados locales al instante. Sólo se nota si tu conexión tarda; no da FPS.'
-        Cost = 'No verás resultados web al buscar desde Inicio.'
+        Cost = 'No verás resultados web ni los destacados al buscar desde Inicio.'
         # On Windows 10 the policy alone does not take the web results out of Start: it is
         # BingSearchEnabled that does (CortanaConsent goes with it). Cortana itself is not touched.
+        # «Allow search highlights» (Search.admx) is read by Windows 10 21H2 and later and by Windows 11.
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Policies\Microsoft\Windows\Explorer'; Name = 'DisableSearchBoxSuggestions'; Value = 1 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'EnableDynamicContentInWSB'; Value = 0 }
             if ($win10) {
                 @{ Type = 'Registry'; Path = $searchKey; Name = 'BingSearchEnabled'; Value = 0 }
                 @{ Type = 'Registry'; Path = $searchKey; Name = 'CortanaConsent'; Value = 0 }
@@ -642,8 +735,11 @@ function New-JuicerCatalog {
         What = $(if ($win10) { 'Quita de la barra de tareas el widget de noticias y tiempo («Noticias e intereses») mediante directiva.' } else { 'Desactiva el panel de Widgets (noticias, tiempo) mediante directiva.' })
         Gain = $(if ($win10) { 'El widget se actualiza desde internet cada poco, con un navegador incrustado en segundo plano: gasta CPU, RAM y batería aunque no lo mires.' } else { 'El panel mantiene un navegador incrustado en memoria: suele liberar entre 100 y 300 MB de RAM y algo de red.' })
         Cost = $(if ($win10) { 'Desaparecen el tiempo y las noticias de la barra de tareas. Configuración puede decir «Algunas opciones las administra tu organización»: es esta directiva, nada más.' } else { 'Desaparece el panel. Configuración puede decir «Algunas opciones las administra tu organización»: es esta directiva, nada más.' })
+        # Two different policies: «Allow widgets» (Dsh) only exists from Windows 11 21H2, and
+        # Windows 10 reads «Enable news and interests on the taskbar» (Feeds.admx) instead.
         Actions = @(
-            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'; Name = 'AllowNewsAndInterests'; Value = 0 }
+            if ($win10) { @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds'; Name = 'EnableFeeds'; Value = 0 } }
+            else { @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'; Name = 'AllowNewsAndInterests'; Value = 0 } }
         )
     }
     @{
@@ -1191,9 +1287,9 @@ function New-JuicerCatalog {
 
 function Get-JuicerMyths {
     @(
-        @{ Title = 'Desactivar SysMain (Superfetch)'; Why = 'Precarga en RAM lo que usas a menudo, y en SSD también acelera la apertura de programas. La memoria que ocupa se libera al instante si otro programa la pide. Si otro optimizador lo apagó, Reparación lo devuelve.' }
+        @{ Title = 'Desactivar SysMain (Superfetch) o la precarga (Prefetch)'; Why = 'Precargan en RAM lo que usas a menudo, y en SSD también aceleran la apertura de programas. La memoria que ocupan se libera al instante si otro programa la pide. Si otro optimizador los apagó, Reparación los devuelve.' }
         @{ Title = 'Quitar el archivo de paginación'; Why = 'Aunque tengas 32 GB, Windows no puede comprometer memoria que no tiene dónde respaldar: los juegos se cierran con RAM libre. Tampoco hay volcados de memoria tras un pantallazo azul.' }
-        @{ Title = 'Apagar la compresión de memoria'; Why = 'Comprimir una página en RAM es mucho más rápido que escribirla a disco. Apagarla sólo hace que pagine antes.' }
+        @{ Title = 'Apagar la compresión de memoria'; Why = 'Comprimir una página en RAM es mucho más rápido que escribirla a disco. Apagarla sólo hace que pagine antes. Si otro optimizador la apagó, Reparación la devuelve.' }
         @{ Title = '«Liberar RAM» o vaciar la memoria en espera'; Why = 'La RAM libre es RAM desperdiciada: Windows usa la sobrante como caché y la cede al instante. Vaciarla obliga a leer de nuevo desde disco. Las herramientas que lo hacían corregían un fallo concreto de 2018 ya resuelto.' }
         @{ Title = 'Desactivar Microsoft Defender'; Why = 'Lo que Defender cuesta en juegos está en las cargas, y se resuelve con exclusiones de la carpeta de juegos (en Juegos), no apagando la protección de todo el equipo.' }
         @{ Title = 'Desactivar las mitigaciones de Spectre y Meltdown'; Why = 'En procesadores de 2019 en adelante la protección es por hardware y casi no cuesta nada; quitarla abre una vulnerabilidad real a cambio de nada medible.' }
@@ -1215,6 +1311,8 @@ function Get-JuicerMyths {
         @{ Title = 'Desactivar IPv6 o Teredo'; Why = 'No da rendimiento, y Teredo es lo que usan el chat de grupo y el multijugador de Xbox para atravesar el router: sin él, «NAT estricta».' }
         @{ Title = 'Desactivar Cortana por directiva en Windows 10 22H2'; Why = 'Cortana ya no está en la búsqueda de esa versión: no hay nada que apagar y no ahorra nada. Lo que sí quita lo de Bing en Inicio es el ajuste «Búsqueda de Inicio sin resultados web».' }
         @{ Title = 'Poner el procesador al 100 % mínimo con batería, o forzar el máximo rendimiento permanente en un portátil'; Why = 'Con batería, un procesador que nunca baja de frecuencia gasta la carga en horas y se calienta sin que el juego lo pida: tirones por temperatura y menos autonomía. Lo que sirve es rendir al máximo enchufado: el plan de Win Juicer lo hace y deja valores de ahorro moderados con batería, y el «Modo de energía» se aplica con el cargador puesto.' }
+        @{ Title = 'Desactivar los servicios de Xbox, BITS u Optimización de distribución'; Why = 'Están en manual: no arrancan ni gastan nada hasta que algo los pide. Desactivados, Game Pass no inicia sesión, las partidas no se guardan en la nube y las descargas de la Tienda y de Windows Update se atascan. Si otro optimizador los desactivó, Reparación los devuelve.' }
+        @{ Title = 'Apagar la detección de cuelgues de la gráfica (TdrLevel = 0)'; Why = 'No da rendimiento: sólo cambia qué pasa cuando la gráfica se cuelga. Con ella, el driver se recupera en dos segundos; sin ella, el PC se congela entero. Si una guía la dejó apagada, Reparación la devuelve.' }
         @{ Title = 'Reducir los procesos svchost (SvcHostSplitThresholdInKB)'; Why = 'Agrupar servicios en menos procesos baja el número del Administrador de tareas, no el consumo, y hace que un fallo en uno tumbe a los demás.' }
     )
 }
