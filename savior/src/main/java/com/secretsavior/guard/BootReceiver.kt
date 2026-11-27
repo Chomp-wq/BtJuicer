@@ -7,6 +7,7 @@ import com.secretsavior.data.Store
 
 class BootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (Store.isLocked(context)) Watchdog.ensure(context) // también renueva la alarma
+        // También renueva la alarma. Un fallo aquí no puede tumbar el proceso (lleva el túnel).
+        safely("arranque") { if (Store.isLocked(context)) Watchdog.ensure(context) }
     }
 }

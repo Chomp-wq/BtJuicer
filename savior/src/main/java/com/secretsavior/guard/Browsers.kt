@@ -40,7 +40,7 @@ object Browsers {
                     ri.activityInfo?.packageName?.let(found::add)
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // sin respuesta del sistema: quedan los conocidos
         }
         found.remove(c.packageName)

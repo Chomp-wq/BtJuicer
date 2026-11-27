@@ -273,7 +273,7 @@ class Labels private constructor(
                 for ((pkg, name, concept) in RUNTIME) {
                     val s = try {
                         lookup.string(pkg, name)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         null
                     } ?: continue
                     if (!usableRuntime(s)) continue
@@ -283,7 +283,7 @@ class Labels private constructor(
                 for ((pkg, name) in RUNTIME_USERS_TITLES) {
                     val s = try {
                         lookup.string(pkg, name)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         null
                     } ?: continue
                     if (usableRuntime(s)) titles += Fold.normalize(s)

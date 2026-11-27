@@ -11,9 +11,13 @@ import android.content.Intent
 import android.os.Build
 import android.util.Log
 import com.secretsavior.R
+import com.secretsavior.guard.NamedThreads
+import com.secretsavior.guard.Safe
 import com.secretsavior.guard.Status
+import com.secretsavior.guard.safely
 import com.secretsavior.guard.Watchdog
 import com.secretsavior.provision.ShellVerdict.Goal
+import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -21,7 +25,10 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.launch
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 sealed interface ProvisionState {
     data object Idle : ProvisionState
@@ -46,7 +53,22 @@ object Provisioner {
     const val KEY_CODE = "code"
     const val ACTION_REPLY = "com.secretsavior.PROVISION_CODE"
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /**
+     * Última red: lo que se escape de un `launch` llegaría al manejador de excepciones del hilo y
+     * mataría el proceso (que lleva el túnel). Aquí se registra y se deja la pantalla en un
+     * estado final en vez de «Trabajando…» para siempre. Hilo con nombre: el registro dice cuál.
+     */
+    private val failSafe = CoroutineExceptionHandler { _, t ->
+        Safe.failed("vinculación", t)
+        safely("estado final") {
+            (_state.value as? ProvisionState.Working)?.let {
+                _state.value = ProvisionState.Done(it.goal, false, "Algo falló por dentro. Vuelve a intentarlo.")
+            }
+        }
+    }
+    private val scope = CoroutineScope(
+        SupervisorJob() + Executors.newCachedThreadPool(NamedThreads("savior-provision")).asCoroutineDispatcher() + failSafe,
+    )
     private val _state = MutableStateFlow<ProvisionState>(ProvisionState.Idle)
     val state: StateFlow<ProvisionState> = _state.asStateFlow()
 
@@ -61,23 +83,36 @@ object Provisioner {
     fun alreadyPaired(c: Context): Boolean = runCatching { AdbKeys.load(c) != null }.getOrDefault(false)
 
     /** Pone la notificación con el campo del código y espera a que se escriba. */
-    fun begin(c: Context, goal: Goal) {
-        if (_state.value is ProvisionState.Working) return
+    fun begin(c: Context, goal: Goal) = safely("preparar código") {
+        if (_state.value is ProvisionState.Working) return@safely
         _state.value = ProvisionState.WaitingCode(goal)
         notifyWaiting(c.applicationContext, goal, null)
     }
 
     /** Ya vinculado antes: conecta y ejecuta, sin código. */
-    fun runPaired(c: Context, goal: Goal) {
-        if (_state.value is ProvisionState.Working) return
+    fun runPaired(c: Context, goal: Goal) = safely("conectar") {
+        if (_state.value is ProvisionState.Working) return@safely
         val ctx = c.applicationContext
         _state.value = ProvisionState.Working(goal, "Conectando…")
-        scope.launch { connectAndRun(ctx, goal, link(ctx)) }
+        scope.launch { runGuarded(ctx, goal) { connectAndRun(ctx, goal, link(ctx)) } }
+    }
+
+    /** Si el cuerpo lanza, el usuario ve un resultado fallido en vez de un proceso caído o un diálogo colgado. */
+    private suspend fun runGuarded(ctx: Context, goal: Goal, body: suspend () -> Unit) {
+        try {
+            body()
+        } catch (t: Throwable) {
+            if (t is java.util.concurrent.CancellationException) throw t
+            Safe.failed("vinculación", t)
+            safely("resultado") {
+                finish(ctx, goal, ShellVerdict.Verdict(false, t.message ?: "Algo falló por dentro. Vuelve a intentarlo."))
+            }
+        }
     }
 
     /** Cierra el diálogo y retira la notificación (salvo que esté trabajando). */
-    fun reset(c: Context) {
-        if (_state.value is ProvisionState.Working) return
+    fun reset(c: Context) = safely("reiniciar") {
+        if (_state.value is ProvisionState.Working) return@safely
         _state.value = ProvisionState.Idle
         runCatching { nm(c.applicationContext).cancel(NOTIF_ID) }
     }
@@ -88,6 +123,19 @@ object Provisioner {
      * quedarse vivo lo que tarda el resto.
      */
     fun onCode(c: Context, raw: CharSequence?, onPaired: () -> Unit) {
+        // Una sola vez: el receptor tiene que soltar su `goAsync` pase lo que pase, y la
+        // corrutina lo pide dos veces (al acabar y a los 8 s).
+        val released = AtomicBoolean(false)
+        val release = { if (released.compareAndSet(false, true)) safely("soltar receptor") { onPaired() } }
+        try {
+            onCodeInner(c, raw, release)
+        } catch (t: Throwable) {
+            Safe.failed("código de vinculación", t)
+            release()
+        }
+    }
+
+    private fun onCodeInner(c: Context, raw: CharSequence?, onPaired: () -> Unit) {
         val ctx = c.applicationContext
         val goal = (state.value as? ProvisionState.WaitingCode)?.goal
         if (goal == null) {
@@ -106,14 +154,21 @@ object Provisioner {
         scope.launch {
             // Si el emparejamiento se atasca, el receptor se suelta igualmente a los 8 s.
             val guard = launch { delay(8_000); onPaired() }
-            val paired = adb.pair(code)
-            guard.cancel()
-            onPaired()
-            if (paired.isFailure) {
-                finish(ctx, goal, ShellVerdict.Verdict(false, explainPairFailure(paired.exceptionOrNull()?.message)))
-                return@launch
+            try {
+                runGuarded(ctx, goal) {
+                    val paired = adb.pair(code)
+                    guard.cancel()
+                    onPaired()
+                    if (paired.isFailure) {
+                        finish(ctx, goal, ShellVerdict.Verdict(false, explainPairFailure(paired.exceptionOrNull()?.message)))
+                    } else {
+                        connectAndRun(ctx, goal, adb)
+                    }
+                }
+            } finally {
+                guard.cancel()
+                onPaired() // también si algo lanzó o se canceló antes de llegar arriba
             }
-            connectAndRun(ctx, goal, adb)
         }
     }
 
@@ -194,7 +249,7 @@ object Provisioner {
                     .addAction(action)
                     .build(),
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "no se pudo mostrar la notificación", e)
         }
     }
@@ -205,7 +260,7 @@ object Provisioner {
                 NOTIF_ID,
                 builder(c).setContentTitle("Secret Savior").setContentText(text).setOngoing(true).setOnlyAlertOnce(true).build(),
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "notificación", e)
         }
     }
@@ -217,7 +272,7 @@ object Provisioner {
                 builder(c).setContentTitle(title).setContentText(text.lineSequence().first())
                     .setStyle(Notification.BigTextStyle().bigText(text)).setAutoCancel(true).build(),
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "notificación", e)
         }
     }
@@ -226,9 +281,17 @@ object Provisioner {
 /** Recibe lo escrito en la notificación del código (ver el bloque del manifiesto). */
 class ProvisionReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        if (intent.action != Provisioner.ACTION_REPLY) return
-        val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Provisioner.KEY_CODE)
-        val pending = goAsync()
-        Provisioner.onCode(context, text) { runCatching { pending.finish() } }
+        var pending: PendingResult? = null
+        try {
+            if (intent.action != Provisioner.ACTION_REPLY) return
+            val text = RemoteInput.getResultsFromIntent(intent)?.getCharSequence(Provisioner.KEY_CODE)
+            val p = goAsync()
+            pending = p
+            Provisioner.onCode(context, text) { runCatching { p?.finish() } }
+        } catch (t: Throwable) {
+            // El receptor no puede quedarse sin terminar (ANR) ni lanzar (mata el proceso).
+            Safe.failed("receptor de vinculación", t)
+            runCatching { pending?.finish() }
+        }
     }
 }

@@ -20,6 +20,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import com.secretsavior.data.Store
 import com.secretsavior.guard.ReviveListener
+import com.secretsavior.guard.Safe
+import com.secretsavior.guard.safely
 import com.secretsavior.guard.Status
 import com.secretsavior.guard.Watchdog
 import com.secretsavior.ui.Actions
@@ -30,99 +32,95 @@ import com.secretsavior.vpn.SaviorVpnService
 
 class MainActivity : ComponentActivity() {
 
+    /**
+     * Abrir una pantalla del sistema puede lanzar ActivityNotFoundException (ROM sin esa pantalla)
+     * o SecurityException (intent propio de un fabricante, actividad no exportada). Es un clic en
+     * el hilo principal: un fallo aquí tumbaría el proceso con el túnel dentro. Devuelve si abrió.
+     */
+    private fun start(intent: Intent): Boolean = try {
+        startActivity(intent)
+        true
+    } catch (t: Throwable) {
+        Safe.failed("abrir ${intent.action ?: intent.component?.flattenToShortString()}", t)
+        false
+    }
+
     private val vpnConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (Status.isVpnPermitted(this)) startVpn()
+        safely("consentimiento de VPN") { if (Status.isVpnPermitted(this)) startVpn() }
     }
 
     private val actions = object : Actions {
-        override fun enableVpn() {
+        override fun enableVpn() = safely("activar VPN") {
             val consent = VpnService.prepare(this@MainActivity)
             if (consent != null) vpnConsent.launch(consent) else startVpn()
         }
 
-        override fun openAccessibility() =
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        override fun openAccessibility() {
+            start(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
 
-        override fun openAppInfo() = startActivity(
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")),
-        )
+        override fun openAppInfo() {
+            start(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
+        }
 
         override fun enableAdmin() = launchAdmin()
 
-        override fun openNetworkSettings() = startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+        override fun openNetworkSettings() {
+            start(Intent(Settings.ACTION_WIRELESS_SETTINGS))
+        }
 
-        override fun exemptBattery() {
+        override fun exemptBattery() = safely("batería") {
             Store.openGrace(Store.Grace.BATTERY)
-            startActivity(
-                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
-            )
+            start(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")))
         }
 
         /** Xiaomi/Redmi/POCO matan los servicios de apps sin «Autoinicio». */
-        override fun openAutostart() {
+        override fun openAutostart() = safely("autoinicio") {
             Store.openGrace(Store.Grace.AUTOSTART)
-            try {
-                startActivity(
-                    Intent().setComponent(
-                        ComponentName(
-                            "com.miui.securitycenter",
-                            "com.miui.permcenter.autostart.AutoStartManagementActivity",
-                        ),
-                    ),
-                )
-            } catch (e: Exception) {
-                openAppInfo()
-            }
+            val miui = Intent().setComponent(
+                ComponentName(
+                    "com.miui.securitycenter",
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity",
+                ),
+            )
+            if (!start(miui)) openAppInfo()
         }
 
-        override fun openNotificationAccess() {
+        override fun openNotificationAccess() = safely("acceso a notificaciones") {
             Store.openGrace(Store.Grace.NOTIFICATION_ACCESS)
             val me = ComponentName(this@MainActivity, ReviveListener::class.java)
-            try {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    startActivity(
-                        Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
-                            .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, me.flattenToString()),
-                    )
-                } else {
-                    startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
-                }
-            } catch (e: Exception) {
-                runCatching { startActivity(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)) }
-            }
-        }
-
-        override fun openVpnSettings() {
-            Store.openGrace(Store.Grace.ALWAYS_ON_VPN)
-            startActivity(Intent(Settings.ACTION_VPN_SETTINGS))
-        }
-
-        override fun openAutoRevoke() {
-            Store.openGrace(Store.Grace.AUTO_REVOKE)
-            try {
-                startActivity(
-                    Intent(Intent.ACTION_AUTO_REVOKE_PERMISSIONS, Uri.parse("package:$packageName")),
+            val opened = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                start(
+                    Intent(Settings.ACTION_NOTIFICATION_LISTENER_DETAIL_SETTINGS)
+                        .putExtra(Settings.EXTRA_NOTIFICATION_LISTENER_COMPONENT_NAME, me.flattenToString()),
                 )
-            } catch (e: Exception) {
-                openAppInfo()
-            }
+            if (!opened) start(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
+        }
+
+        override fun openVpnSettings() = safely("VPN siempre activa") {
+            Store.openGrace(Store.Grace.ALWAYS_ON_VPN)
+            start(Intent(Settings.ACTION_VPN_SETTINGS))
+        }
+
+        override fun openAutoRevoke() = safely("pausar permisos") {
+            Store.openGrace(Store.Grace.AUTO_REVOKE)
+            // La acción existe desde Android 11: antes no hay pantalla a la que ir.
+            val opened = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R &&
+                start(Intent(Intent.ACTION_AUTO_REVOKE_PERMISSIONS, Uri.parse("package:$packageName")))
+            if (!opened) openAppInfo()
         }
 
         override fun openDevOptions() {
-            try {
-                startActivity(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))
-            } catch (e: Exception) {
-                startActivity(Intent(Settings.ACTION_SETTINGS))
-            }
+            if (!start(Intent(Settings.ACTION_APPLICATION_DEVELOPMENT_SETTINGS))) start(Intent(Settings.ACTION_SETTINGS))
         }
 
-        override fun copy(text: String) {
+        override fun copy(text: String) = safely("copiar") {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
             cm.setPrimaryClip(ClipData.newPlainText("comando", text))
             Toast.makeText(this@MainActivity, "Copiado.", Toast.LENGTH_SHORT).show()
         }
 
-        override fun harden(kind: Hardening) {
+        override fun harden(kind: Hardening) = safely("endurecer") {
             when (kind) {
                 Hardening.DEV_OPTIONS -> Store.blockDevOptions(this@MainActivity)
                 Hardening.ADB -> Store.blockAdb(this@MainActivity)
@@ -130,11 +128,11 @@ class MainActivity : ComponentActivity() {
             Watchdog.ensure(this@MainActivity)
         }
 
-        override fun beginOwnerCommit() {
+        override fun beginOwnerCommit() = safely("empezar bloqueo") {
             Store.setPendingCommit(this@MainActivity, true)
         }
 
-        override fun cancelCommit() {
+        override fun cancelCommit() = safely("cancelar bloqueo") {
             Store.setPendingCommit(this@MainActivity, false)
         }
 
@@ -142,7 +140,7 @@ class MainActivity : ComponentActivity() {
          * Lo último de todo: el administrador es lo que bloquea (ver Store.isLocked), así que
          * pedirlo antes dejaba la app bloqueada a mitad de la configuración.
          */
-        override fun commit() {
+        override fun commit() = safely("bloquear") {
             Store.setPendingCommit(this@MainActivity, true)
             if (Status.isAdminActive(this@MainActivity)) {
                 finishCommit()
@@ -153,19 +151,21 @@ class MainActivity : ComponentActivity() {
     }
 
     private val adminConsent = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (it.resultCode == RESULT_OK || Status.isAdminActive(this)) {
-            finishCommit()
-        } else if (Store.pendingCommit(this)) {
-            Store.setPendingCommit(this, false)
-            Toast.makeText(
-                this,
-                "No se activó nada: sin el administrador la protección no queda fija. Cuando quieras, vuelve a intentarlo.",
-                Toast.LENGTH_LONG,
-            ).show()
+        safely("resultado del administrador") {
+            if (it.resultCode == RESULT_OK || Status.isAdminActive(this)) {
+                finishCommit()
+            } else if (Store.pendingCommit(this)) {
+                Store.setPendingCommit(this, false)
+                Toast.makeText(
+                    this,
+                    "No se activó nada: sin el administrador la protección no queda fija. Cuando quieras, vuelve a intentarlo.",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }
     }
 
-    private fun launchAdmin() {
+    private fun launchAdmin() = safely("pedir administrador") {
         adminConsent.launch(
             Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
                 .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, Status.adminComponent(this))
@@ -176,7 +176,7 @@ class MainActivity : ComponentActivity() {
         )
     }
 
-    private fun finishCommit() {
+    private fun finishCommit() = safely("terminar bloqueo") {
         Store.lock(this)
         Store.setPendingCommit(this, false)
         Watchdog.ensure(this)
@@ -186,20 +186,23 @@ class MainActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
         // Sin permiso de notificaciones el aviso fijo no se ve, aunque el servicio corra igual.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+        safely("permiso de notificaciones") {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+            ) {
+                requestPermissions(arrayOf(Manifest.permission.POST_NOTIFICATIONS), 1)
+            }
         }
         setContent { SaviorTheme { SaviorApp(actions) } }
     }
 
     override fun onResume() {
         super.onResume()
-        if (Store.isLocked(this)) Watchdog.ensure(this)
+        safely("al volver") { if (Store.isLocked(this)) Watchdog.ensure(this) }
     }
 
-    private fun startVpn() {
+    private fun startVpn() = safely("arrancar el filtro") {
+        // Android 12+ lo rechaza desde segundo plano (ForegroundServiceStartNotAllowedException).
         startForegroundService(Intent(this, SaviorVpnService::class.java))
     }
 }

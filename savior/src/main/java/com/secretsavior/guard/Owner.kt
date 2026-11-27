@@ -39,7 +39,9 @@ object Owner {
         }
     }
 
-    fun apply(c: Context, force: Boolean = false) {
+    fun apply(c: Context, force: Boolean = false) = safely("propietaria") { applyInner(c, force) }
+
+    private fun applyInner(c: Context, force: Boolean) {
         val app = c.applicationContext
         if (!eligible(app)) return
         if (!force && !throttle.tryPass(SystemClock.elapsedRealtime())) return
@@ -100,12 +102,14 @@ object Owner {
      * El conjunto va a disco *antes* de suspender, y cada ronda revisa si hay que levantarlo.
      */
     @Synchronized
-    fun syncSuspension(c: Context) {
+    fun syncSuspension(c: Context) = safely("suspensión") { syncInner(c) }
+
+    private fun syncInner(c: Context) {
         val app = c.applicationContext
         val saved = suspended(app)
         val broken = try {
             !Status.isVpnRunning() || !Status.isGuardEnabled(app) || Status.isPrivateDnsStrict(app)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             false // sin poder saberlo no se castiga a nadie
         }
         val dec = SuspendGate.decide(

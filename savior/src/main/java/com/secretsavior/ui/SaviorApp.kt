@@ -155,7 +155,7 @@ fun SaviorApp(actions: Actions) {
     LaunchedEffect(lifecycle) {
         lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
             while (true) {
-                snap = read(context)
+                snap = try { read(context) } catch (e: Throwable) { snap } // sin leer algo, se queda lo anterior
                 delay(1000)
             }
         }
