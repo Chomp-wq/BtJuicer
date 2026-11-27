@@ -714,13 +714,15 @@ function New-JuicerCatalog {
     @{
         Id = 'ui.busqueda'; Category = 'Interfaz'; Level = 2; Impact = 'Bajo'; Reboot = 'Explorador'
         Title = 'Búsqueda de Inicio sin resultados web'
-        What = 'Quita las sugerencias de Bing de la búsqueda del menú Inicio.'
+        What = 'Quita las sugerencias de Bing de la búsqueda del menú Inicio, y los «destacados de búsqueda»: las imágenes y novedades del día que el cuadro de búsqueda descarga de internet.'
         Gain = 'La búsqueda deja de esperar a internet: resultados locales al instante. Sólo se nota si tu conexión tarda; no da FPS.'
-        Cost = 'No verás resultados web al buscar desde Inicio.'
+        Cost = 'No verás resultados web ni los destacados al buscar desde Inicio.'
         # On Windows 10 the policy alone does not take the web results out of Start: it is
         # BingSearchEnabled that does (CortanaConsent goes with it). Cortana itself is not touched.
+        # «Allow search highlights» (Search.admx) is read by Windows 10 21H2 and later and by Windows 11.
         Actions = @(
             @{ Type = 'Registry'; Path = 'HKCU\Software\Policies\Microsoft\Windows\Explorer'; Name = 'DisableSearchBoxSuggestions'; Value = 1 }
+            @{ Type = 'Registry'; Path = 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search'; Name = 'EnableDynamicContentInWSB'; Value = 0 }
             if ($win10) {
                 @{ Type = 'Registry'; Path = $searchKey; Name = 'BingSearchEnabled'; Value = 0 }
                 @{ Type = 'Registry'; Path = $searchKey; Name = 'CortanaConsent'; Value = 0 }

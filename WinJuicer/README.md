@@ -1076,7 +1076,7 @@ rango, y si tiene LFC), **VRR de HDMI 2.1** y **HDR** con su brillo. Con eso:
 | Sin transparencias | Rendimiento | Bajo |
 | Menú contextual clásico (sólo Windows 11; Windows 10 ya lo tiene) | Rendimiento | Bajo |
 | Carpetas grandes al instante: sin detectar el tipo de cada carpeta | Rendimiento | Medio |
-| Búsqueda de Inicio sin resultados de Bing (en Windows 10 también `BingSearchEnabled` y `CortanaConsent`, que es lo que de verdad los quita) | Rendimiento | Bajo |
+| Búsqueda de Inicio sin resultados de Bing ni «destacados de búsqueda» (en Windows 10 también `BingSearchEnabled` y `CortanaConsent`, que es lo que de verdad los quita) | Rendimiento | Bajo |
 | Sin Widgets (en Windows 10, sin «Noticias e intereses»: se refresca desde internet y gasta CPU, RAM y batería) | Rendimiento | Bajo |
 
 ### Privacidad

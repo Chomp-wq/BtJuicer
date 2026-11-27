@@ -71,7 +71,7 @@ Describe 'Windows 10: textos que dependen de la versión' {
         $t.Gain | Should -BeLike '*batería*'
         $t.Cost | Should -BeLike '*barra de tareas*'
         # Not the same policy: Windows 10 reads Feeds.admx, «Allow widgets» (Dsh) is Windows 11's.
-        $planned = @(Resolve-JuicerActions $t)
+        $planned = Resolve-JuicerActions $t
         $planned.Count | Should -Be 1
         $planned[0].Path | Should -Be 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds'
         $planned[0].Name | Should -Be 'EnableFeeds'
@@ -80,7 +80,7 @@ Describe 'Windows 10: textos que dependen de la versión' {
         $t = Find-JuicerTweak 'ui.widgets'
         $t.Title | Should -Be 'Desactivar Widgets'
         $t.Gain | Should -BeLike '*100 y 300 MB*'
-        $planned = @(Resolve-JuicerActions $t)
+        $planned = Resolve-JuicerActions $t
         $planned.Count | Should -Be 1
         $planned[0].Path | Should -Be 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'
         $planned[0].Name | Should -Be 'AllowNewsAndInterests'
@@ -121,23 +121,25 @@ Describe 'Windows 10: búsqueda de Inicio sin resultados web' {
         $before = Get-MachineSnapshot $m
         $t = Find-JuicerTweak 'ui.busqueda'
         $planned = Resolve-JuicerActions $t
-        $planned.Count | Should -Be 3
+        $planned.Count | Should -Be 4
         (Invoke-JuicerTweak $t).Outcome | Should -Be 'Aplicado'
         $bing = Read-JuicerReg $searchKey 'BingSearchEnabled'
         $bing.Kind | Should -Be 'DWord'
         $bing.Value | Should -Be 0
         (Read-JuicerReg $searchKey 'CortanaConsent').Value | Should -Be 0
         (Read-JuicerReg 'HKCU\Software\Policies\Microsoft\Windows\Explorer' 'DisableSearchBoxSuggestions').Value | Should -Be 1
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Search' 'EnableDynamicContentInWSB').Value | Should -Be 0
         (Get-JuicerTweakState $t).State | Should -Be 'Aplicado'
         (Undo-JuicerTweak 'ui.busqueda').Outcome | Should -Be 'Deshecho'
         Get-MachineSnapshot $m | Should -Be $before
     }
 
-    It 'en Windows 11 sólo la directiva' {
+    It 'en Windows 11 sólo las directivas: sin sugerencias web y sin destacados' {
         Set-FakeBuild 26100
         $acts = Resolve-JuicerActions (Find-JuicerTweak 'ui.busqueda')
-        $acts.Count | Should -Be 1
+        $acts.Count | Should -Be 2
         $acts[0].Name | Should -Be 'DisableSearchBoxSuggestions'
+        $acts[1].Name | Should -Be 'EnableDynamicContentInWSB'
     }
 
     It 'con sólo la directiva (lo que había antes) queda a medias en Windows 10' {
