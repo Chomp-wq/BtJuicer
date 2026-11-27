@@ -456,43 +456,5 @@ class ForwarderTest {
         assertEquals(2, f.cacheLookups)
     }
 
-    @Test
-    fun aStaleHitAnswersAtOnceAndRefreshesExactlyOnce() {
-        val server = answerDns(ttl = 30, delayMs = 150)
-        var clock = 0L
-        val f = cachedForwarder(server, DnsCache(clock = { clock }))
-        assertEquals("1.1.1.1", ipOf(ask(f, 1)!!))
-        clock += 60_000 // caducada hace 30 s
-        server.ip = byteArrayOf(2, 2, 2, 2)
-
-        val n = 6
-        val start = CountDownLatch(1)
-        val done = CountDownLatch(n)
-        val answers = java.util.concurrent.ConcurrentLinkedQueue<ByteArray?>()
-        val pool = Executors.newFixedThreadPool(n)
-        try {
-            repeat(n) { i ->
-                pool.execute {
-                    start.await()
-                    f.query(q("example.com", 100 + i)) { answers += it; done.countDown() }
-                }
-            }
-            val t0 = System.nanoTime()
-            start.countDown()
-            assertTrue(done.await(100, TimeUnit.MILLISECONDS)) // antes de que el servidor (150 ms) pueda contestar
-            assertTrue((System.nanoTime() - t0) / 1_000_000 < 150)
-        } finally {
-            pool.shutdownNow()
-        }
-        assertTrue(answers.all { it != null && ipOf(it) == "1.1.1.1" })
-
-        // la renovación llega y reemplaza a la caducada
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
-        while (server.received.get() < 2 && System.nanoTime() < deadline) Thread.sleep(10)
-        Thread.sleep(400) // por si hubiera una segunda renovación
-        assertEquals("una sola renovación", 2, server.received.get())
-        val fresh = ask(f, 50)!!
-        assertEquals("2.2.2.2", ipOf(fresh))
-        assertEquals(2, server.received.get())
-    }
+    // El comportamiento con caducadas (primero lo fresco) está en FreshFirstTest.
 }

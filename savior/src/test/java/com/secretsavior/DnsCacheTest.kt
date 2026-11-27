@@ -349,4 +349,43 @@ class DnsCacheTest {
         }
         assertNotNull(c.lookup(query("example.com"))) // lo bueno sigue ahí o se cambió por algo válido
     }
+
+    // --- Popularidad (calentamiento tras cambiar de red) ----------------------------------
+
+    @Test
+    fun hottestReturnsTheMostServedQueriesFirst() {
+        val c = cache()
+        for (n in listOf("a.com", "b.com", "c.com")) c.store(query(n), response(n))
+        repeat(5) { c.lookup(query("b.com")) }
+        repeat(2) { c.lookup(query("a.com")) }
+        // c.com nunca se sirvió: no es popular
+        val hot = c.hottest(10).map { DnsPacket.questionKey(it) }
+        assertEquals(listOf("b.com/1/1", "a.com/1/1"), hot)
+        assertEquals(listOf("b.com/1/1"), c.hottest(1).map { DnsPacket.questionKey(it) })
+        assertTrue(c.hottest(0).isEmpty())
+    }
+
+    @Test
+    fun popularitySurvivesARefreshOfTheEntry() {
+        val c = cache()
+        c.store(query("a.com"), response("a.com"))
+        repeat(4) { c.lookup(query("a.com")) }
+        c.store(query("a.com"), response("a.com", listOf(a(60, 7)))) // la renovación
+        c.store(query("b.com"), response("b.com"))
+        c.lookup(query("b.com"))
+        assertEquals("a.com/1/1", DnsPacket.questionKey(c.hottest(1).single()))
+    }
+
+    @Test
+    fun hottestSkipsNegativesAndReturnsCopies() {
+        val c = cache()
+        c.store(query("gone.com"), response("gone.com", answers = emptyList(), authority = listOf(soa(60, 60)), rcode = 3))
+        repeat(3) { c.lookup(query("gone.com")) }
+        assertTrue(c.hottest(5).isEmpty())
+        c.store(query("a.com", id = 0x4242), response("a.com"))
+        c.lookup(query("a.com"))
+        val q = c.hottest(1).single()
+        q[0] = 0
+        assertEquals(0x4242, id(c.hottest(1).single()))
+    }
 }

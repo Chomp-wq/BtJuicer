@@ -82,11 +82,15 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
 - **Sólo pasa el DNS por el túnel.** El resto del tráfico (webs, vídeo, descargas)
   sale por Wi-Fi o datos como siempre, sin tocarlo.
 - **Las consultas no hacen cola.** Un único socket y un hilo que recibe; cada
-  consulta sale al momento aunque haya cientos en vuelo. Se pregunta a los dos
-  servidores de CleanBrowsing a la vez y gana el primero, así que un paquete perdido
-  en datos móviles no cuesta segundos. Sin respuesta en 0,8 s se reintenta en todos;
-  si CleanBrowsing falla seguido, durante 30 s se pregunta también a Cloudflare desde
-  el principio.
+  consulta sale al momento aunque haya cientos en vuelo. Cada consulta sale a los dos
+  mejores servidores de CleanBrowsing (uno por familia IP si hay IPv6; se mide el RTT
+  de cada uno y el que pierde seguido pasa al final) y gana el primero. Si no hay
+  respuesta tras un retraso adaptativo (2,5 × el mejor RTT, entre 150 y 800 ms) se
+  pregunta también a los demás y a Cloudflare; a los 4 s se rinde. Antes eran cuatro
+  paquetes por consulta, lo que en CGNAT de operador multiplicaba la carga. Si
+  CleanBrowsing falla seguido, durante 30 s se pregunta a todos desde el principio.
+  Las consultas idénticas en vuelo se agrupan en una sola salida (cada cliente recibe
+  su id y las mayúsculas de su pregunta).
 - **IPv4 e IPv6 a la vez.** En redes móviles sólo IPv6 la IPv4 pasa por una
   traducción que añade latencia; preguntando también por IPv6 gana el camino directo.
 - **La ronda periódica no despierta al teléfono** con la pantalla apagada: se entrega
@@ -120,14 +124,35 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
   que no vigila, sin pedirles nada. En navegadores lee la barra de direcciones por su
   id (una consulta) con un temporizador, no con eventos, y en Ajustes revisa la pantalla
   como mucho dos veces por segundo.
-- **Caché DNS local.** Lo ya preguntado se contesta al momento, sin ir a CleanBrowsing.
-  Si la respuesta caducó se sirve igualmente (con un TTL corto) y se renueva en segundo
-  plano, y la que está a punto de caducar se renueva antes de hacerlo. Las respuestas
-  negativas no se sirven caducadas, y al cambiar de red se olvidan las caducadas: lo que
-  contestó otra red (un Wi-Fi de hotel que secuestra el DNS) no se reutiliza al salir.
-- **Cambio de red sin esperas.** Al pasar de Wi-Fi a datos (o al revés) las consultas en
-  vuelo se reenvían al instante: las que salieron por la red vieja nunca van a contestar
-  y, sin esto, cada una esperaría a la escalada de 0,8 s.
+- **Caché DNS local, primero lo fresco.** Lo ya preguntado y vigente se contesta al momento,
+  sin ir a CleanBrowsing, y la que está a punto de caducar se renueva antes de hacerlo
+  (por eso los nombres populares siguen siendo instantáneos). Si caducó se pregunta a la
+  red, y sólo si no contesta en 0,5 s (RFC 8767) o falla se sirve la caducada (con TTL
+  corto). Antes se servía la caducada de entrada y la primera conexión tras caducar podía ir
+  a una IP que ya no servía. Las negativas no se sirven caducadas, y al cambiar de red se
+  olvidan las caducadas (un Wi-Fi de hotel que secuestra el DNS no se reutiliza al salir).
+- **Sólo cuenta la red real por defecto.** Se sigue cuál es (Android 12+: la mejor según el
+  sistema; antes, validada y Wi-Fi/Ethernet sobre móvil) y sólo un cambio de ésa dispara el
+  reinicio. Antes cualquier red que aparecía o desaparecía (los datos móviles de fondo
+  parpadeando con el Wi-Fi puesto) vaciaba las caducadas y reenviaba todo.
+- **Cambio de red sin esperas.** Al cambiar la red por defecto: socket nuevo, castigos y RTT
+  fuera, las consultas en vuelo se reenvían al instante y se renuevan en segundo plano las 20
+  más usadas, para que las primeras páginas no esperen.
+- **Datos «atascados» ya no pasan desapercibidos.** Sin VPN, Android detecta un enlace móvil
+  parado por los timeouts de DNS y lo recupera solo (lo que antes se hacía apagando y
+  encendiendo los datos); con la VPN el DNS se atribuía a nuestra red y esa señal se perdía.
+  Si 6 consultas seguidas caducan en 10 s sin respuesta de nadie (y los envíos no fallaron),
+  se reconstruye el socket (estado viejo de NAT/ruta tras un cambio de radio), se reenvía lo
+  que esperaba y se pide a Android que revalide la red real
+  (`reportNetworkConnectivity`, como mucho una vez por minuto). Si persiste tras eso, el
+  DNS pasa unos minutos a **DNS sobre TLS** (puerto 853, certificado comprobado) hacia los
+  mismos resolutores con filtro, sondeando el UDP cada 30 s, para redes que bloquean o
+  interceptan el 53. «Estado» cuenta las recuperaciones.
+- **El túnel no se rehace sin motivo.** Cada VPN nueva corta todas las conexiones del
+  teléfono: el reinicio del servicio con el túnel vivo no hace nada, y un error suelto de
+  lectura del túnel se reintenta en vez de tirarlo. Los hilos propios no mueren por una
+  excepción: el receptor se reinicia solo y, si el lector del túnel muriera, se tira el
+  servicio para que el vigilante lo rehaga (nunca queda «activa» sin DNS).
 - **El guardián sólo pide lo imprescindible.** Cambios de ventana siempre; texto escrito sólo
   con un navegador, YouTube/Google, Telegram o Reddit delante; cambios de contenido, sólo en
   las pantallas de Ajustes del sistema.
