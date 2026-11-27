@@ -142,6 +142,8 @@ class SaviorVpnService : VpnService() {
             return
         }
         failures = 0
+        alwaysOn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) isAlwaysOn else null
+        lockdown = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) isLockdownEnabled else null
         forwarder = fwd
         dnsBytes = subnet.dnsBytes
         tun = pfd
@@ -442,6 +444,16 @@ class SaviorVpnService : VpnService() {
 
         @Volatile
         var running = false
+            private set
+
+        /** Si el sistema la tiene como «VPN siempre activa» (Android 10+); null si no se sabe. */
+        @Volatile
+        var alwaysOn: Boolean? = null
+            private set
+
+        /** «Bloquear conexiones sin VPN» (Android 10+); null si no se sabe. */
+        @Volatile
+        var lockdown: Boolean? = null
             private set
 
         /** Intentos seguidos en que establish() no dio túnel. */

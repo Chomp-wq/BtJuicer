@@ -93,11 +93,15 @@ object Store {
     }
 
     /**
-     * Ventana corta en la que el guardián deja pasar las pantallas de batería y
-     * autoinicio, que nombran a la app. Sólo se abre desde dentro de la app y nunca
-     * deja pasar las que ofrecen desinstalar, parar u ocultar (ver GuardService).
+     * Qué pantalla de Ajustes puede abrir la app, con el bloqueo ya activo, para conceder algo
+     * que falta. El guardián sólo deja pasar la pantalla de ese tipo, y nunca las que ofrecen
+     * forzar la detención, desinstalar, borrar datos, desactivar el administrador o desconectar.
      */
-    fun openGrace() {
+    enum class Grace { BATTERY, AUTOSTART, NOTIFICATION_ACCESS, ALWAYS_ON_VPN, AUTO_REVOKE }
+
+    /** Sólo se abre desde dentro de la app (ver GuardService). */
+    fun openGrace(kind: Grace) {
+        graceKind = kind
         graceUntil = SystemClock.elapsedRealtime() + GRACE_MS
     }
 
@@ -107,8 +111,14 @@ object Store {
      */
     fun inGrace(): Boolean = SystemClock.elapsedRealtime() < graceUntil
 
+    /** La ventana abierta ahora mismo, o null. */
+    fun grace(): Grace? = if (inGrace()) graceKind else null
+
     @Volatile
     private var graceUntil = 0L
+
+    @Volatile
+    private var graceKind: Grace? = null
 
     /** Se ha visto el autoinicio de la app encendido: desde entonces no se deja apagar. */
     fun autostartSeen(c: Context): Boolean = prefs(c).getBoolean("autostart_seen", false)
@@ -122,6 +132,32 @@ object Store {
 
     fun setReason(c: Context, text: String) {
         prefs(c).edit().putString("reason", text.take(600)).apply()
+    }
+
+    // --- Endurecimiento: como todo lo demás, sólo se puede encender ---------------------
+
+    /** El usuario pulsó «Activar y bloquear»: falta que Android confirme el administrador. */
+    fun pendingCommit(c: Context): Boolean = prefs(c).getBoolean("pending_commit", false)
+
+    fun setPendingCommit(c: Context, pending: Boolean) {
+        prefs(c).edit().putBoolean("pending_commit", pending).apply()
+    }
+
+    /**
+     * Opciones de desarrollador cerradas mientras dure el bloqueo (cierra la vía de ADB; también
+     * deja sin depuración inalámbrica a BT Juicer). De ida.
+     */
+    fun devOptionsBlocked(c: Context): Boolean = prefs(c).getBoolean("block_dev", false)
+
+    fun blockDevOptions(c: Context) {
+        prefs(c).edit().putBoolean("block_dev", true).apply()
+    }
+
+    /** Sólo como propietaria del dispositivo: ADB prohibido por política del sistema. De ida. */
+    fun adbBlocked(c: Context): Boolean = prefs(c).getBoolean("block_adb", false)
+
+    fun blockAdb(c: Context) {
+        prefs(c).edit().putBoolean("block_adb", true).apply()
     }
 
     private const val FLUSH_MS = 30_000L

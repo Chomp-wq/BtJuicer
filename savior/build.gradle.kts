@@ -60,6 +60,13 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.kotlinx.coroutines.android)
 
+    // Cliente ADB propio (el mismo que BT Juicer): con la depuración inalámbrica, la app se da a
+    // sí misma WRITE_SECURE_SETTINGS o se hace propietaria del dispositivo sin ordenador.
+    implementation(libs.libadb.android)
+    implementation(libs.sun.security.android)
+    // Emparejar exige una API oculta de Conscrypt (ver provision/HiddenApi.kt).
+    implementation(libs.hiddenapibypass)
+
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)

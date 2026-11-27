@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Las consultas DNS se reenvían a un resolutor con filtro familiar. Es
          lo único que sale del teléfono. -->
@@ -16,6 +17,29 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+    <!-- Cliente ADB propio (depuración inalámbrica): buscar el servicio en la red local. -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+
+    <!-- Sólo se concede por ADB (pm grant). Con él la app reenciende su propia accesibilidad. -->
+    <uses-permission
+        android:name="android.permission.WRITE_SECURE_SETTINGS"
+        tools:ignore="ProtectedPermissions" />
+
+    <!-- Qué apps son navegadores (ver guard/Browsers.kt). -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="http" />
+        </intent>
+    </queries>
 
     <!-- Opcional: que el sistema no duerma el filtro para ahorrar batería. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -64,6 +88,18 @@
             <meta-data
                 android:name="android.accessibilityservice"
                 android:resource="@xml/guard_service" />
+        </service>
+
+        <!-- Resurrección: Android vuelve a enlazar este servicio tras forzar la detención de
+             la app, y con él arranca todo lo demás. No lee notificaciones. -->
+        <service
+            android:name=".guard.ReviveListener"
+            android:exported="true"
+            android:label="@string/app_name"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService" />
+            </intent-filter>
         </service>
 
         <!-- Mientras sea administrador del dispositivo, Android se niega a

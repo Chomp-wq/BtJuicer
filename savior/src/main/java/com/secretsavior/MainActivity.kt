@@ -53,7 +53,7 @@ class MainActivity : ComponentActivity() {
         override fun openNetworkSettings() = startActivity(Intent(Settings.ACTION_WIRELESS_SETTINGS))
 
         override fun exemptBattery() {
-            Store.openGrace()
+            Store.openGrace(Store.Grace.BATTERY)
             startActivity(
                 Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, Uri.parse("package:$packageName")),
             )
@@ -61,7 +61,7 @@ class MainActivity : ComponentActivity() {
 
         /** Xiaomi/Redmi/POCO matan los servicios de apps sin «Autoinicio». */
         override fun openAutostart() {
-            Store.openGrace()
+            Store.openGrace(Store.Grace.AUTOSTART)
             try {
                 startActivity(
                     Intent().setComponent(

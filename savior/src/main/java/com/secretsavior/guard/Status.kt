@@ -1,9 +1,13 @@
 package com.secretsavior.guard
 
+import android.Manifest
+import android.app.NotificationManager
 import android.app.admin.DevicePolicyManager
 import android.content.ComponentName
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.VpnService
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 import com.secretsavior.vpn.SaviorVpnService
@@ -40,4 +44,24 @@ object Status {
     fun isBatteryExempt(c: Context): Boolean =
         (c.getSystemService(Context.POWER_SERVICE) as PowerManager)
             .isIgnoringBatteryOptimizations(c.packageName)
+
+    /** Propietaria del dispositivo: la versión dura (sin forzar detención, sin modo seguro...). */
+    fun isDeviceOwner(c: Context): Boolean =
+        (c.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager).isDeviceOwnerApp(c.packageName)
+
+    /** Concedido una vez por ADB: deja a la app reencender su propia accesibilidad. */
+    fun hasSecureSettings(c: Context): Boolean =
+        c.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
+
+    /** Acceso a notificaciones: es lo que hace que Android vuelva a levantar la app tras forzar su detención. */
+    fun isReviveEnabled(c: Context): Boolean =
+        (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .isNotificationListenerAccessGranted(ComponentName(c, ReviveListener::class.java))
+
+    /** null si no se sabe (Android 9 o anterior, o el filtro aún no ha arrancado). */
+    fun isAlwaysOnVpn(): Boolean? = SaviorVpnService.alwaysOn
+
+    /** «Pausar la actividad si no se usa» apagado: si no, Android puede detener la app sola. */
+    fun isAutoRevokeExempt(c: Context): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.R || c.packageManager.isAutoRevokeWhitelisted
 }
