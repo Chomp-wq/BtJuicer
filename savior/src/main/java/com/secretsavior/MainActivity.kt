@@ -130,6 +130,14 @@ class MainActivity : ComponentActivity() {
             Watchdog.ensure(this@MainActivity)
         }
 
+        override fun beginOwnerCommit() {
+            Store.setPendingCommit(this@MainActivity, true)
+        }
+
+        override fun cancelCommit() {
+            Store.setPendingCommit(this@MainActivity, false)
+        }
+
         /**
          * Lo último de todo: el administrador es lo que bloquea (ver Store.isLocked), así que
          * pedirlo antes dejaba la app bloqueada a mitad de la configuración.

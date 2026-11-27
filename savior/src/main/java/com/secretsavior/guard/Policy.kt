@@ -34,7 +34,7 @@ object Policy {
         val dangerId: Boolean,
         /** Cuántos nodos con texto: pocos = aún carga, o es un diálogo. */
         val texts: Int,
-        /** Lista de interruptores titulada «autoinicio» (o clase de autoinicio). */
+        /** Ventana de autoinicio por su clase o su título (ver [autostartList]); no por filas. */
         val autostartList: Boolean,
         /** Idioma sin traducción ni lectura de los Ajustes: las palabras no son de fiar. */
         val strict: Boolean,
@@ -75,20 +75,35 @@ object Policy {
      */
     fun graceAllows(g: Grace?, mask: Int, kind: Int, dangerId: Boolean, strict: Boolean): Boolean {
         if (g == null) return false
-        if (has(kind, WinKind.ACCESSIBILITY or WinKind.ADMIN or WinKind.UNINSTALL or WinKind.USERS)) return false
+        if (has(kind, WinKind.ACCESSIBILITY or WinKind.ADMIN or WinKind.UNINSTALL or WinKind.USERS or WinKind.APN)) {
+            return false
+        }
         if (has(mask, Concept.DEACTIVATE_ADMIN or Concept.ACCESSIBILITY)) return false
         // En un idioma que no se conoce no se puede tapar «Bloquear conexiones sin VPN», ni las filas
         // de la ficha por su texto: esas dos ventanas no se abren.
         if (strict && g == Grace.ALWAYS_ON_VPN) return false
         if (strict && g == Grace.AUTO_REVOKE && has(kind, WinKind.APP_DETAILS)) return false
-        if (g == Grace.AUTO_REVOKE) return true // tapadas las filas de parar/desinstalar/borrar datos
-        if (dangerId || has(kind, WinKind.APP_DETAILS) || has(mask, Concept.STRONG or Concept.WEAK)) return false
+        // Cada ventana abre sólo su clase de pantalla. Acceso a notificaciones (lista y diálogo de
+        // concesión) sólo con su ventana: ahí «desactivar» es «No molestar», no el administrador, así
+        // que los textos genéricos no cuentan; lo fuerte (parar, desinstalar, borrar) sí cierra.
+        if (has(kind, WinKind.NOTIFICATION_ACCESS) || has(mask, Concept.NOTIFICATION_ACCESS)) {
+            return g == Grace.NOTIFICATION_ACCESS && !dangerId && !has(kind, WinKind.APP_DETAILS) &&
+                !has(mask, Concept.STRONG)
+        }
         if (g != Grace.BATTERY && has(mask, Concept.RESTRICT_BACKGROUND)) return false
         if (g != Grace.ALWAYS_ON_VPN) {
             if (has(mask, Concept.VPN or Concept.VPN_DISCONNECT_FORGET) || has(kind, WinKind.VPN)) return false
         }
+        // Sólo la página de permisos / apps sin usar de la app (con las filas de parar, desinstalar y
+        // borrar datos tapadas); nunca la VPN, la batería ni el acceso a notificaciones, ya descartados.
+        if (g == Grace.AUTO_REVOKE) return true
+        if (dangerId || has(kind, WinKind.APP_DETAILS) || has(mask, Concept.STRONG or Concept.WEAK)) return false
         return true
     }
+
+    /** Lista de autoinicio del fabricante: por la clase de la ventana o su título, nunca por una fila. */
+    fun autostartList(kind: Int, titleMask: Int): Boolean =
+        has(kind, WinKind.AUTOSTART) || has(titleMask, Concept.AUTOSTART)
 
     /**
      * El cierre que se decide sólo con el aviso de la ventana (título y clase), antes de leer nada:
@@ -109,9 +124,10 @@ object Policy {
         if (!settingsLike) return false
         if (has(kind, WinKind.ACCESSIBILITY)) return true
         if (has(kind, WinKind.USERS) || usersTitle) return true
+        if (adminActive && has(kind, WinKind.APN)) return true
         if (devBlocked && (has(kind, WinKind.DEV) || has(titleMask, Concept.DEVELOPER_OPTIONS))) return true
         if (adminActive && has(titleMask, Concept.OURS) &&
-            !graceAllows(grace, Concept.OURS, kind, false, strict)
+            !graceAllows(grace, Concept.OURS or (titleMask and Concept.NOTIFICATION_ACCESS), kind, false, strict)
         ) {
             return true
         }
@@ -129,6 +145,7 @@ object Policy {
         if (i.devBlocked) shield = shield or Concept.DEVELOPER_OPTIONS or Concept.BUILD_NUMBER
         if (ours) {
             shield = shield or Concept.STRONG or Concept.DEACTIVATE_ADMIN
+            if (has(i.kind, WinKind.ADMIN)) shield = shield or Concept.DEACTIVATE_ADMIN_WEAK
             // En «Pausar si no se usa» el interruptor lleva «eliminar permisos»: no se tapa.
             if (i.grace != Grace.AUTO_REVOKE) shield = shield or Concept.WEAK
         }
@@ -159,7 +176,8 @@ object Policy {
         if (i.devBlocked && has(i.kind, WinKind.DEV)) return verdict(true)
         if (i.secondSpaceSurface && has(i.mask, Concept.USERS_SECOND_SPACE)) return verdict(true)
         // Un proxy manual resuelve el DNS fuera del teléfono y se salta el filtro.
-        if (settingsLike && has(i.mask, Concept.PROXY_EDITOR)) return verdict(true)
+        // Igual el campo de PAC (proxy automático) y el editor de APN (su campo «Proxy»).
+        if (settingsLike && (has(i.mask, Concept.PROXY_EDITOR) || has(i.kind, WinKind.APN))) return verdict(true)
         // El diálogo de confirmación de parar/desinstalar/borrar no nombra a la app: sólo pregunta.
         if (!ours && strong && i.texts <= DIALOG_MAX_TEXTS && i.recentOurs) return verdict(true)
 

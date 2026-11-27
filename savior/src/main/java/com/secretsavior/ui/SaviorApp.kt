@@ -80,6 +80,12 @@ interface Actions {
     fun copy(text: String)
     fun harden(kind: Hardening)
     fun commit()
+
+    /** «Activar con blindaje total»: se marca el compromiso pendiente; lo bloquea AdminReceiver.onEnabled. */
+    fun beginOwnerCommit()
+
+    /** Se abandonó el camino de propietaria del dispositivo antes de terminarlo. */
+    fun cancelCommit()
 }
 
 /** Endurecimientos que se resuelven con un interruptor propio (los demás pasan por ADB). */
@@ -120,8 +126,7 @@ private fun read(c: Context) = Snapshot(
     vpn = Status.isVpnRunning(),
     guard = Status.isGuardEnabled(c),
     admin = Status.isAdminActive(c),
-    // isNotificationListenerAccessGranted existe desde Android 8.1; antes no se puede preguntar ni exigir.
-    notif = Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1 || safe(false) { Status.isReviveEnabled(c) },
+    notif = safe(false) { Status.isReviveEnabled(c) },
     dnsStrict = Status.isPrivateDnsStrict(c),
     battery = Status.isBatteryExempt(c),
     autostart = !isXiaomiFamily() || Store.autostartSeen(c),
@@ -172,6 +177,8 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
     var phrase by rememberSaveable { mutableStateOf("") }
     var understood by rememberSaveable { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
+    var confirmOwner by remember { mutableStateOf(false) }
+    var ownerFlow by remember { mutableStateOf(false) }
     var wireless by remember { mutableStateOf<ShellVerdict.Goal?>(null) }
     val canLock = s.ready && understood && phrase.trim().equals(PHRASE, ignoreCase = true)
     var n = 0
@@ -303,6 +310,14 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
                     Spacer(Modifier.size(8.dp))
                     Text("Activar y bloquear")
                 }
+                OutlinedButton(onClick = { confirmOwner = true }, enabled = canLock, modifier = Modifier.fillMaxWidth()) {
+                    Text("Activar con blindaje total")
+                }
+                Text(
+                    "Igual que lo anterior pero haciendo a la app propietaria del dispositivo (sin forzar " +
+                        "detención, sin modo seguro). Pide quitar antes las cuentas y el Segundo espacio.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 if (!s.ready) {
                     Text(
                         "Faltan permisos por conceder arriba.",
@@ -336,10 +351,65 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Todavía no") } },
         )
     }
+    if (confirmOwner) {
+        AlertDialog(
+            onDismissRequest = { confirmOwner = false },
+            title = { Text("¿Seguro?") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        "Después de esto no hay marcha atrás desde la app. Si ahora mismo dudas, " +
+                            "espera: nada se pierde por activarlo mañana.",
+                    )
+                    Text(
+                        "Para ser propietaria del dispositivo Android exige que no haya NINGUNA cuenta ni " +
+                            "«Segundo espacio» / «Apps duales» / otros usuarios: quítalos antes (con el bloqueo " +
+                            "activo esas pantallas se cierran y ya no se podrá). Después puedes volver a añadir " +
+                            "tus cuentas y apps duales. El bloqueo empieza en cuanto lo sea.",
+                    )
+                }
+            },
+            confirmButton = {
+                Button(onClick = { confirmOwner = false; a.beginOwnerCommit(); ownerFlow = true }) {
+                    Text("Sí, activar")
+                }
+            },
+            dismissButton = { TextButton(onClick = { confirmOwner = false }) { Text("Todavía no") } },
+        )
+    }
+    if (ownerFlow) {
+        val goal = ShellVerdict.Goal.DEVICE_OWNER
+        AlertDialog(
+            onDismissRequest = { ownerFlow = false; a.cancelCommit() },
+            title = { Text("Activar con blindaje total") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Con ordenador:", fontWeight = FontWeight.Bold)
+                    Text(ShellVerdict.pcCommand(goal), style = MaterialTheme.typography.bodySmall)
+                    Text(
+                        if (isXiaomiFamily()) {
+                            "En Xiaomi, activa antes «Depuración USB (ajustes de seguridad)» en Opciones de desarrollador."
+                        } else {
+                            "Sin cuentas ni Segundo espacio, o Android lo rechazará."
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { a.copy(ShellVerdict.pcCommand(goal)) }) { Text("Copiar comando") }
+                    TextButton(onClick = { ownerFlow = false; wireless = goal }) { Text("Sin ordenador") }
+                }
+            },
+            dismissButton = { TextButton(onClick = { ownerFlow = false; a.cancelCommit() }) { Text("Cancelar") } },
+        )
+    }
     wireless?.let { goal ->
         WirelessDialog(goal, s.devBlocked, a) {
             wireless = null
             Provisioner.reset(context)
+            if (goal == ShellVerdict.Goal.DEVICE_OWNER) a.cancelCommit()
         }
     }
 }
@@ -583,7 +653,9 @@ private fun HardenDialog(kind: Harden, s: Snapshot, a: Actions, close: () -> Uni
                         Text(
                             "• Quita temporalmente TODAS las cuentas (Ajustes → Cuentas: Google, Xiaomi y las " +
                                 "de apps como WhatsApp o Telegram).\n" +
-                                "• Sin «Segundo espacio» ni «Apps duales».\n" +
+                                "• Sin «Segundo espacio» ni «Apps duales» ni otros usuarios: bórralos antes de bloquear. " +
+                                "Una vez bloqueado, esa pantalla ya no se puede abrir (se cierra a propósito), así que " +
+                                "si existe uno, no podrás hacerla propietaria desde aquí.\n" +
                                 (if (isXiaomiFamily()) "• En Xiaomi, activa «Depuración USB (ajustes de seguridad)» en Opciones de desarrollador.\n" else "") +
                                 "• Después vuelve a añadir tus cuentas.",
                         )

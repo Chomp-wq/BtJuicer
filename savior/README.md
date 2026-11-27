@@ -63,7 +63,7 @@ pudiera pulsar, pero eso es una carrera, y en MIUI la ficha de la app vive en la
   cae en el túnel y se filtra.
 - **Navegadores desconocidos.** La lista fija se completa preguntando al sistema qué apps abren una
   dirección web, y se refresca al instalar o actualizar una. Hace falta `<queries>` en el manifiesto.
-- **Proxy manual de Wi-Fi** (resuelve el DNS fuera del teléfono): la pantalla del editor se cierra.
+- **Proxy de Wi-Fi** (resuelve el DNS fuera del teléfono): se cierra el editor del proxy manual y el campo de proxy automático (PAC), y el **editor de APN** (su campo «Proxy» pone un proxy del sistema para datos móviles).
 - **Segundo espacio y usuarios** (también el «Segundo espacio» de Xiaomi): se cierran; como
   propietaria, se prohíben.
 - **Restricciones de batería de Xiaomi** (`com.miui.powerkeeper`) y su autoinicio: la pantalla se
@@ -237,7 +237,7 @@ el administrador se pide al final.
 Se instala encima (misma clave de firma). Las piezas nuevas no se conceden solas. Si ya estaba
 bloqueada, concédelas desde los botones de la pantalla principal, que abren una **ventana de
 gracia** breve (2 minutos) sólo para esa pantalla: acceso a notificaciones, batería, VPN siempre
-activa y «Pausar la actividad si no se usa». Esas ventanas nunca dejan ver la ficha de la app con
+activa y «Pausar la actividad si no se usa». Cada ventana abre sólo su clase de pantalla (la de notificaciones no deja ver la VPN ni la batería, y al revés) y nunca deja ver la ficha de la app con
 sus botones, el administrador, Accesibilidad ni la desinstalación.
 
 **No actives «Bloquear conexiones sin VPN»**: el túnel sólo lleva DNS y el teléfono se quedaría
@@ -261,12 +261,17 @@ fábrica desde recovery**. Requisitos:
 
 - Quitar temporalmente **todas** las cuentas (Ajustes → Cuentas: Google, Xiaomi y las de apps
   como WhatsApp o Telegram).
-- Sin «Segundo espacio» ni «Apps duales» ni usuarios extra.
+- Sin «Segundo espacio» ni «Apps duales» ni usuarios extra. **Bórralos antes de bloquear:** con el bloqueo activo esa pantalla se cierra y ya no se puede abrir, así que con uno existente no se puede hacerla propietaria desde el teléfono.
 - En Xiaomi, activar «Depuración USB (ajustes de seguridad)» en Opciones de desarrollador.
 
 ```
 adb shell dpm set-device-owner com.secretsavior/.guard.AdminReceiver
 ```
+
+Desde la configuración inicial, «Activar con blindaje total» (junto a «Activar y bloquear», con los
+mismos requisitos y la misma confirmación) lanza este camino en vez del diálogo de administrador:
+al ser propietaria Android activa el administrador y eso bloquea. Hazlo antes de bloquear, mientras
+las cuentas y el Segundo espacio aún se pueden quitar.
 
 También sin ordenador desde la app («Blindaje total»). Después, volver a añadir las cuentas.
 

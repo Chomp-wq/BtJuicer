@@ -39,6 +39,12 @@ class BackendLogicTest {
         assertEquals(cur, A11yList.merge(cur, me))
     }
 
+    @Test fun isGuardEnabledStyleCheckAcceptsPersistedShortForm() {
+        // Lo que guarda AccessibilityManagerService: Status.isGuardEnabled debe verlo como activo.
+        assertTrue(A11yList.contains("x/y.Z:com.secretsavior/.guard.GuardService:", me))
+        assertFalse(A11yList.contains("x/y.Z", me))
+    }
+
     @Test fun similarServiceIsNotOurs() {
         assertFalse(A11yList.contains("com.secretsavior/com.secretsavior.guard.GuardService2", me))
         assertFalse(A11yList.contains("other.com.secretsavior/com.secretsavior.guard.GuardService", me))

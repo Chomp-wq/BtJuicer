@@ -1,6 +1,7 @@
 package com.secretsavior.guard
 
 import android.accessibilityservice.AccessibilityService
+import android.app.KeyguardManager
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
@@ -112,6 +113,7 @@ class GuardService : AccessibilityService() {
         refreshLabels()
         refreshBrowsers()
         registerPackageReceiver()
+        registerScreenReceiver()
         setMode(MODE_WATCH)
         handler.removeCallbacks(tick)
         handler.post(tick)
@@ -124,7 +126,17 @@ class GuardService : AccessibilityService() {
         handler.removeCallbacks(vendorRecheck)
         handler.removeCallbacks(settingsPass)
         handler.removeCallbacks(hideCoverSoon)
+        handler.removeCallbacks(suiCheck)
+        handler.removeCallbacks(suiPoll)
         hideShields()
+        screenReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (e: Exception) {
+                // ya no estaba
+            }
+        }
+        screenReceiver = null
         pkgReceiver?.let {
             try {
                 unregisterReceiver(it)
@@ -244,6 +256,54 @@ class GuardService : AccessibilityService() {
         }
     }
 
+    private var screenReceiver: BroadcastReceiver? = null
+
+    /**
+     * Las capas de accesibilidad se dibujan por encima de la pantalla de bloqueo y de la barra de
+     * notificaciones: dejarlas puestas tapaba los dígitos del PIN y el botón de emergencia, y un
+     * toque encima cerraba Ajustes con 30 s de bloqueo. Al apagar la pantalla se quitan todas
+     * (la grande incluida); al desbloquear, si Ajustes sigue delante, se vuelve a tapar y a mirar.
+     */
+    private fun registerScreenReceiver() {
+        if (screenReceiver != null) return
+        val r = object : BroadcastReceiver() {
+            override fun onReceive(context: Context?, intent: Intent?) {
+                when (intent?.action) {
+                    Intent.ACTION_SCREEN_OFF -> {
+                        suiAbove = false
+                        handler.removeCallbacks(suiCheck)
+                        handler.removeCallbacks(suiPoll)
+                        hideShields()
+                    }
+                    Intent.ACTION_USER_PRESENT -> {
+                        suiAbove = false
+                        val fg = foreground
+                        if (fg != null && isSettings(fg) && Store.isLocked(this@GuardService)) {
+                            showCover(COVER_MAX_MS, fresh = true)
+                            queuePass()
+                        }
+                    }
+                }
+            }
+        }
+        val filter = IntentFilter(Intent.ACTION_SCREEN_OFF).apply { addAction(Intent.ACTION_USER_PRESENT) }
+        try {
+            ContextCompat.registerReceiver(this, r, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
+            screenReceiver = r
+        } catch (e: Exception) {
+            // sin receptor: quedan la comprobación de pantalla de bloqueo y la de SystemUI
+        }
+    }
+
+    private val keyguard by lazy { getSystemService(KeyguardManager::class.java) }
+
+    /** Pantalla de bloqueo (o PIN) delante: ahí no se pone ninguna capa. */
+    private fun keyguardLocked(): Boolean = try {
+        keyguard?.isKeyguardLocked == true
+    } catch (e: Exception) {
+        false
+    }
+
     // --- Pequeñas cachés ------------------------------------------------------------------
 
     private var adminAt = Long.MIN_VALUE / 2
@@ -302,6 +362,14 @@ class GuardService : AccessibilityService() {
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
+            // Sin paquete: no sirve a lo de abajo. Sólo importa si SystemUI sube o baja sobre Ajustes.
+            if (Store.isLocked(this) && !suiCheckQueued) {
+                suiCheckQueued = true
+                handler.postDelayed(suiCheck, SUI_DEBOUNCE_MS)
+            }
+            return
+        }
         val pkg = event.packageName?.toString() ?: return
         if (pkg == packageName) return
         val type = event.eventType
@@ -404,6 +472,9 @@ class GuardService : AccessibilityService() {
     private var winKind = 0
     private var winPkg: String? = null
 
+    /** El título anunciado de esa ventana es «autoinicio» (ver [Policy.autostartList]). */
+    private var winAutoTitle = false
+
     /**
      * Se recuerda por ventana: el nombre de la clase no depende del idioma. Un diálogo encima (la
      * confirmación de «Forzar detención») no borra lo recordado de la pantalla de debajo.
@@ -412,10 +483,14 @@ class GuardService : AccessibilityService() {
         if (pkg != winPkg) {
             winPkg = pkg
             winKind = 0
+            winAutoTitle = false
         }
         val cls = event.className ?: return
         val k = WinKind.of(cls)
-        if (k != 0) winKind = k else if (!WinKind.isTransient(cls)) winKind = 0
+        if (k != 0 || !WinKind.isTransient(cls)) {
+            winKind = k
+            winAutoTitle = windowTextMask(lab(), event) and Concept.AUTOSTART != 0
+        }
     }
 
     /** Devuelve true si la pantalla se cerró. */
@@ -507,7 +582,7 @@ class GuardService : AccessibilityService() {
         if (mode == newMode) return
         val info = serviceInfo ?: return
         info.eventTypes = when (newMode) {
-            MODE_WATCH -> EVENTS_WATCHING
+            MODE_WATCH -> EVENTS_WATCHING or AccessibilityEvent.TYPE_WINDOWS_CHANGED
             MODE_TEXT, MODE_BROWSER -> EVENTS_TYPING
             else -> AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
         }
@@ -580,11 +655,106 @@ class GuardService : AccessibilityService() {
     /** Tras cerrar la pantalla, la capa se queda un instante para tapar el cierre y luego se va. */
     private val hideCoverSoon = Runnable { hideCover() }
 
+    /**
+     * Barra de notificaciones, ajustes rápidos o pantalla de bloqueo (SystemUI) por encima de
+     * Ajustes: las capas de las filas se quitan (se tragarían toques de SystemUI) y se mira hasta
+     * que se va; entonces se vuelve a tapar al instante y se hace un recorrido. [appRoot] se salta
+     * las ventanas de SystemUI, así que sigue devolviendo Ajustes por debajo.
+     */
+    private var suiAbove = false
+    private var suiSince = 0L
+    private var suiCheckQueued = false
+
+    private val suiCheck = Runnable {
+        suiCheckQueued = false
+        recheckSystemUi()
+    }
+
+    /** Sondeo de respaldo mientras SystemUI está encima; con tope, por si se pierde algún aviso. */
+    private val suiPoll = object : Runnable {
+        override fun run() {
+            recheckSystemUi()
+            if (suiAbove && SystemClock.elapsedRealtime() - suiSince < SUI_POLL_MAX_MS) {
+                handler.postDelayed(this, SUI_POLL_MS)
+            }
+        }
+    }
+
+    private fun recheckSystemUi() {
+        val fg = foreground
+        if (fg == null || !isSettings(fg) || !Store.isLocked(this)) {
+            suiAbove = false
+            return
+        }
+        val above = keyguardLocked() || systemUiOnTop()
+        if (above) {
+            if (!suiAbove) {
+                suiAbove = true
+                suiSince = SystemClock.elapsedRealtime()
+                hideShields()
+                handler.removeCallbacks(suiPoll)
+                handler.postDelayed(suiPoll, SUI_POLL_MS)
+            }
+        } else if (suiAbove) {
+            suiAbove = false
+            handler.removeCallbacks(suiPoll)
+            showCover(COVER_MAX_MS, fresh = true)
+            queuePass()
+        }
+    }
+
+    /**
+     * ¿Hay una ventana grande de SystemUI (barra desplegada, ajustes rápidos, pantalla de bloqueo)
+     * antes de la primera de una app? La barra de estado y la de navegación también son SYSTEM
+     * de SystemUI pero finas: se descartan por su alto. Las ventanas vienen de arriba abajo.
+     */
+    private fun systemUiOnTop(): Boolean {
+        try {
+            val minH = Resources.getSystem().displayMetrics.heightPixels / SUI_MIN_HEIGHT_DIV
+            val b = Rect()
+            for (w in windows) {
+                when (w.type) {
+                    AccessibilityWindowInfo.TYPE_SYSTEM -> {
+                        w.getBoundsInScreen(b)
+                        if (b.height() < minH) continue
+                        if (w.root?.packageName?.toString() == SYSTEMUI) return true
+                    }
+                    AccessibilityWindowInfo.TYPE_APPLICATION -> {
+                        val p = w.root?.packageName?.toString() ?: continue
+                        if (p == packageName || isNeutral(p)) continue
+                        return false // la primera app de verdad: nada la tapa
+                    }
+                    else -> Unit
+                }
+            }
+        } catch (e: Exception) {
+            // sin lista de ventanas: se queda como estaba
+        }
+        return false
+    }
+
+    /** Pide un recorrido de Ajustes en cuanto la pantalla se asiente (como tras un cambio de pantalla). */
+    private fun queuePass() {
+        val now = SystemClock.elapsedRealtime()
+        if (!passQueued) {
+            passQueued = true
+            passFirstAt = now
+        }
+        val delay = minOf(PASS_MS, maxOf(0L, passFirstAt + PASS_MAX_WAIT_MS - now))
+        handler.removeCallbacks(settingsPass)
+        handler.postDelayed(settingsPass, delay)
+    }
+
     private val settingsPass: Runnable = Runnable {
         passQueued = false
         val root = appRoot(prefetch = true)
         val pkg = root?.packageName?.toString()
         if (root == null || pkg == null || !isSettings(pkg) || !Store.isLocked(this)) {
+            hideShields()
+            return@Runnable
+        }
+        // Con la pantalla de bloqueo o SystemUI delante no se pone nada: ahí se teclea el PIN.
+        if (suiAbove || keyguardLocked()) {
             hideShields()
             return@Runnable
         }
@@ -619,7 +789,8 @@ class GuardService : AccessibilityService() {
     private fun isSettings(pkg: String) = pkg.contains(SETTINGS) || isVendorSurface(pkg)
 
     private fun onSettingsEvent(event: AccessibilityEvent) {
-        val now = SystemClock.elapsedRealtime()
+        // Si se perdió el aviso de que SystemUI se fue, un evento de Ajustes lo corrige ya.
+        if (suiAbove) recheckSystemUi()
         // Algo se movió (pantalla nueva, desplazamiento o, en Xiaomi, entrar en otra sección sin
         // abrir ventana): tapar todo ya, sin preguntar nada, hasta saber dónde quedan las filas.
         // Un texto que cambia (un porcentaje, un contador) no mueve filas: ése no tapa nada.
@@ -633,15 +804,9 @@ class GuardService : AccessibilityService() {
                 fresh = event.eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
             )
         }
-        if (!passQueued) {
-            passQueued = true
-            passFirstAt = now
-        }
         // Se espera a que deje de moverse, pero nunca más de PASS_MAX_WAIT_MS: con una animación que
         // no para, la pantalla no se puede quedar tapada para siempre.
-        val delay = minOf(PASS_MS, maxOf(0L, passFirstAt + PASS_MAX_WAIT_MS - now))
-        handler.removeCallbacks(settingsPass)
-        handler.postDelayed(settingsPass, delay)
+        queuePass()
     }
 
     private fun surfaceOf(pkg: String) = when {
@@ -661,7 +826,9 @@ class GuardService : AccessibilityService() {
             kind = kind,
             dangerId = p.dangerId,
             texts = p.texts,
-            autostartList = (p.mask and Concept.AUTOSTART != 0 && p.toggle) || kind and WinKind.AUTOSTART != 0,
+            // Sólo por la clase o el título de la ventana: la ficha de cualquier app en MIUI también
+            // tiene una fila «Inicio automático» con interruptor y no es la lista.
+            autostartList = Policy.autostartList(kind, if (pkg == winPkg && winAutoTitle) Concept.AUTOSTART else 0),
             strict = !lab().known,
             grace = graceKind(),
             adminActive = adminActive(),
@@ -784,6 +951,7 @@ class GuardService : AccessibilityService() {
      * pantalla no la vuelven a poner enseguida (una animación sin fin la dejaría puesta siempre).
      */
     private fun showCover(maxMs: Long, fresh: Boolean) {
+        if (suiAbove || keyguardLocked()) return
         val now = SystemClock.elapsedRealtime()
         if (cover != null) {
             // Sólo se alarga el tope hasta el que corresponde a la clase de pantalla, contado
@@ -1092,6 +1260,14 @@ class GuardService : AccessibilityService() {
         /** Tras un intento de abrir algo peligroso, cuánto tiempo se cierran Ajustes y Seguridad. */
         const val LOCKOUT_MS = 30_000L
         const val VENDOR_RETRY_MS = 150L
+
+        /** SystemUI encima de Ajustes: espera tras un aviso de ventanas, sondeo de respaldo y su tope. */
+        const val SUI_DEBOUNCE_MS = 60L
+        const val SUI_POLL_MS = 250L
+        const val SUI_POLL_MAX_MS = 120_000L
+
+        /** Una ventana de SystemUI con menos de 1/3 del alto de la pantalla es una barra, no la cortina. */
+        const val SUI_MIN_HEIGHT_DIV = 3
         const val VENDOR_ATTEMPTS = 10
 
         /** Lo que se espera, tras ver la ficha de la app, a su diálogo de confirmación. */
@@ -1152,8 +1328,8 @@ class GuardService : AccessibilityService() {
         /** Los conceptos cuyas filas pueden llegar a taparse: lo demás no se guarda como candidato. */
         const val SHIELDABLE = Concept.ACCESSIBILITY or Concept.USERS_SECOND_SPACE or Concept.DEVELOPER_OPTIONS or
             Concept.BUILD_NUMBER or Concept.OURS or Concept.STRONG or Concept.WEAK or
-            Concept.DEACTIVATE_ADMIN or Concept.VPN_DISCONNECT_FORGET or Concept.LOCKDOWN_TOGGLE or
-            Concept.DANGER_ID
+            Concept.DEACTIVATE_ADMIN or Concept.DEACTIVATE_ADMIN_WEAK or Concept.VPN_DISCONNECT_FORGET or
+            Concept.LOCKDOWN_TOGGLE or Concept.DANGER_ID
 
         /** Ajustes, instalador, permisos y VPN: aquí nombrar a la app ya basta para cerrar. */
         val SYSTEM_SURFACES = listOf(

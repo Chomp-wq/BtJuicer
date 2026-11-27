@@ -273,4 +273,32 @@ class LabelsTest {
         assertFalse(Labels.containsIc("abc", "abcd"))
         assertFalse(Labels.containsIc(null, "a"))
     }
+
+    @Test
+    fun everyLanguageHasAWeakStopPhrase() {
+        // «Aplicaciones activas» (Android 13+) sólo dice «Detener»/«Stop» junto a nuestro nombre.
+        val weakStop = mapOf(
+            "en" to "Stop", "hu" to "Leállítás", "el" to "Διακοπή", "ar" to "إيقاف", "he" to "עצירה",
+            "fa" to "توقف", "id" to "Hentikan", "ms" to "Hentikan", "vi" to "Dừng", "th" to "หยุด",
+        )
+        for ((lang, word) in weakStop) {
+            val m = Labels.build(lang).mask("Secret Savior $word")
+            assertNotEquals("$lang", 0, m and Concept.OURS)
+            assertNotEquals("$lang", 0, m and Concept.FORCE_STOP_WEAK)
+        }
+        for (k in Labels.BUILTIN_LANGUAGES) {
+            val pats = ArrayList<Pair<String, Int>>()
+            Labels.parse(Labels.builtinBlock(k)!!, pats, HashSet())
+            val covered = pats.fold(0) { acc, p -> acc or p.second }
+            assertNotEquals("$k sin «detener» genérico", 0, covered and Concept.FORCE_STOP_WEAK)
+        }
+    }
+
+    @Test
+    fun notificationAccessConceptAndApnClass() {
+        assertNotEquals(0, Labels.build("es").mask("Acceso a notificaciones") and Concept.NOTIFICATION_ACCESS)
+        assertNotEquals(0, Labels.build("en").mask("Notification access") and Concept.NOTIFICATION_ACCESS)
+        assertNotEquals(0, WinKind.of("com.android.settings.network.apn.ApnEditor") and WinKind.APN)
+        assertEquals(0, WinKind.of("com.android.settings.network.apn.ApnSettings") and WinKind.APN)
+    }
 }

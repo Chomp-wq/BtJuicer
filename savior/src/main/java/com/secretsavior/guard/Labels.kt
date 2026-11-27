@@ -35,6 +35,15 @@ object Concept {
     const val UNINSTALL_WEAK = 1 shl 17
     const val CLEAR_DATA_WEAK = 1 shl 18
 
+    /**
+     * «Desactivar» a secas: el diálogo de acceso a notificaciones dice «activar o desactivar No
+     * molestar». Sólo cuenta en pantallas de administradores (ver [Policy.graceAllows]).
+     */
+    const val DEACTIVATE_ADMIN_WEAK = 1 shl 19
+
+    /** «Acceso a notificaciones»: la pantalla (o el diálogo) que da o quita lo que revive la app. */
+    const val NOTIFICATION_ACCESS = 1 shl 20
+
     /** Sólo en candidatos a tapar: el id de la vista dice «force_stop», «uninstall»... */
     const val DANGER_ID = 1 shl 30
 
@@ -49,7 +58,7 @@ object Concept {
         "DEVELOPER_OPTIONS" to DEVELOPER_OPTIONS, "BUILD_NUMBER" to BUILD_NUMBER,
         "PRIVATE_DNS_EDITOR" to PRIVATE_DNS_EDITOR, "PROXY_EDITOR" to PROXY_EDITOR,
         "RESTRICT_BACKGROUND" to RESTRICT_BACKGROUND, "LOCKDOWN_TOGGLE" to LOCKDOWN_TOGGLE,
-        "AUTOSTART" to AUTOSTART,
+        "AUTOSTART" to AUTOSTART, "NOTIFICATION_ACCESS" to NOTIFICATION_ACCESS,
     )
 
     /** El bit «genérico» de un concepto, o el propio si no tiene (para los patrones con «~»). */
@@ -57,6 +66,7 @@ object Concept {
         FORCE_STOP -> FORCE_STOP_WEAK
         UNINSTALL -> UNINSTALL_WEAK
         CLEAR_DATA -> CLEAR_DATA_WEAK
+        DEACTIVATE_ADMIN -> DEACTIVATE_ADMIN_WEAK
         else -> bit
     }
 }
@@ -72,6 +82,9 @@ object WinKind {
     const val NOTIFICATION_ACCESS = 1 shl 6
     const val AUTOSTART = 1 shl 7
     const val UNINSTALL = 1 shl 8
+
+    /** Editor de APN: su campo «Proxy» pone un proxy del sistema para los datos móviles. */
+    const val APN = 1 shl 9
 
     private val APP_DETAILS_NAMES = listOf(
         "installedappdetails", "appinfodashboard", "applicationsdetailsactivity", "appinfo", "appdetail",
@@ -99,6 +112,7 @@ object WinKind {
         }
         if (Labels.containsIc(cls, "autostart")) k = k or AUTOSTART
         if (Labels.containsIc(cls, "uninstall")) k = k or UNINSTALL
+        if (Labels.containsIc(cls, "apneditor")) k = k or APN
         return k
     }
 
@@ -172,6 +186,8 @@ class Labels private constructor(
             Triple(SETTINGS, "development_settings_title", Concept.DEVELOPER_OPTIONS),
             Triple(SETTINGS, "build_number", Concept.BUILD_NUMBER),
             Triple(SETTINGS, "proxy_hostname_label", Concept.PROXY_EDITOR),
+            Triple(SETTINGS, "proxy_url_title", Concept.PROXY_EDITOR),
+            Triple(SETTINGS, "manage_notification_access_title", Concept.NOTIFICATION_ACCESS),
             Triple(SETTINGS, "user_add_user_menu", Concept.USERS_SECOND_SPACE),
             Triple(SETTINGS, "user_add_user_or_profile_menu", Concept.USERS_SECOND_SPACE),
             Triple(SETTINGS, "user_add_user_title", Concept.USERS_SECOND_SPACE),
@@ -315,6 +331,7 @@ class Labels private constructor(
             "DO" to Concept.DEVELOPER_OPTIONS, "BN" to Concept.BUILD_NUMBER,
             "DNS" to Concept.PRIVATE_DNS_EDITOR, "PX" to Concept.PROXY_EDITOR,
             "RB" to Concept.RESTRICT_BACKGROUND, "AS" to Concept.AUTOSTART, "LK" to Concept.LOCKDOWN_TOGGLE,
+            "NA" to Concept.NOTIFICATION_ACCESS,
         )
 
         /** Fragmentos del id de una vista que sólo llevan los botones de parar, desinstalar o borrar datos. */
@@ -355,459 +372,486 @@ class Labels private constructor(
                 UN: desinstalar | ~eliminar | ~quitar
                 CD: borrar datos | borrar almacenamiento | borrar el almacenamiento | borrar espacio | eliminar datos | vaciar almacenamiento | ~borrar
                 AC: accesibilidad
-                DA: desactivar esta aplicación de administración | desactivar esta app de administración | desactivar administrador | desactivar
+                DA: desactivar esta aplicación de administración | desactivar esta app de administración | desactivar administrador | ~desactivar
                 VD: desconectar | olvidar | desconexión
                 SS: segundo espacio | añadir invitado | agregar invitado | añadir usuario | agregar usuario | varios usuarios | múltiples usuarios
                 DO: opciones de desarrollador | opciones para desarrolladores
                 BN: número de compilación | número de versión | versión de miui | versión de hyperos | versión del os
                 DNS: nombre de host del proveedor de dns | proveedor de dns privado | nombre de host del proveedor
-                PX: nombre de host del proxy | nombre del host proxy
+                PX: nombre de host del proxy | nombre del host proxy | configuración automática del proxy | configuración automática de proxy | url de configuración automática | url de pac
                 RB: restringir actividad en segundo plano | restricción en segundo plano | restricciones en segundo plano | restringir la actividad en segundo plano
                 AS: autoencendido | autoinicio | inicio automático | arranque automático | autostart
                 LK: bloquear conexiones sin vpn
                 UT: usuarios | varios usuarios | múltiples usuarios
+                NA: acceso a notificaciones | acceso a las notificaciones | acceder a las notificaciones | acceda a las notificaciones
             """,
             "en" to """
-                FS: force stop | force close | force-stop
+                FS: force stop | force close | force-stop | ~stop
                 UN: uninstall | ~remove | ~delete
                 CD: clear data | clear storage | clear app data | clear all data | delete data | erase data | ~clear
                 AC: accessibility
-                DA: deactivate this device admin app | deactivate device admin | remove device admin | deactivate
+                DA: deactivate this device admin app | deactivate device admin | remove device admin | ~deactivate
                 VD: disconnect | forget vpn | forget
                 SS: second space | add guest | add user | multiple users
                 DO: developer options
                 BN: build number | miui version | hyperos version | os version | version of miui | version of hyperos
                 DNS: provider hostname | hostname of dns provider | dns provider hostname
-                PX: proxy hostname | proxy host name
+                PX: proxy hostname | proxy host name | proxy auto-config | proxy autoconfig | pac url | auto-config url
                 RB: restrict background | background restriction | background activity
                 AS: autostart | auto-start | auto start
                 LK: block connections without vpn
                 UT: users | multiple users
+                NA: notification access | notification listener | access notifications
             """,
             "pt" to """
                 FS: forçar parada | forçar paragem | forçar encerramento | parar forçosamente | forçar a parada | ~parar
                 UN: desinstalar | ~remover | ~excluir
                 CD: limpar dados | limpar armazenamento | apagar dados | limpar os dados | ~limpar | ~apagar
                 AC: acessibilidade
-                DA: desativar este app de administração | desativar administrador | desativar | desactivar
+                DA: desativar este app de administração | desativar administrador | ~desativar | ~desactivar
                 VD: desconectar | desligar vpn | esquecer
                 SS: segundo espaço | adicionar convidado | adicionar usuário | adicionar utilizador | vários usuários | vários utilizadores | múltiplos usuários
                 DO: opções do desenvolvedor | opções de programador | opções para programadores | opções de desenvolvedor
                 BN: número da versão | número de compilação | número da compilação | versão do miui | versão do hyperos | versão do os
                 DNS: nome do host do provedor de dns | nome de host do fornecedor de dns | nome do host do fornecedor
-                PX: nome do host do proxy | nome de host do proxy | hostname do proxy
+                PX: nome do host do proxy | nome de host do proxy | hostname do proxy | configuração automática de proxy | url do pac | url de pac
                 RB: restringir atividade em segundo plano | restringir a atividade em segundo plano | restrição em segundo plano | restrições em segundo plano
                 AS: início automático | inicialização automática | autoinício | autostart
                 LK: bloquear conexões sem vpn | bloquear ligações sem vpn
                 UT: usuários | utilizadores | vários usuários | vários utilizadores
+                NA: acesso a notificações | acesso às notificações | aceder às notificações
             """,
             "fr" to """
                 FS: forcer l'arrêt | forcer arrêt | arrêt forcé | ~arrêter
                 UN: désinstaller | ~supprimer
                 CD: effacer les données | supprimer les données | vider les données | effacer le stockage | vider le stockage | effacer données | ~effacer | ~vider
                 AC: accessibilité
-                DA: désactiver cette application d'administration | désactiver l'administrateur | désactiver
+                DA: désactiver cette application d'administration | désactiver l'administrateur | ~désactiver
                 VD: déconnecter | oublier | déconnexion
                 SS: second espace | deuxième espace | ajouter un invité | ajouter un utilisateur | plusieurs utilisateurs | ajouter invité
                 DO: options pour les développeurs | options de développement | options développeur | options pour développeurs
                 BN: numéro de build | numéro de version | numéro de la version | version de miui | version de hyperos | version d'os
                 DNS: nom d'hôte du fournisseur de dns | nom d'hôte du fournisseur dns privé
-                PX: nom d'hôte du proxy | nom d'hôte proxy | nom hôte du proxy
+                PX: nom d'hôte du proxy | nom d'hôte proxy | nom hôte du proxy | configuration automatique du proxy | url pac
                 RB: restreindre l'activité en arrière-plan | restriction en arrière-plan | restrictions en arrière-plan | limiter l'activité en arrière-plan
                 AS: démarrage automatique | lancement automatique | autodémarrage | autostart
                 LK: bloquer les connexions sans vpn
                 UT: utilisateurs | multi-utilisateurs | plusieurs utilisateurs
+                NA: accès aux notifications | accéder aux notifications
             """,
             "de" to """
                 FS: beenden erzwingen | stoppen erzwingen | anhalten erzwingen | erzwungen beenden | ~beenden
                 UN: deinstallieren | ~entfernen | ~löschen
                 CD: daten löschen | speicher löschen | speicherplatz löschen | app-daten löschen | ~löschen
                 AC: bedienungshilfen | barrierefreiheit
-                DA: diese geräteadministrator-app deaktivieren | geräteadministrator deaktivieren | deaktivieren
+                DA: diese geräteadministrator-app deaktivieren | geräteadministrator deaktivieren | ~deaktivieren
                 VD: trennen | vergessen | vpn trennen
                 SS: zweiter bereich | zweiter space | second space | gast hinzufügen | nutzer hinzufügen | benutzer hinzufügen | mehrere nutzer | mehrere benutzer
                 DO: entwickleroptionen
                 BN: build-nummer | buildnummer | versionsnummer | miui-version | hyperos-version | os-version
                 DNS: hostname des anbieters von privatem dns | hostname des dns-anbieters | hostname des anbieters
-                PX: proxy-hostname | hostname des proxys
+                PX: proxy-hostname | hostname des proxys | automatische proxy-konfiguration | proxy-autokonfiguration | pac-url
                 RB: hintergrundaktivität einschränken | hintergrundbeschränkung | hintergrundnutzung einschränken
                 AS: autostart | automatischer start
                 LK: verbindungen ohne vpn blockieren
                 UT: nutzer | benutzer | mehrere nutzer | mehrere benutzer
+                NA: benachrichtigungszugriff | zugriff auf benachrichtigungen | auf benachrichtigungen zugreifen
             """,
             "it" to """
                 FS: forza arresto | forza interruzione | arresto forzato | interrompi forzatamente | forza chiusura | ~arresta
                 UN: disinstalla | ~rimuovi | ~elimina
                 CD: cancella dati | cancella spazio di archiviazione | cancella archiviazione | cancella i dati | svuota archivio | elimina dati | ~cancella
                 AC: accessibilità
-                DA: disattiva questa app di amministrazione | disattiva amministratore | disattiva
+                DA: disattiva questa app di amministrazione | disattiva amministratore | ~disattiva
                 VD: disconnetti | dimentica
                 SS: secondo spazio | aggiungi ospite | aggiungi utente | più utenti | utenti multipli
                 DO: opzioni sviluppatore | opzioni per gli sviluppatori
                 BN: numero build | numero di build | versione miui | versione hyperos | versione os
                 DNS: nome host del provider dns | nome host del provider
-                PX: nome host proxy | nome host del proxy | hostname proxy
+                PX: nome host proxy | nome host del proxy | hostname proxy | configurazione automatica proxy | configurazione automatica del proxy | url pac
                 RB: limita attività in background | limita l'attività in background | limitazione in background | restrizioni in background
                 AS: avvio automatico | autostart
                 LK: blocca connessioni senza vpn | blocca le connessioni senza vpn
                 UT: utenti | utenti multipli
+                NA: accesso alle notifiche | accedere alle notifiche
             """,
             "nl" to """
                 FS: forceer stop | forceer stoppen | geforceerd stoppen | forceer afsluiten | afsluiten forceren | ~stoppen
                 UN: deïnstalleren | de-installeren | ~verwijderen
                 CD: gegevens wissen | opslag wissen | opslagruimte wissen | gegevens verwijderen | ~wissen
                 AC: toegankelijkheid
-                DA: deze apparaatbeheerder-app uitschakelen | apparaatbeheerder uitschakelen | deactiveren | uitschakelen
+                DA: deze apparaatbeheerder-app uitschakelen | apparaatbeheerder uitschakelen | ~deactiveren | ~uitschakelen
                 VD: verbinding verbreken | vergeten
                 SS: tweede ruimte | gast toevoegen | gebruiker toevoegen | meerdere gebruikers
                 DO: ontwikkelaarsopties
                 BN: buildnummer | miui-versie | hyperos-versie | os-versie
                 DNS: hostnaam van provider van privé-dns | hostnaam van dns-provider | provider van privé-dns
-                PX: proxyhostnaam | hostnaam van proxy
+                PX: proxyhostnaam | hostnaam van proxy | automatische proxyconfiguratie | proxy automatisch configureren | pac-url
                 RB: achtergrondactiviteit beperken | beperking op de achtergrond | achtergrondbeperking
                 AS: automatisch starten | autostart
                 LK: verbindingen zonder vpn blokkeren
                 UT: gebruikers | meerdere gebruikers
+                NA: toegang tot meldingen | toegang tot notificaties
             """,
             "pl" to """
                 FS: wymuś zatrzymanie | wymuś zamknięcie | zatrzymaj siłą | wymuszone zatrzymanie | wymuś zakończenie | ~zatrzymaj
                 UN: odinstaluj | ~usuń
                 CD: wyczyść dane | wyczyść pamięć | usuń dane | wyczyść dane aplikacji | ~wyczyść
                 AC: ułatwienia dostępu
-                DA: dezaktywuj tę aplikację administratora urządzenia | dezaktywuj | wyłącz administratora
+                DA: dezaktywuj tę aplikację administratora urządzenia | ~dezaktywuj | wyłącz administratora
                 VD: rozłącz | zapomnij | odłącz
                 SS: drugie miejsce | druga przestrzeń | dodaj gościa | dodaj użytkownika | wielu użytkowników | wiele użytkowników | second space
                 DO: opcje programisty | opcje deweloperskie | opcje dla programistów | opcje dla deweloperów
                 BN: numer kompilacji | numer wersji | wersja miui | wersja hyperos | wersja os
                 DNS: nazwa hosta dostawcy prywatnego dns | nazwa hosta dostawcy dns
-                PX: nazwa hosta serwera proxy | nazwa hosta proxy
+                PX: nazwa hosta serwera proxy | nazwa hosta proxy | automatyczna konfiguracja proxy | adres url pac
                 RB: ogranicz aktywność w tle | ograniczenia w tle | ograniczenie aktywności w tle
                 AS: autostart | autouruchamianie | automatyczne uruchamianie
                 LK: blokuj połączenia bez vpn | blokuj połączenia bez sieci vpn
                 UT: użytkownicy | wielu użytkowników
+                NA: dostęp do powiadomień
             """,
             "ru" to """
                 FS: принудительно остановить | принудительная остановка | остановить принудительно | принудительно завершить | ~остановить
                 UN: деинсталлировать | ~удалить | ~удаление
                 CD: очистить данные | стереть данные | очистить хранилище | удалить данные | очистить память | ~очистить | ~стереть
                 AC: специальные возможности | универсальный доступ
-                DA: отключить это приложение администратора | отключить администратора | деактивировать | отключить
+                DA: отключить это приложение администратора | отключить администратора | ~деактивировать | ~отключить
                 VD: отключить vpn | отключиться | забыть
                 SS: второе пространство | добавить гостя | добавить пользователя | несколько пользователей | second space
                 DO: для разработчиков | параметры разработчика | режим разработчика
                 BN: номер сборки | версия miui | версия hyperos | версия os | версия ос
                 DNS: имя хоста поставщика частного dns | имя хоста dns-провайдера | имя хоста провайдера частного dns | имя хоста поставщика
-                PX: имя хоста прокси | имя хоста прокси-сервера
+                PX: имя хоста прокси | имя хоста прокси-сервера | автонастройка прокси | автоматическая настройка прокси | url pac
                 RB: ограничить фоновую активность | ограничения фоновой | фоновые ограничения | ограничение фоновой | ограничить фоновый режим
                 AS: автозапуск | автоматический запуск
                 LK: блокировать подключения без vpn | блокировать подключения без использования vpn
                 UT: пользователи | несколько пользователей
+                NA: доступ к уведомлениям
             """,
             "uk" to """
                 FS: примусово зупинити | примусова зупинка | зупинити примусово | ~зупинити
                 UN: деінсталювати | ~видалити
                 CD: очистити дані | стерти дані | очистити сховище | видалити дані | очистити пам'ять | ~очистити
                 AC: спеціальні можливості | універсальний доступ
-                DA: вимкнути цей додаток адміністратора пристрою | деактивувати | вимкнути
+                DA: вимкнути цей додаток адміністратора пристрою | ~деактивувати | ~вимкнути
                 VD: від'єднати | відключити | забути
                 SS: другий простір | додати гостя | додати користувача | кілька користувачів
                 DO: для розробників | параметри розробника
                 BN: номер складання | номер збірки | версія miui | версія hyperos | версія os
                 DNS: ім'я хоста постачальника приватного dns | ім'я хоста постачальника dns
-                PX: ім'я хоста проксі | ім'я хоста проксі-сервера
+                PX: ім'я хоста проксі | ім'я хоста проксі-сервера | автоналаштування проксі | автоматичне налаштування проксі | url pac
                 RB: обмежити фонову активність | обмеження фонової | фонові обмеження
                 AS: автозапуск | автоматичний запуск
                 LK: блокувати з'єднання без vpn | блокувати підключення без vpn
                 UT: користувачі | кілька користувачів
+                NA: доступ до сповіщень
             """,
             "tr" to """
                 FS: durmaya zorla | zorla durdur | zorla dur | zorla kapat | zorla durdurma | ~durdur
                 UN: yüklemeyi kaldır | uygulamayı kaldır | ~kaldır | ~sil
                 CD: verileri temizle | depolamayı temizle | verileri sil | depolama alanını temizle | ~temizle
                 AC: erişilebilirlik
-                DA: bu cihaz yönetici uygulamasını devre dışı bırak | yöneticiyi devre dışı bırak | devre dışı bırak
+                DA: bu cihaz yönetici uygulamasını devre dışı bırak | yöneticiyi devre dışı bırak | ~devre dışı bırak
                 VD: bağlantıyı kes | unut
                 SS: ikinci alan | ikinci uzay | misafir ekle | kullanıcı ekle | birden fazla kullanıcı | çoklu kullanıcı
                 DO: geliştirici seçenekleri
                 BN: derleme numarası | yapı numarası | miui sürümü | hyperos sürümü | os sürümü | sürüm numarası
                 DNS: özel dns sağlayıcısının ana makine adı | dns sağlayıcısı ana makine adı
-                PX: proxy ana makine adı | proxy ana bilgisayar adı
+                PX: proxy ana makine adı | proxy ana bilgisayar adı | proxy otomatik yapılandırma | proxy otomatik yapılandırması | pac url
                 RB: arka plan etkinliğini kısıtla | arka plan kısıtlaması | arka plan kısıtlamaları | arka planda kısıtla
                 AS: otomatik başlat | otomatik başlatma | autostart
                 LK: vpn olmadan bağlantıları engelle | vpn olmayan bağlantıları engelle
                 UT: kullanıcılar | birden fazla kullanıcı
+                NA: bildirim erişimi | bildirimlere erişim
             """,
             "ro" to """
                 FS: oprire forțată | forțați oprirea | forțare oprire | opriți forțat | oprire fortata | ~opriți
                 UN: dezinstalați | dezinstalare | dezinstalează | ~eliminați | ~ștergeți
                 CD: ștergeți datele | șterge datele | ștergeți spațiul de stocare | goliți stocarea | șterge spațiul de stocare | ~ștergeți | ~șterge
                 AC: accesibilitate
-                DA: dezactivați această aplicație de administrare | dezactivați administratorul | dezactivați | dezactivează
+                DA: dezactivați această aplicație de administrare | dezactivați administratorul | ~dezactivați | ~dezactivează
                 VD: deconectați | deconectare | uitați | deconectează
                 SS: al doilea spațiu | adăugați invitat | adăugați utilizator | mai mulți utilizatori | utilizatori multipli
                 DO: opțiuni pentru dezvoltatori | opțiuni dezvoltator
                 BN: număr versiune | număr build | numărul versiunii | versiunea miui | versiunea hyperos | versiune os
                 DNS: numele gazdei furnizorului dns privat | numele de gazdă al furnizorului dns
-                PX: numele gazdei proxy | nume de gazdă proxy
+                PX: numele gazdei proxy | nume de gazdă proxy | configurare automată proxy | configurare automată a proxy | url pac
                 RB: restricționați activitatea în fundal | restricție în fundal | restricții în fundal
                 AS: pornire automată | autostart | lansare automată
                 LK: blocați conexiunile fără vpn | blocare conexiuni fără vpn
                 UT: utilizatori | mai mulți utilizatori
+                NA: acces la notificări
             """,
             "cs" to """
                 FS: vynutit zastavení | vynutit ukončení | násilně ukončit | ~zastavit
                 UN: odinstalovat | ~odstranit
                 CD: vymazat data | vymazat úložiště | smazat data | vymazat paměť | ~vymazat | ~smazat
                 AC: přístupnost | usnadnění
-                DA: deaktivovat tuto aplikaci správce zařízení | deaktivovat | vypnout správce
+                DA: deaktivovat tuto aplikaci správce zařízení | ~deaktivovat | vypnout správce
                 VD: odpojit | zapomenout
                 SS: druhý prostor | přidat hosta | přidat uživatele | více uživatelů
                 DO: možnosti pro vývojáře | vývojářské možnosti | pro vývojáře
                 BN: číslo sestavení | číslo verze | verze miui | verze hyperos | verze os
                 DNS: název hostitele poskytovatele soukromého dns | název hostitele poskytovatele dns
-                PX: název hostitele proxy | název proxy hostitele
+                PX: název hostitele proxy | název proxy hostitele | automatická konfigurace proxy | adresa url pac
                 RB: omezit aktivitu na pozadí | omezení na pozadí | omezení aktivity na pozadí
                 AS: automatické spuštění | autostart | automatický start
                 LK: blokovat připojení bez vpn
                 UT: uživatelé | více uživatelů
+                NA: přístup k oznámením
             """,
             "hu" to """
-                FS: kényszerített leállítás | leállítás kényszerítése | kényszerített bezárás | erőltetett leállítás
+                FS: kényszerített leállítás | leállítás kényszerítése | kényszerített bezárás | erőltetett leállítás | ~leállítás
                 UN: eltávolítás | telepítés eltávolítása | ~törlés
                 CD: adatok törlése | tárhely törlése | tárhely ürítése | ~törlése
                 AC: kisegítő lehetőségek | hozzáférhetőség
-                DA: eszközrendszergazdai alkalmazás kikapcsolása | rendszergazda kikapcsolása | inaktiválás | kikapcsolás
+                DA: eszközrendszergazdai alkalmazás kikapcsolása | rendszergazda kikapcsolása | ~inaktiválás | ~kikapcsolás
                 VD: leválasztás | kapcsolat bontása | elfelejtés | elfelejt
                 SS: második tér | vendég hozzáadása | felhasználó hozzáadása | több felhasználó | második hely
                 DO: fejlesztői beállítások | fejlesztői lehetőségek
                 BN: build-szám | buildszám | verziószám | miui-verzió | hyperos-verzió | os-verzió
                 DNS: magánjellegű dns-szolgáltató gazdagépneve | dns-szolgáltató gazdagépneve | szolgáltató gazdagépneve
-                PX: proxy gazdagépneve | proxy állomásneve | proxy gazdagép
+                PX: proxy gazdagépneve | proxy állomásneve | proxy gazdagép | automatikus proxykonfiguráció | proxy automatikus konfigurálása | pac url
                 RB: háttértevékenység korlátozása | háttérkorlátozás | háttérben futás korlátozása
                 AS: automatikus indítás | autostart | önindítás
                 LK: vpn nélküli kapcsolatok letiltása | vpn nélküli kapcsolatok blokkolása
                 UT: felhasználók | több felhasználó
+                NA: értesítésekhez való hozzáférés | hozzáférés az értesítésekhez
             """,
             "el" to """
-                FS: αναγκαστική διακοπή | αναγκαστικός τερματισμός | αναγκαστικό κλείσιμο | εξαναγκαστική διακοπή | αναγκαστική παύση
+                FS: αναγκαστική διακοπή | αναγκαστικός τερματισμός | αναγκαστικό κλείσιμο | εξαναγκαστική διακοπή | αναγκαστική παύση | ~διακοπή
                 UN: κατάργηση εγκατάστασης | απεγκατάσταση | ~διαγραφή | ~κατάργηση
                 CD: διαγραφή δεδομένων | εκκαθάριση αποθηκευτικού χώρου | εκκαθάριση δεδομένων | διαγραφή αποθηκευτικού χώρου | ~εκκαθάριση | ~διαγραφή
                 AC: προσβασιμότητα
-                DA: απενεργοποίηση αυτής της εφαρμογής διαχειριστή | απενεργοποίηση διαχειριστή | απενεργοποίηση | απενεργοποιήστε
+                DA: απενεργοποίηση αυτής της εφαρμογής διαχειριστή | απενεργοποίηση διαχειριστή | ~απενεργοποίηση | ~απενεργοποιήστε
                 VD: αποσύνδεση | ξεχάσετε | ξέχασε
                 SS: δεύτερος χώρος | προσθήκη επισκέπτη | προσθήκη χρήστη | πολλαπλοί χρήστες | πολλοί χρήστες
                 DO: επιλογές προγραμματιστή | επιλογές για προγραμματιστές
                 BN: αριθμός έκδοσης | αριθμός build | έκδοση miui | έκδοση hyperos | έκδοση os
                 DNS: όνομα κεντρικού υπολογιστή παρόχου ιδιωτικού dns | όνομα κεντρικού υπολογιστή παρόχου dns
-                PX: όνομα κεντρικού υπολογιστή διακομιστή μεσολάβησης | όνομα κεντρικού υπολογιστή proxy | όνομα κεντρικού υπολογιστή διακομιστή proxy
+                PX: όνομα κεντρικού υπολογιστή διακομιστή μεσολάβησης | όνομα κεντρικού υπολογιστή proxy | όνομα κεντρικού υπολογιστή διακομιστή proxy | αυτόματη διαμόρφωση διακομιστή μεσολάβησης | αυτόματη διαμόρφωση proxy | url pac
                 RB: περιορισμός δραστηριότητας παρασκηνίου | περιορισμός παρασκηνίου | περιορισμοί παρασκηνίου
                 AS: αυτόματη εκκίνηση | αυτόματη έναρξη | autostart
                 LK: αποκλεισμός συνδέσεων χωρίς vpn
                 UT: χρήστες | πολλοί χρήστες
+                NA: πρόσβαση στις ειδοποιήσεις
             """,
             "ar" to """
-                FS: فرض الإيقاف | إيقاف إجباري | فرض إيقاف | إيقاف بالقوة | إيقاف قسري
+                FS: فرض الإيقاف | إيقاف إجباري | فرض إيقاف | إيقاف بالقوة | إيقاف قسري | ~إيقاف
                 UN: إلغاء التثبيت | إزالة التثبيت | ~إزالة | ~حذف
                 CD: محو البيانات | مسح البيانات | مسح مساحة التخزين | محو مساحة التخزين | حذف البيانات | ~مسح | ~محو
                 AC: إمكانية الوصول | سهولة الاستخدام
-                DA: إيقاف تفعيل تطبيق مشرف الجهاز هذا | إلغاء تنشيط | إلغاء تفعيل | إيقاف تفعيل
+                DA: إيقاف تفعيل تطبيق مشرف الجهاز هذا | ~إلغاء تنشيط | ~إلغاء تفعيل | ~إيقاف تفعيل
                 VD: قطع الاتصال | نسيان | إلغاء الاتصال | فصل
                 SS: المساحة الثانية | إضافة ضيف | إضافة مستخدم | عدة مستخدمين | مستخدمون متعددون
                 DO: خيارات المطورين | خيارات المطوّر | خيارات المطور
                 BN: رقم الإصدار | رقم الإنشاء | رقم البناء | إصدار miui | إصدار hyperos
                 DNS: اسم مضيف موفر نظام أسماء النطاقات الخاص | اسم مضيف موفر dns | اسم مضيف مزود dns الخاص | اسم مضيف مزوّد dns
-                PX: اسم مضيف الخادم الوكيل | اسم مضيف الوكيل | اسم مضيف بروكسي
+                PX: اسم مضيف الخادم الوكيل | اسم مضيف الوكيل | اسم مضيف بروكسي | الإعداد التلقائي للخادم الوكيل | الضبط التلقائي للبروكسي | عنوان url لملف pac
                 RB: تقييد النشاط في الخلفية | تقييد الخلفية | قيود الخلفية | تقييد الأنشطة في الخلفية
                 AS: التشغيل التلقائي | بدء تلقائي | autostart
                 LK: حظر الاتصالات بدون vpn | حظر الاتصالات من دون vpn
                 UT: المستخدمون | مستخدمون متعددون
+                NA: الوصول إلى الإشعارات
             """,
             "he" to """
-                FS: אילוץ עצירה | עצירה בכוח | כפה עצירה | הפסקה בכוח | אלץ עצירה
+                FS: אילוץ עצירה | עצירה בכוח | כפה עצירה | הפסקה בכוח | אלץ עצירה | ~עצירה
                 UN: הסר התקנה | הסרת התקנה | הסרה | ~מחק
                 CD: ניקוי נתונים | מחיקת נתונים | נקה נתונים | נקה אחסון | ניקוי אחסון | ~נקה | ~מחק
                 AC: נגישות
-                DA: השבת את אפליקציית מנהל המכשיר | השבתת מנהל | השבת | בטל הפעלה
+                DA: השבת את אפליקציית מנהל המכשיר | השבתת מנהל | ~השבת | ~בטל הפעלה
                 VD: נתק | נתקו | שכח | התנתק | ניתוק
                 SS: מרחב שני | הוסף אורח | הוסף משתמש | משתמשים מרובים | הוספת אורח | הוספת משתמש
                 DO: אפשרויות פיתוח | אפשרויות למפתחים | אפשרויות מפתח
                 BN: מספר גרסה | מספר בנייה | גרסת miui | גרסת hyperos
                 DNS: שם המארח של ספק dns פרטי | שם מארח של ספק dns | שם המארח של ספק
-                PX: שם מארח של שרת proxy | שם המארח של ה-proxy | שם מארח של proxy | שם מארח של פרוקסי
+                PX: שם מארח של שרת proxy | שם המארח של ה-proxy | שם מארח של proxy | שם מארח של פרוקסי | הגדרת proxy אוטומטית | תצורת proxy אוטומטית | כתובת url של pac
                 RB: הגבלת פעילות ברקע | הגבלות ברקע | הגבלת רקע
                 AS: הפעלה אוטומטית | autostart
                 LK: חסימת חיבורים ללא vpn | חסום חיבורים ללא vpn
                 UT: משתמשים | משתמשים מרובים
+                NA: גישה להתראות
             """,
             "fa" to """
-                FS: توقف اجباری | اجبار به توقف | متوقف کردن اجباری | توقف اجباری
+                FS: توقف اجباری | اجبار به توقف | متوقف کردن اجباری | توقف اجباری | ~توقف
                 UN: حذف نصب | لغو نصب | نصب‌زدایی | ~حذف
                 CD: پاک کردن داده‌ها | پاک کردن داده | پاک کردن فضای ذخیره‌سازی | پاک کردن فضای ذخیره | ~پاک کردن
                 AC: دسترسی‌پذیری | دسترس‌پذیری | دسترسی پذیری
-                DA: غیرفعال کردن این برنامه سرپرست دستگاه | غیرفعال کردن | غیرفعال‌سازی
+                DA: غیرفعال کردن این برنامه سرپرست دستگاه | ~غیرفعال کردن | ~غیرفعال‌سازی
                 VD: قطع اتصال | فراموش کردن | فراموشی | قطع
                 SS: فضای دوم | افزودن مهمان | افزودن کاربر | چند کاربر | چندکاربره
                 DO: گزینه‌های برنامه‌نویس | گزینه‌های توسعه‌دهنده | گزینه های توسعه دهنده
                 BN: شماره ساخت | شماره نسخه | نسخه miui | نسخه hyperos
                 DNS: نام میزبان ارائه‌دهنده dns خصوصی | نام میزبان ارائه دهنده dns | نام میزبان ارائه‌دهنده
-                PX: نام میزبان پروکسی | نام میزبان پراکسی
+                PX: نام میزبان پروکسی | نام میزبان پراکسی | پیکربندی خودکار پروکسی | پیکربندی خودکار پراکسی | نشانی pac
                 RB: محدود کردن فعالیت در پس‌زمینه | محدودیت پس‌زمینه | محدودیت‌های پس‌زمینه
                 AS: راه‌اندازی خودکار | شروع خودکار | اجرای خودکار | autostart
                 LK: مسدود کردن اتصال‌های بدون vpn | مسدود کردن اتصالات بدون vpn
                 UT: کاربران | چند کاربر
+                NA: دسترسی به اعلان‌ها | دسترسی به اعلان ها
             """,
             "hi" to """
                 FS: ज़बरदस्ती रोकें | जबरदस्ती रोकें | ज़बरदस्ती बंद करें | फ़ोर्स स्टॉप | फोर्स स्टॉप | बलपूर्वक रोकें | ~रोकें
                 UN: अनइंस्टॉल करें | अनइंस्टॉल | ~हटाएं
                 CD: डेटा साफ़ करें | डेटा साफ करें | स्टोरेज साफ़ करें | डेटा मिटाएं | स्टोरेज खाली करें | ~साफ़
                 AC: सुलभता
-                DA: इस डिवाइस एडमिन ऐप्लिकेशन को निष्क्रिय करें | निष्क्रिय करें | बंद करें
+                DA: इस डिवाइस एडमिन ऐप्लिकेशन को निष्क्रिय करें | ~निष्क्रिय करें | ~बंद करें
                 VD: डिसकनेक्ट | कनेक्शन तोड़ें | भूल जाएं
                 SS: दूसरा स्पेस | अतिथि जोड़ें | उपयोगकर्ता जोड़ें | एकाधिक उपयोगकर्ता | कई उपयोगकर्ता | second space
                 DO: डेवलपर विकल्प | डेवलपर के लिए विकल्प
                 BN: बिल्ड नंबर | बिल्ड संख्या | संस्करण संख्या | miui संस्करण | hyperos संस्करण
                 DNS: निजी dns प्रदाता का होस्टनाम | dns प्रदाता का होस्टनाम | निजी dns प्रदाता होस्टनाम
-                PX: प्रॉक्सी होस्टनाम | प्रॉक्सी का होस्टनाम | प्रॉक्सी होस्ट नाम
+                PX: प्रॉक्सी होस्टनाम | प्रॉक्सी का होस्टनाम | प्रॉक्सी होस्ट नाम | प्रॉक्सी ऑटो-कॉन्फ़िग | प्रॉक्सी स्वतः कॉन्फ़िगर | पीएसी यूआरएल
                 RB: बैकग्राउंड गतिविधि को प्रतिबंधित करें | बैकग्राउंड प्रतिबंध | पृष्ठभूमि गतिविधि प्रतिबंधित करें
                 AS: ऑटो-स्टार्ट | ऑटोस्टार्ट | ऑटो स्टार्ट | स्वतः प्रारंभ
                 LK: vpn के बिना कनेक्शन ब्लॉक करें | vpn के बिना कनेक्शन को ब्लॉक करें
                 UT: उपयोगकर्ता | एकाधिक उपयोगकर्ता
+                NA: नोटिफ़िकेशन का एक्सेस | सूचना एक्सेस
             """,
             "id" to """
-                FS: paksa berhenti | paksa hentikan | hentikan paksa | paksa tutup
+                FS: paksa berhenti | paksa hentikan | hentikan paksa | paksa tutup | ~hentikan
                 UN: copot pemasangan | hapus instalasi | uninstal | ~hapus | ~copot
                 CD: hapus data | hapus penyimpanan | hapus semua data | bersihkan data | kosongkan penyimpanan | ~hapus | ~bersihkan
                 AC: aksesibilitas
-                DA: nonaktifkan aplikasi admin perangkat ini | nonaktifkan admin | nonaktifkan
+                DA: nonaktifkan aplikasi admin perangkat ini | nonaktifkan admin | ~nonaktifkan
                 VD: putuskan sambungan | lupakan | lupakan vpn
                 SS: ruang kedua | tambahkan tamu | tambahkan pengguna | tambah tamu | tambah pengguna | beberapa pengguna | banyak pengguna
                 DO: opsi developer | opsi pengembang
                 BN: nomor build | nomor versi | versi miui | versi hyperos | versi os
                 DNS: nama host penyedia dns pribadi | nama host penyedia dns
-                PX: nama host proxy | hostname proxy
+                PX: nama host proxy | hostname proxy | konfigurasi otomatis proxy | url pac | proxy konfigurasi otomatis
                 RB: batasi aktivitas latar belakang | pembatasan latar belakang | batasan latar belakang
                 AS: mulai otomatis | autostart
                 LK: blokir koneksi tanpa vpn
                 UT: pengguna | beberapa pengguna
+                NA: akses notifikasi
             """,
             "ms" to """
-                FS: paksa henti | henti paksa | paksa berhenti
+                FS: paksa henti | henti paksa | paksa berhenti | ~hentikan
                 UN: nyahpasang | ~alih keluar | ~padam
                 CD: kosongkan data | kosongkan storan | padam data | ~kosongkan | ~padam
                 AC: kebolehcapaian | aksesibiliti
-                DA: nyahaktifkan apl pentadbir peranti ini | nyahaktifkan pentadbir | nyahaktifkan
+                DA: nyahaktifkan apl pentadbir peranti ini | nyahaktifkan pentadbir | ~nyahaktifkan
                 VD: putuskan sambungan | lupakan | lupa vpn
                 SS: ruang kedua | tambah tetamu | tambah pengguna | berbilang pengguna | pelbagai pengguna
                 DO: pilihan pembangun
                 BN: nombor binaan | nombor versi | versi miui | versi hyperos | versi os
                 DNS: nama hos pembekal dns peribadi | nama hos pembekal dns
-                PX: nama hos proksi | nama hos proxy
+                PX: nama hos proksi | nama hos proxy | konfigurasi automatik proksi | url pac
                 RB: hadkan aktiviti latar belakang | sekatan latar belakang | had latar belakang
                 AS: mula auto | mula automatik | autostart | permulaan automatik
                 LK: sekat sambungan tanpa vpn
                 UT: pengguna | berbilang pengguna
+                NA: akses pemberitahuan
             """,
             "vi" to """
-                FS: buộc dừng | dừng buộc | buộc đóng | ép dừng | buộc ngừng
+                FS: buộc dừng | dừng buộc | buộc đóng | ép dừng | buộc ngừng | ~dừng
                 UN: gỡ cài đặt | ~gỡ | ~xóa
                 CD: xóa dữ liệu | xóa bộ nhớ | xóa dung lượng | xoá dữ liệu | xoá bộ nhớ | ~xóa | ~xoá
                 AC: hỗ trợ tiếp cận | trợ năng
-                DA: hủy kích hoạt ứng dụng quản trị thiết bị này | vô hiệu hóa quản trị | hủy kích hoạt | vô hiệu hóa
+                DA: hủy kích hoạt ứng dụng quản trị thiết bị này | vô hiệu hóa quản trị | ~hủy kích hoạt | ~vô hiệu hóa
                 VD: ngắt kết nối | quên | quên vpn
                 SS: không gian thứ hai | thêm khách | thêm người dùng | nhiều người dùng
                 DO: tùy chọn nhà phát triển | tuỳ chọn nhà phát triển | tùy chọn cho nhà phát triển
                 BN: số bản dựng | số hiệu bản dựng | số bản xây dựng | số phiên bản | phiên bản miui | phiên bản hyperos | phiên bản os
                 DNS: tên máy chủ của nhà cung cấp dns riêng tư | tên máy chủ nhà cung cấp dns
-                PX: tên máy chủ proxy | tên máy chủ của proxy | tên máy chủ lưu trữ proxy
+                PX: tên máy chủ proxy | tên máy chủ của proxy | tên máy chủ lưu trữ proxy | cấu hình proxy tự động | url pac
                 RB: hạn chế hoạt động trong nền | hạn chế nền | giới hạn hoạt động nền | hạn chế hoạt động nền
                 AS: tự động khởi động | tự khởi động | autostart | khởi chạy tự động
                 LK: chặn các kết nối không dùng vpn | chặn kết nối không có vpn
                 UT: người dùng | nhiều người dùng
+                NA: quyền truy cập thông báo | truy cập thông báo
             """,
             "th" to """
-                FS: บังคับหยุด | บังคับให้หยุด | บังคับปิด
+                FS: บังคับหยุด | บังคับให้หยุด | บังคับปิด | ~หยุด
                 UN: ถอนการติดตั้ง | ถอนติดตั้ง | ~ลบ
                 CD: ล้างข้อมูล | ล้างพื้นที่เก็บข้อมูล | ลบข้อมูล | ~ล้าง
                 AC: การช่วยการเข้าถึง | การช่วยเหลือพิเศษ | การเข้าถึงสำหรับผู้พิการ | ความสามารถพิเศษ
-                DA: ปิดใช้งานแอปผู้ดูแลระบบอุปกรณ์นี้ | ปิดใช้งานผู้ดูแลระบบ | ปิดใช้งาน | ยกเลิกการเปิดใช้งาน
+                DA: ปิดใช้งานแอปผู้ดูแลระบบอุปกรณ์นี้ | ปิดใช้งานผู้ดูแลระบบ | ~ปิดใช้งาน | ~ยกเลิกการเปิดใช้งาน
                 VD: ยกเลิกการเชื่อมต่อ | ตัดการเชื่อมต่อ | ลืม vpn | ลืม
                 SS: พื้นที่ที่สอง | พื้นที่ที่ 2 | เพิ่มผู้เยี่ยมชม | เพิ่มแขก | เพิ่มผู้ใช้ | ผู้ใช้หลายคน
                 DO: ตัวเลือกสำหรับนักพัฒนาซอฟต์แวร์ | ตัวเลือกนักพัฒนา | ตัวเลือกสำหรับนักพัฒนา
                 BN: หมายเลขบิลด์ | หมายเลขรุ่น | เวอร์ชัน miui | เวอร์ชัน hyperos | เวอร์ชัน os
                 DNS: ชื่อโฮสต์ของผู้ให้บริการ dns ส่วนตัว | ชื่อโฮสต์ผู้ให้บริการ dns
-                PX: ชื่อโฮสต์พร็อกซี | ชื่อโฮสต์ของพร็อกซี
+                PX: ชื่อโฮสต์พร็อกซี | ชื่อโฮสต์ของพร็อกซี | การกำหนดค่าพร็อกซีอัตโนมัติ | url ของ pac
                 RB: จำกัดกิจกรรมในพื้นหลัง | การจำกัดพื้นหลัง | ข้อจำกัดในพื้นหลัง
                 AS: เริ่มอัตโนมัติ | เริ่มต้นอัตโนมัติ | autostart
                 LK: บล็อกการเชื่อมต่อที่ไม่ใช้ vpn | บล็อกการเชื่อมต่อที่ไม่มี vpn
                 UT: ผู้ใช้ | ผู้ใช้หลายคน
+                NA: การเข้าถึงการแจ้งเตือน
             """,
             "zh-Hans" to """
                 FS: 强行停止 | 强制停止 | 强制结束 | 强行结束 | 强行关闭 | ~停止
                 UN: 卸载 | ~删除 | ~移除
                 CD: 清除数据 | 清除存储空间 | 清空数据 | 清除存储 | 清除全部数据 | ~清除 | ~清空
                 AC: 无障碍 | 辅助功能 | 协助工具
-                DA: 停用此设备管理应用 | 停用设备管理员 | 停用此设备管理员应用 | 停用 | 取消激活
+                DA: 停用此设备管理应用 | 停用设备管理员 | 停用此设备管理员应用 | ~停用 | ~取消激活
                 VD: 断开连接 | 断开 | 忘记 | 忘记vpn
                 SS: 第二空间 | 添加访客 | 添加用户 | 多用户 | 多个用户
                 DO: 开发者选项 | 开发人员选项 | 开发者模式
                 BN: 版本号 | 内部版本号 | miui 版本 | hyperos 版本 | os 版本 | 系统版本
                 DNS: 专用dns提供商主机名 | 私人dns提供商主机名 | dns提供商主机名 | 专用dns提供者主机名
-                PX: 代理主机名 | 代理服务器主机名
+                PX: 代理主机名 | 代理服务器主机名 | 代理自动配置 | 代理自动设置 | pac 网址
                 RB: 限制后台活动 | 后台限制 | 后台活动限制 | 限制后台
                 AS: 自启动 | 自动启动 | autostart | 应用自启动
                 LK: 屏蔽没有vpn的连接 | 阻止没有vpn的连接 | 禁止没有vpn的连接
                 UT: 用户 | 多用户
+                NA: 通知使用权 | 通知访问权限 | 访问通知
             """,
             "zh-Hant" to """
                 FS: 強制停止 | 強行停止 | 強制結束 | 強制關閉 | ~停止
                 UN: 解除安裝 | 移除安裝 | 卸載 | ~移除 | ~刪除
                 CD: 清除資料 | 清除儲存空間 | 清除儲存 | 清空資料 | ~清除 | ~清空
                 AC: 無障礙 | 輔助使用 | 協助工具
-                DA: 停用這個裝置管理應用程式 | 停用裝置管理員 | 停用 | 取消啟用
+                DA: 停用這個裝置管理應用程式 | 停用裝置管理員 | ~停用 | ~取消啟用
                 VD: 中斷連線 | 斷線 | 忘記 | 忘記vpn | 中斷
                 SS: 第二空間 | 新增訪客 | 新增使用者 | 多位使用者 | 多個使用者 | 多用戶 | 新增用戶
                 DO: 開發人員選項 | 開發者選項
                 BN: 版本號碼 | 版本號 | build 編號 | 版號 | miui 版本 | hyperos 版本 | os 版本 | 系統版本 | 組建編號 | 版本編號
                 DNS: 私人dns供應商主機名稱 | dns供應商主機名稱 | 專用dns供應商主機名稱
-                PX: proxy主機名稱 | 代理伺服器主機名稱 | 代理主機名稱
+                PX: proxy主機名稱 | 代理伺服器主機名稱 | 代理主機名稱 | proxy 自動設定 | 代理伺服器自動設定 | pac 網址
                 RB: 限制背景活動 | 背景限制 | 背景活動限制 | 限制背景
                 AS: 自動啟動 | 自啟動 | autostart | 自動啟動管理
                 LK: 封鎖沒有vpn的連線 | 封鎖未使用vpn的連線
                 UT: 使用者 | 用戶 | 多位使用者
+                NA: 通知存取權 | 存取通知
             """,
             "ja" to """
                 FS: 強制停止 | 強制終了 | 強制的に停止 | ~停止
                 UN: アンインストール | ~削除
                 CD: データを消去 | データを削除 | ストレージを消去 | ストレージを削除 | データを全て消去 | データ消去 | ~消去 | ~削除 | ~クリア
                 AC: ユーザー補助 | アクセシビリティ | ユーザ補助
-                DA: このデバイス管理アプリを無効にする | デバイス管理アプリを無効 | 無効にする | 無効化
+                DA: このデバイス管理アプリを無効にする | デバイス管理アプリを無効 | ~無効にする | ~無効化
                 VD: 接続を解除 | 切断 | vpnを削除 | 削除
                 SS: セカンドスペース | ゲストを追加 | ユーザーを追加 | 複数ユーザー | マルチユーザー
                 DO: 開発者向けオプション | 開発者オプション
                 BN: ビルド番号 | バージョン番号 | miuiバージョン | hyperosバージョン | osバージョン | システムバージョン
                 DNS: プライベート dns プロバイダのホスト名 | dns プロバイダのホスト名 | プライベートdnsプロバイダーのホスト名
-                PX: プロキシのホスト名 | プロキシ ホスト名 | プロキシホスト名
+                PX: プロキシのホスト名 | プロキシ ホスト名 | プロキシホスト名 | プロキシの自動設定 | プロキシ自動設定 | pac url
                 RB: バックグラウンド アクティビティを制限 | バックグラウンドの制限 | バックグラウンドアクティビティを制限 | バックグラウンド制限
                 AS: 自動起動 | 自動スタート | autostart | オートスタート
                 LK: vpnなしの接続をブロック | vpnを使用しない接続をブロック
                 UT: ユーザー | 複数ユーザー
+                NA: 通知へのアクセス | 通知アクセス
             """,
             "ko" to """
                 FS: 강제 중지 | 강제 종료 | 강제 정지 | ~중지
                 UN: 앱 삭제 | 앱 제거 | ~삭제 | ~제거
                 CD: 데이터 삭제 | 데이터 지우기 | 저장공간 지우기 | 저장소 지우기 | 저장공간 삭제 | ~지우기 | ~삭제
                 AC: 접근성 | 손쉬운 사용
-                DA: 이 기기 관리 앱 사용 중지 | 기기 관리자 비활성화 | 비활성화 | 사용 중지
+                DA: 이 기기 관리 앱 사용 중지 | 기기 관리자 비활성화 | ~비활성화 | ~사용 중지
                 VD: 연결 해제 | 연결 끊기 | 잊기
                 SS: 보조 공간 | 세컨드 스페이스 | 게스트 추가 | 사용자 추가 | 다중 사용자 | 여러 사용자 | second space
                 DO: 개발자 옵션 | 개발자 설정 | 개발자 모드
                 BN: 빌드 번호 | 버전 번호 | miui 버전 | hyperos 버전 | os 버전
                 DNS: 비공개 dns 제공업체 호스트 이름 | dns 제공업체 호스트 이름 | 비공개 dns 공급자 호스트 이름 | dns 공급업체 호스트 이름
-                PX: 프록시 호스트 이름 | 프록시 호스트명
+                PX: 프록시 호스트 이름 | 프록시 호스트명 | 프록시 자동 설정 | 프록시 자동 구성 | pac url
                 RB: 백그라운드 활동 제한 | 백그라운드 제한 | 백그라운드 사용 제한
                 AS: 자동 시작 | 자동 실행 | autostart | 자동시작
                 LK: vpn 없이 연결 차단 | vpn 없는 연결 차단 | vpn을 사용하지 않는 연결 차단
                 UT: 사용자 | 다중 사용자
+                NA: 알림 접근 | 알림 액세스 | 알림에 접근
             """,
         )
     }

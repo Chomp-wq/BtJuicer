@@ -26,7 +26,8 @@ object Status {
         val enabled = Settings.Secure.getString(
             c.contentResolver, Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES,
         ).orEmpty()
-        return enabled.split(':').any { it.equals(me, ignoreCase = true) }
+        // Android reescribe la lista en forma corta («pkg/.Clase») al guardarla: se compara sin forma.
+        return A11yList.contains(enabled, me)
     }
 
     /** El usuario ya aceptó el diálogo del sistema de la VPN. */
