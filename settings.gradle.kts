@@ -30,3 +30,4 @@ dependencyResolutionManagement {
 
 rootProject.name = "BT Juicer"
 include(":app")
+include(":savior")

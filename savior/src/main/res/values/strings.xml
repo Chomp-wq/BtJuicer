@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Secret Savior</string>
+
+    <string name="guard_description">Secret Savior vigila las pantallas de Ajustes desde las que se podría apagar la protección y bloquea el texto pornográfico. Nada de lo que lee sale del teléfono ni se guarda.</string>
+    <string name="admin_warning">Desactivar al administrador permitiría desinstalar Secret Savior. Esta app existe para que eso no sea fácil: piensa en por qué la instalaste.</string>
+</resources>
