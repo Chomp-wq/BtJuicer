@@ -21,7 +21,7 @@ class StallDetector(
      */
     @Synchronized
     fun expired(sentAt: Long, now: Long, sendsWorked: Boolean): Boolean {
-        if (!sendsWorked || sentAt <= armedAfter) return false
+        if (!sendsWorked || sentAt < armedAfter) return false
         times.addLast(now)
         while (times.size > threshold) times.removeFirst()
         if (times.size >= threshold && now - times.first() <= windowMs) {

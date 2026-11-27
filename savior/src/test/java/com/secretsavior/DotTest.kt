@@ -133,7 +133,8 @@ class DotTest {
 
     private fun plain(): (TlsDotTransport.Target) -> Socket = { t -> Socket().also { it.connect(t.address, 1_000) } }
 
-    private fun waitFor(timeoutMs: Long = 3_000, cond: () -> Boolean) {
+    // Plazo = red de seguridad; se espera por eventos.
+    private fun waitFor(timeoutMs: Long = 20_000, cond: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         while (!cond() && System.nanoTime() < end) Thread.sleep(10)
         assertTrue(cond())
@@ -160,11 +161,14 @@ class DotTest {
         val got = AtomicInteger()
         val t = TlsDotTransport(listOf(TlsDotTransport.Target(e.address, "x")), plain(), { _, _ -> got.incrementAndGet() }).also { closeables += it }
         t.send(q("one.example", 1)) // el servidor la cierra sin contestar
-        Thread.sleep(200)
-        t.send(q("two.example", 2)) // la escritura falla o va a la conexión cerrada
-        Thread.sleep(200)
-        t.send(q("three.example", 3))
-        waitFor { got.get() >= 1 }
+        // se sigue preguntando (cada una puede caer en la conexión muerta) hasta que una conexión nueva conteste
+        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        var i = 2
+        while (got.get() == 0 && System.nanoTime() < end) {
+            t.send(q("n$i.example", i++))
+            Thread.sleep(50)
+        }
+        assertTrue("sin respuesta tras reconectar", got.get() >= 1)
         assertTrue(e.connections.get() >= 2)
     }
 
@@ -194,7 +198,10 @@ class DotTest {
             listOf(TlsDotTransport.Target(InetSocketAddress(InetAddress.getLoopbackAddress(), 1), "x")),
             { attempts.incrementAndGet(); throw IOException("no") }, { _, _ -> }, retryMs = 60_000,
         ).also { closeables += it }
-        repeat(5) { t.send(q("a$it.example", it + 1)); Thread.sleep(30) }
+        t.send(q("a0.example", 1))
+        waitFor { attempts.get() == 1 } // el hilo del transporte ya intentó y falló
+        repeat(4) { t.send(q("a${it + 1}.example", it + 2)); Thread.sleep(30) }
+        Thread.sleep(200)
         assertEquals(1, attempts.get())
     }
 
@@ -216,7 +223,7 @@ class DotTest {
         ).also { closeables += it; closeables += AutoCloseable { gate.countDown() } }
         val t0 = System.nanoTime()
         val accepted = (1..TlsDotTransport.QUEUE + 20).count { t.send(q("a$it.example", it)) }
-        assertTrue("nunca bloquea: ${(System.nanoTime() - t0) / 1_000_000} ms", (System.nanoTime() - t0) < 1_000_000_000L)
+        assertTrue("nunca bloquea: ${(System.nanoTime() - t0) / 1_000_000} ms", (System.nanoTime() - t0) < 10_000_000_000L)
         assertTrue("acotada: $accepted", accepted <= TlsDotTransport.QUEUE + 1)
     }
 

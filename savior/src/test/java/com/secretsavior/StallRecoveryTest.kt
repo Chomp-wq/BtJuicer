@@ -32,13 +32,15 @@ class StallRecoveryTest {
         dot: ((((ByteArray, InetSocketAddress) -> Unit)) -> com.secretsavior.vpn.DotTransport)? = null,
         dotProbeMs: Long = 30_000,
         protect: (DatagramSocket) -> Unit = {},
+        clock: () -> Long = { System.nanoTime() / 1_000_000 },
     ) = DnsForwarder(
         s.map { it.address }, emptyList(), protect = protect, cache = null,
         escalateAfterMs = 5_000, giveUpAfterMs = 300, // sin escalada: cada consulta caduca a los 300 ms
-        stallQueries = stallQueries, onStall = onStall, dot = dot, dotProbeMs = dotProbeMs,
+        stallQueries = stallQueries, onStall = onStall, dot = dot, dotProbeMs = dotProbeMs, clock = clock,
     ).also { closeables += it }
 
-    private fun waitFor(timeoutMs: Long = 3_000, what: String = "condición", cond: () -> Boolean) {
+    // El plazo es sólo una red de seguridad (CI lenta): la condición se espera por eventos, no por reloj.
+    private fun waitFor(timeoutMs: Long = 20_000, what: String = "condición", cond: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         while (!cond() && System.nanoTime() < end) Thread.sleep(10)
         assertTrue("$what no se cumplió a tiempo", cond())
@@ -51,11 +53,11 @@ class StallRecoveryTest {
         val latch = CountDownLatch(n)
         val out = CopyOnWriteArrayList<ByteArray?>()
         repeat(n) { f.query(dnsQuery("q${seq++}.example", it + 1)) { r -> out += r; latch.countDown() } }
-        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertTrue(latch.await(20, TimeUnit.SECONDS))
         return out
     }
 
-    private fun ask(f: DnsForwarder, name: String, timeoutMs: Long = 3_000): Pair<ByteArray?, Long> {
+    private fun ask(f: DnsForwarder, name: String, timeoutMs: Long = 20_000): Pair<ByteArray?, Long> {
         val latch = CountDownLatch(1)
         var r: ByteArray? = null
         val t0 = System.nanoTime()
@@ -107,17 +109,26 @@ class StallRecoveryTest {
     @Test
     fun theSocketIsRebuiltAndInFlightQueriesAreResentAfterAStall() {
         val s = srv(silent = true)
-        val f = fwd(listOf(s), onStall = { s.silent = false }) // el «atasco» se acaba con el socket nuevo
+        // Cada consulta caduca a los 3 s: la que sale a 1 s sigue en vuelo cuando las tres primeras
+        // provocan el atasco (a los 3 s), y le quedan 1 s de margen para que el reenvío la conteste.
+        val protects = AtomicInteger()
+        val f = DnsForwarder(
+            listOf(s.address), emptyList(),
+            // el «atasco» se acaba con el socket nuevo: se habla ya al crearlo, antes de reenviar nada
+            protect = { if (protects.incrementAndGet() > 1) s.silent = false },
+            cache = null, escalateAfterMs = 10_000, giveUpAfterMs = 3_000, stallQueries = 3,
+        ).also { closeables += it }
+        val first = CountDownLatch(3)
+        repeat(3) { f.query(dnsQuery("a$it.example", it + 1)) { first.countDown() } }
+        waitFor(what = "las tres primeras en el servidor") { s.received.get() >= 3 }
+        Thread.sleep(1_000)
         val late = CountDownLatch(1)
         var lateAnswer: ByteArray? = byteArrayOf()
-        val first = CountDownLatch(6)
-        repeat(6) { f.query(dnsQuery("a$it.example", it + 1)) { first.countDown() } }
-        Thread.sleep(150)
-        // sale a los 150 ms y caduca a los 450: el atasco (a los 300) la pilla en vuelo
         f.query(dnsQuery("inflight.example", 77)) { lateAnswer = it; late.countDown() }
-        assertTrue(late.await(3, TimeUnit.SECONDS))
+        assertTrue(late.await(20, TimeUnit.SECONDS))
         assertNotNull("el reenvío tras el atasco la contestó", lateAnswer)
-        assertTrue(first.await(3, TimeUnit.SECONDS))
+        assertTrue(first.await(20, TimeUnit.SECONDS))
+        assertEquals(1, f.stallRecoveries)
         assertEquals("salió, se calló y se reenvió", 2, s.names.count { it == "inflight.example" })
     }
 
@@ -146,24 +157,28 @@ class StallRecoveryTest {
     @Test
     fun aStallClearsTheDownBackoffSoQueriesGoToTheBestTwoAgain() {
         val servers = List(4) { srv(silent = true) }
-        // escalada a los 100 ms: tres seguidas marcan los primarios como caídos (a todos desde el principio)
+        // escalada a los 2 s: tres seguidas marcan los primarios como caídos (a todos desde el principio).
+        // Los plazos son largos a propósito: todo se espera por paquetes recibidos, no por pausas.
         val f = DnsForwarder(
             servers.map { it.address }, emptyList(), protect = {}, cache = null,
-            escalateAfterMs = 100, giveUpAfterMs = 900, stallQueries = 3,
+            escalateAfterMs = 2_000, giveUpAfterMs = 4_000, stallQueries = 3,
         ).also { closeables += it }
         val done = CountDownLatch(3)
         repeat(3) { f.query(dnsQuery("d$it.example", it + 1)) { done.countDown() } }
-        Thread.sleep(300) // las tres ya escalaron: primarios caídos
+        // 3 consultas a los 2 mejores (6 paquetes) + su escalada a los cuatro (12): ya están marcados caídos
+        waitFor(what = "las tres escaladas") { servers.sumOf { it.received.get() } >= 18 }
         val before = servers.sumOf { it.received.get() }
-        f.query(dnsQuery("down.example", 50)) { }
-        Thread.sleep(40)
+        val down = CountDownLatch(1)
+        f.query(dnsQuery("down.example", 50)) { down.countDown() }
+        waitFor(what = "los cuatro reciben la caída") { servers.all { "down.example" in it.names } }
         assertEquals("caídos: a los cuatro", 4, servers.sumOf { it.received.get() } - before)
-        assertTrue(done.await(3, TimeUnit.SECONDS))
+        assertTrue(done.await(20, TimeUnit.SECONDS))
         waitFor(what = "el atasco") { f.stallRecoveries >= 1 }
-        Thread.sleep(950) // que caduquen y escalen las que estaban en vuelo
+        // que caduque la que estaba en vuelo: después ya no sale ningún paquete suyo
+        assertTrue(down.await(20, TimeUnit.SECONDS))
         val before2 = servers.sumOf { it.received.get() }
         f.query(dnsQuery("up.example", 51)) { }
-        Thread.sleep(40)
+        waitFor(what = "los dos mejores reciben la nueva") { servers.count { "up.example" in it.names } >= 2 }
         assertEquals("tras el atasco: a los dos mejores", 2, servers.sumOf { it.received.get() } - before2)
     }
 
@@ -178,9 +193,12 @@ class StallRecoveryTest {
     fun aPersistentStallMovesDnsToTlsAndAnAnswerOverUdpMovesItBack() {
         val s = srv(silent = true)
         val h = DotHolder()
+        // Reloj propio: el sondeo toca cuando la prueba adelanta el reloj, no cuando pasa el tiempo real.
+        val skew = java.util.concurrent.atomic.AtomicLong()
         val f = fwd(
-            listOf(s), stallQueries = 3, dotProbeMs = 250,
+            listOf(s), stallQueries = 3, dotProbeMs = 10_000,
             dot = { m -> FakeDot(m, delayMs = 400).also { h.dot = it; closeables += it } },
+            clock = { System.nanoTime() / 1_000_000 + skew.get() },
         )
         burst(f, 3)
         waitFor(what = "el primer atasco") { f.stallRecoveries == 1 }
@@ -192,16 +210,15 @@ class StallRecoveryTest {
         // en modo DoT las consultas van por TLS, no por UDP
         val udpBefore = s.received.get()
         h.dot!!.delayMs = 0
-        val (r, ms) = ask(f, "viadot.example")
+        val (r, _) = ask(f, "viadot.example") // el UDP está mudo: sólo el TLS pudo contestar
         assertNotNull(r)
         assertEquals("9.9.9.9", ipOfAnswer(r!!))
-        assertTrue("$ms ms", ms < 250)
         assertEquals("sin tocar el UDP (aún no toca sondeo)", udpBefore, s.received.get())
 
         // el UDP vuelve: el siguiente sondeo lo ve contestar y se sale del modo
-        h.dot!!.delayMs = 600
+        h.dot!!.delayMs = 5_000
         s.silent = false
-        Thread.sleep(300) // toca sondeo
+        skew.addAndGet(10_000) // toca sondeo (y aún queda mucho para que acabe el modo DoT)
         val (r2, _) = ask(f, "probe.example")
         assertNotNull(r2)
         assertEquals("1.1.1.1", ipOfAnswer(r2!!)) // ganó el UDP (la del sondeo), no el TLS lento

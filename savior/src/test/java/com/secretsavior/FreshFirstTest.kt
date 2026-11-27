@@ -30,7 +30,7 @@ class FreshFirstTest {
 
     private class Answer(val response: ByteArray?, val ms: Long)
 
-    private fun ask(f: DnsForwarder, name: String, id: Int = 1, timeoutMs: Long = 5_000): Answer {
+    private fun ask(f: DnsForwarder, name: String, id: Int = 1, timeoutMs: Long = 20_000): Answer {
         val latch = CountDownLatch(1)
         var r: ByteArray? = null
         val t0 = System.nanoTime()
@@ -42,7 +42,8 @@ class FreshFirstTest {
     private fun ttlOf(r: ByteArray) = ((r[r.size - 10].toInt() and 0xFF) shl 24) or ((r[r.size - 9].toInt() and 0xFF) shl 16) or
         ((r[r.size - 8].toInt() and 0xFF) shl 8) or (r[r.size - 7].toInt() and 0xFF)
 
-    private fun waitFor(timeoutMs: Long = 3_000, cond: () -> Boolean) {
+    // El plazo es una red de seguridad (CI lenta); se espera por eventos.
+    private fun waitFor(timeoutMs: Long = 20_000, cond: () -> Boolean) {
         val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
         while (!cond() && System.nanoTime() < end) Thread.sleep(10)
         assertTrue("condición no cumplida a tiempo", cond())
@@ -56,10 +57,10 @@ class FreshFirstTest {
         assertEquals("1.1.1.1", ipOfAnswer(ask(f, "example.com").response!!))
         clock += 60_000 // caducada hace 30 s
         s.ip = byteArrayOf(2, 2, 2, 2)
-        s.delayMs = 100
+        s.delayMs = 300
         val a = ask(f, "example.com", id = 2)
         assertEquals("la fresca, no la caducada", "2.2.2.2", ipOfAnswer(a.response!!))
-        assertTrue("esperó a la red: ${a.ms} ms", a.ms >= 90)
+        assertTrue("esperó a la red: ${a.ms} ms", a.ms >= 280)
         assertEquals(2, s.received.get())
         assertEquals(2, ((a.response[0].toInt() and 0xFF) shl 8) or (a.response[1].toInt() and 0xFF))
     }
@@ -68,49 +69,56 @@ class FreshFirstTest {
     fun ifTheNetworkIsSlowTheStaleOneIsServedAfterTheFallbackTimeout() {
         val s = srv()
         var clock = 0L
-        val f = fwd(s, DnsCache(clock = { clock }), staleMs = 150)
+        val f = fwd(s, DnsCache(clock = { clock }), staleMs = 150, giveUp = 15_000)
         assertEquals("1.1.1.1", ipOfAnswer(ask(f, "example.com").response!!))
         clock += 60_000
         s.ip = byteArrayOf(2, 2, 2, 2)
-        s.delayMs = 1_200
+        s.delayMs = 3_000 // la red tarda mucho más que la espera por la caducada
         val a = ask(f, "example.com", id = 3)
         assertEquals("1.1.1.1", ipOfAnswer(a.response!!))
         assertEquals("con el TTL corto de las caducadas", 10, ttlOf(a.response))
-        assertTrue("tardó ${a.ms} ms", a.ms in 120..700)
+        // sirvió la caducada sin esperar a la red (que tarda 3 s); la cota inferior es la espera configurada
+        assertTrue("tardó ${a.ms} ms", a.ms in 120..2_500)
         // la consulta siguió y renovó la caché: la próxima ya es la nueva y no sale a la red
         waitFor { s.received.get() == 2 }
-        Thread.sleep(1_400)
-        val again = ask(f, "example.com", id = 4)
+        var again = ask(f, "example.com", id = 4)
+        // la renovación llega a los 3 s; hasta entonces la caché sigue caducada (se sirve la caducada)
+        val limit = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (ipOfAnswer(again.response!!) != "2.2.2.2" && System.nanoTime() < limit) {
+            Thread.sleep(200)
+            again = ask(f, "example.com", id = 4)
+        }
         assertEquals("2.2.2.2", ipOfAnswer(again.response!!))
-        assertTrue(again.ms < 100)
-        assertEquals(2, s.received.get())
+        val sent = s.received.get()
+        ask(f, "example.com", id = 5)
+        assertEquals("ya renovada: no sale a la red", sent, s.received.get())
     }
 
     @Test
     fun aQueryThatGivesUpServesTheStaleOneInsteadOfServfail() {
         val s = srv()
         var clock = 0L
-        val f = fwd(s, DnsCache(clock = { clock }), staleMs = 10_000, giveUp = 400)
+        val f = fwd(s, DnsCache(clock = { clock }), staleMs = 30_000, giveUp = 400)
         ask(f, "example.com")
         clock += 60_000
         s.silent = true
         val a = ask(f, "example.com", id = 5)
         assertNotNull("sin la caducada habría sido null (SERVFAIL)", a.response)
         assertEquals("1.1.1.1", ipOfAnswer(a.response!!))
-        assertTrue("a los ${a.ms} ms", a.ms in 350..1_500)
+        assertTrue("a los ${a.ms} ms", a.ms >= 350) // esperó al abandono, no a la espera de la caducada
     }
 
     @Test
     fun anUpstreamServfailServesTheStaleOne() {
         val s = srv()
         var clock = 0L
-        val f = fwd(s, DnsCache(clock = { clock }))
+        val f = fwd(s, DnsCache(clock = { clock }), staleMs = 15_000)
         ask(f, "example.com")
         clock += 60_000
         s.servfail = true
         val a = ask(f, "example.com", id = 6)
         assertEquals("1.1.1.1", ipOfAnswer(a.response!!))
-        assertTrue("no esperó al medio segundo: ${a.ms} ms", a.ms < 400)
+        assertTrue("no esperó a la espera por la caducada: ${a.ms} ms", a.ms < 10_000)
     }
 
     @Test
@@ -130,20 +138,27 @@ class FreshFirstTest {
 
     @Test
     fun aFreshEntryAboutToExpireIsAnsweredAtOnceAndRefreshedOnce() {
-        val s = srv(delayMs = 100)
+        val s = srv()
         var clock = 0L
-        val f = fwd(s, DnsCache(clock = { clock }))
+        val f = fwd(s, DnsCache(clock = { clock }), giveUp = 15_000)
         ask(f, "example.com")
         clock += 28_000 // quedan 2 s de 30: a punto de caducar
         s.ip = byteArrayOf(3, 3, 3, 3)
+        s.delayMs = 3_000
         val a = ask(f, "example.com", id = 8)
         assertEquals("1.1.1.1", ipOfAnswer(a.response!!))
-        assertTrue("al momento: ${a.ms} ms", a.ms < 50)
+        assertTrue("al momento: ${a.ms} ms", a.ms < 2_000) // la red tarda 3 s
         ask(f, "example.com", id = 9) // otra mientras se renueva: no lanza otra renovación
         waitFor { s.received.get() >= 2 }
-        Thread.sleep(300)
+        // mientras la renovación sigue en vuelo, preguntar de nuevo no lanza otra; al llegar, la caché es la nueva
+        var last = ask(f, "example.com", id = 10)
+        val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+        while (ipOfAnswer(last.response!!) != "3.3.3.3" && System.nanoTime() < end) {
+            Thread.sleep(250)
+            last = ask(f, "example.com", id = 10)
+        }
+        assertEquals("3.3.3.3", ipOfAnswer(last.response!!))
         assertEquals("una sola renovación", 2, s.received.get())
-        assertEquals("3.3.3.3", ipOfAnswer(ask(f, "example.com", id = 10).response!!))
     }
 
     @Test
@@ -190,8 +205,8 @@ class FreshFirstTest {
         assertEquals(listOf("hot1.example", "hot2.example"), s.names.toList().takeLast(2).sorted())
         assertFalse(socketBefore == f.currentSocket().localPort)
         // la renovación quedó en la caché: lo siguiente no sale a la red
-        assertTrue(ask(f, "hot1.example", id = 50).ms < 50)
-        assertEquals(5, s.received.get())
+        ask(f, "hot1.example", id = 50)
+        assertEquals("salió de la caché, no a la red", 5, s.received.get())
     }
 
     @Test

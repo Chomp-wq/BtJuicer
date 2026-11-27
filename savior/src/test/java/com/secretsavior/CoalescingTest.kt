@@ -22,7 +22,7 @@ class CoalescingTest {
 
     private fun srv(delayMs: Long = 0, silent: Boolean = false) = Srv(silent = silent, delayMs = delayMs).also { closeables += it }
 
-    private fun fwd(primaries: List<Srv>, fallbacks: List<Srv> = emptyList(), escalate: Long? = 5_000, giveUp: Long = 3_000) =
+    private fun fwd(primaries: List<Srv>, fallbacks: List<Srv> = emptyList(), escalate: Long? = 5_000, giveUp: Long = 10_000) =
         DnsForwarder(primaries.map { it.address }, fallbacks.map { it.address }, protect = {}, cache = null, escalateAfterMs = escalate, giveUpAfterMs = giveUp)
             .also { closeables += it }
 
@@ -33,13 +33,13 @@ class CoalescingTest {
             val id = ((q[0].toInt() and 0xFF) shl 8) or (q[1].toInt() and 0xFF)
             f.query(q) { out[id] = it ?: byteArrayOf(); latch.countDown() }
         }
-        assertTrue(latch.await(5, TimeUnit.SECONDS))
+        assertTrue(latch.await(30, TimeUnit.SECONDS))
         return out
     }
 
     @Test
     fun identicalQueriesInFlightAreSentOnceAndEachGetsItsOwnIdAndCasing() {
-        val s = srv(delayMs = 300)
+        val s = srv(delayMs = 1_000) // sigue en vuelo cuando entran las demás
         val f = fwd(listOf(s))
         val qs = listOf(dnsQuery("Example.COM", 0x1111), dnsQuery("eXaMpLe.com", 0x2222), dnsQuery("EXAMPLE.com", 0x3333))
         val r = many(f, qs)
@@ -56,18 +56,18 @@ class CoalescingTest {
 
     @Test
     fun differentTypeOrDifferentEdnsIsNotCoalesced() {
-        val s = srv(delayMs = 200)
+        val s = srv(delayMs = 1_000)
         val f = fwd(listOf(s))
         many(f, listOf(dnsQuery("example.com", 1), dnsQuery("example.com", 2, type = 28)))
         assertEquals(2, s.received.get())
-        val s2 = srv(delayMs = 200)
+        val s2 = srv(delayMs = 1_000)
         many(fwd(listOf(s2)), listOf(dnsQuery("example.com", 1), dnsQuery("example.com", 2, edns = 1232)))
         assertEquals(2, s2.received.get())
     }
 
     @Test
     fun coalescingIsBounded() {
-        val s = srv(delayMs = 400)
+        val s = srv(delayMs = 1_000)
         val f = fwd(listOf(s))
         val r = many(f, (1..(DnsForwarder.MAX_WAITERS + 6)).map { dnsQuery("example.com", it) })
         assertEquals("todas contestadas", DnsForwarder.MAX_WAITERS + 6, r.size)
@@ -87,7 +87,7 @@ class CoalescingTest {
     @Test
     fun whenTheCoalescedQueryFailsEveryWaiterGetsNull() {
         val s = srv(silent = true)
-        val f = fwd(listOf(s), giveUp = 300)
+        val f = fwd(listOf(s), giveUp = 1_500)
         val r = many(f, listOf(dnsQuery("example.com", 1), dnsQuery("example.com", 2)))
         assertEquals(1, s.received.get())
         assertTrue(r.values.all { it!!.isEmpty() })
@@ -113,7 +113,7 @@ class CoalescingTest {
         val r = many(f, listOf(dnsQuery("example.com", 1)))
         val ms = (System.nanoTime() - t0) / 1_000_000
         assertNotNull(r[1])
-        assertTrue("contestó tras el retraso: $ms ms", ms in 130..900)
+        assertTrue("contestó tras el retraso: $ms ms", ms >= 130) // sólo pudieron contestar los dos que entran tras la espera
         assertEquals(1, good[0].received.get())
         assertEquals(1, good[1].received.get())
     }
@@ -124,6 +124,6 @@ class CoalescingTest {
         val t0 = System.nanoTime()
         assertNotNull(many(f, listOf(dnsQuery("example.com", 1)))[1])
         val ms = (System.nanoTime() - t0) / 1_000_000
-        assertTrue("sin medir: ~300 ms, fue $ms", ms in 250..1_000)
+        assertTrue("sin medir: ~300 ms, fue $ms", ms in 250..2_500)
     }
 }

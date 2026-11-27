@@ -80,6 +80,8 @@ class DnsForwarder(
     private val dotModeMs: Long = DOT_MODE_MS,
     private val dotProbeMs: Long = DOT_PROBE_MS,
     private val warmUpCount: Int = WARM_UP_COUNT,
+    /** Reloj en ms para plazos y sondeos; inyectable para que las pruebas no dependan del tiempo real. */
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
 ) : Closeable {
 
     /** Quien espera una respuesta: cada cliente conserva su id, su pregunta (0x20) y su caducada. */
@@ -383,8 +385,12 @@ class DnsForwarder(
         failed.incrementAndGet()
         outcome(false)
         for (a in p.sentAt.keys) stats.missed(a)
+        // El atasco se decide ANTES de avisar a los clientes: quien recibe su caducada y lanza otra
+        // consulta en el acto (o un test que espera a las N caducadas) debe encontrar el detector ya
+        // rearmado; si no, esa consulta nueva saldría «antes» del atasco y no contaría para el siguiente.
+        val stalled = detector.expired(p.startedAt, now(), p.sendOk)
+        if (stalled) onStalled()
         deliverAll(p, null) // cada uno recibe su caducada, si la tiene, en vez de un SERVFAIL
-        if (detector.expired(p.startedAt, now(), p.sendOk)) onStalled()
     }
 
     private fun release(p: Pending) {
@@ -398,11 +404,13 @@ class DnsForwarder(
      */
     private fun onStalled() {
         if (closed) return
-        stalls.incrementAndGet()
         val n = consecutiveStalls.incrementAndGet()
         resetPath(newNetwork = false)
         if (dotTransport != null && n >= DOT_AFTER_STALLS) enterDot()
         resendInFlight()
+        // El contador se publica al final, con el socket ya nuevo y el modo DoT ya decidido: quien lo
+        // lee (estadísticas, pruebas) no puede ver «atasco n» con el estado todavía a medias.
+        stalls.incrementAndGet()
         try {
             onStall()
         } catch (t: Throwable) {
@@ -727,7 +735,7 @@ class DnsForwarder(
         receiver.interrupt()
     }
 
-    private fun now() = System.nanoTime() / 1_000_000
+    private fun now() = clock()
 
     /** Una tarea de temporizador que falla cancelaría sólo su ejecución; así ni siquiera deja traza fatal. */
     private fun safe(block: () -> Unit) = Runnable {

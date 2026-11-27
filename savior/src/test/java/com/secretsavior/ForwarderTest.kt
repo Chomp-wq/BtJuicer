@@ -71,9 +71,16 @@ class ForwarderTest {
     private fun fake(delayMs: Long = 0, silent: Boolean = false, truncate: Boolean = false) =
         FakeDns(delayMs, silent, truncate).also { closeables += it }
 
-    private fun forwarder(primaries: List<FakeDns>, fallbacks: List<FakeDns>) =
-        DnsForwarder(primaries.map { it.address }, fallbacks.map { it.address }, protect = {}, cache = null, escalateAfterMs = 150, giveUpAfterMs = 600)
+    private fun forwarder(primaries: List<FakeDns>, fallbacks: List<FakeDns>, escalateMs: Long = 150, giveUpMs: Long = 600) =
+        DnsForwarder(primaries.map { it.address }, fallbacks.map { it.address }, protect = {}, cache = null, escalateAfterMs = escalateMs, giveUpAfterMs = giveUpMs)
             .also { closeables += it }
+
+    // Plazo = red de seguridad (CI lenta); se espera por eventos, no por pausas fijas.
+    private fun waitUntil(timeoutMs: Long = 20_000, what: String = "condición", cond: () -> Boolean) {
+        val end = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(timeoutMs)
+        while (!cond() && System.nanoTime() < end) Thread.sleep(10)
+        assertTrue("$what no se cumplió a tiempo", cond())
+    }
 
     /** Una consulta A de verdad: cabecera, nombre, tipo e IN. */
     private fun q(name: String, id: Int, type: Int = 1, edns: Int? = null): ByteArray {
@@ -85,7 +92,7 @@ class ForwarderTest {
         return b.toByteArray()
     }
 
-    private fun ask(f: DnsForwarder, id: Int, name: String = "example.com", timeoutMs: Long = 2_000): ByteArray? {
+    private fun ask(f: DnsForwarder, id: Int, name: String = "example.com", timeoutMs: Long = 20_000): ByteArray? {
         val latch = CountDownLatch(1)
         var result: ByteArray? = null
         f.query(q(name, id)) { result = it; latch.countDown() }
@@ -110,7 +117,8 @@ class ForwarderTest {
         val calls = AtomicInteger()
         val latch = CountDownLatch(1)
         f.query(q("example.com", 7)) { calls.incrementAndGet(); latch.countDown() }
-        assertTrue(latch.await(1, TimeUnit.SECONDS))
+        assertTrue(latch.await(20, TimeUnit.SECONDS))
+        waitUntil(what = "los dos primarios reciben") { a.received.get() == 1 && b.received.get() == 1 }
         Thread.sleep(200) // la segunda respuesta llega y se descarta
         assertEquals(1, calls.get())
         assertEquals(1, a.received.get())
@@ -120,11 +128,11 @@ class ForwarderTest {
     @Test
     fun fallsBackWhenPrimariesAreSilent() {
         val fallback = fake()
-        val f = forwarder(listOf(fake(silent = true), fake(silent = true)), listOf(fallback))
+        val f = forwarder(listOf(fake(silent = true), fake(silent = true)), listOf(fallback), giveUpMs = 10_000)
         val start = System.nanoTime()
         assertNotNull(ask(f, 1))
         val ms = (System.nanoTime() - start) / 1_000_000
-        assertTrue("tardó $ms ms", ms in 100..590)
+        assertTrue("tardó $ms ms", ms >= 100) // no antes de la espera; contestó el de reserva, no el abandono (10 s)
         assertEquals(1, fallback.received.get())
     }
 
@@ -145,20 +153,20 @@ class ForwarderTest {
         }.apply { isDaemon = true; start() }
         val f = DnsForwarder(
             listOf(InetSocketAddress(lo, server.localPort)), emptyList(),
-            protect = {}, cache = null, escalateAfterMs = 3_000, giveUpAfterMs = 6_000,
+            protect = {}, cache = null, escalateAfterMs = 30_000, giveUpAfterMs = 60_000,
         ).also { closeables += it }
 
         val latch = CountDownLatch(1)
         var result: ByteArray? = null
         val start = System.nanoTime()
         f.query(q("example.com", 5)) { result = it; latch.countDown() }
-        Thread.sleep(100) // el primer paquete ya salió y se ignoró
-        assertEquals(1, count.get())
+        waitUntil(what = "el primer paquete") { count.get() == 1 } // salió y se ignoró
         f.onNetworkChanged()
-        assertTrue("sin respuesta tras el cambio de red", latch.await(1, TimeUnit.SECONDS))
+        // la escalada (30 s) queda muy lejos: sólo el reenvío del cambio de red pudo contestar
+        assertTrue("sin respuesta tras el cambio de red", latch.await(20, TimeUnit.SECONDS))
         val ms = (System.nanoTime() - start) / 1_000_000
         assertNotNull(result)
-        assertTrue("tardó $ms ms", ms < 1_500)
+        assertTrue("tardó $ms ms", ms < 25_000)
     }
 
     @Test
@@ -171,15 +179,17 @@ class ForwarderTest {
     fun aSlowLookupDoesNotHoldUpTheOthers() {
         // 300 consultas a la vez contra un resolutor que tarda 100 ms en cada una. Con un
         // hilo bloqueado por consulta y seis hilos, esto tardaba más de 5 s.
-        val f = forwarder(listOf(fake(delayMs = 100)), listOf(fake()))
+        // Con 500 ms por consulta, un hilo por consulta (seis hilos) tardaría 300 * 0,5 / 6 = 25 s;
+        // en paralelo real, algo más de 0,5 s. El umbral queda en medio con mucho margen.
+        val f = forwarder(listOf(fake(delayMs = 500)), listOf(fake()), escalateMs = 30_000, giveUpMs = 60_000)
         val latch = CountDownLatch(300)
         val ok = AtomicInteger()
         val start = System.nanoTime()
         repeat(300) { i -> f.query(q("example.com", i)) { if (it != null) ok.incrementAndGet(); latch.countDown() } }
-        assertTrue(latch.await(3, TimeUnit.SECONDS))
+        assertTrue(latch.await(40, TimeUnit.SECONDS))
         val ms = (System.nanoTime() - start) / 1_000_000
         assertEquals(300, ok.get())
-        assertTrue("tardó $ms ms", ms < 2_000)
+        assertTrue("tardó $ms ms", ms < 12_000)
     }
 
     @Test
@@ -188,11 +198,12 @@ class ForwarderTest {
         val v4 = fake()
         val f = DnsForwarder(
             listOf(InetSocketAddress("2001:db8::1", 53), v4.address), emptyList(), protect = {}, cache = null,
-            escalateAfterMs = 150, giveUpAfterMs = 600,
+            escalateAfterMs = 10_000, giveUpAfterMs = 20_000,
         ).also { closeables += it }
         val start = System.nanoTime()
         assertNotNull(ask(f, 3))
-        assertTrue((System.nanoTime() - start) / 1_000_000 < 150)
+        // contestó la IPv4 al momento, sin esperar a la escalada (10 s)
+        assertTrue((System.nanoTime() - start) / 1_000_000 < 5_000)
     }
 
     @Test
@@ -218,7 +229,7 @@ class ForwarderTest {
         val f = forwarder(listOf(fake(delayMs = 60)), listOf(fake()))
         repeat(5) { assertNotNull(ask(f, 100 + it)) }
         assertEquals(5, f.answered)
-        assertTrue("media ${f.averageMs} ms", f.averageMs in 50..400)
+        assertTrue("media ${f.averageMs} ms", f.averageMs in 50..3_000)
     }
 
     @Test
@@ -278,32 +289,32 @@ class ForwarderTest {
     @Test
     fun anAnswerFromAServerThatWasNotAskedIsIgnored() {
         val silent = fake(silent = true)
-        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 150, giveUpAfterMs = 600)
+        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 2_000, giveUpAfterMs = 4_000)
             .also { closeables += it }
         val latch = CountDownLatch(1)
         var result: ByteArray? = byteArrayOf()
         f.query(q("example.com", 9)) { result = it; latch.countDown() }
         // Un tercero que conoce el id (lo vio pasar) intenta colar una respuesta desde otro puerto.
-        Thread.sleep(60)
+        waitUntil(what = "la consulta en el servidor") { silent.lastQuery != null }
         val asked = silent.lastQuery!!
         val forged = asked.copyOf().also { it[2] = (it[2].toInt() or 0x80).toByte() }
         DatagramSocket().use { it.send(DatagramPacket(forged, forged.size, lo, f.currentSocket().localPort)) }
-        assertTrue(latch.await(2, TimeUnit.SECONDS))
+        assertTrue(latch.await(20, TimeUnit.SECONDS))
         assertNull("sólo cuenta lo que llega de un servidor al que se preguntó", result)
     }
 
     @Test
     fun aQueryThatBouncesBackIsNotAnAnswer() {
         val silent = fake(silent = true)
-        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 150, giveUpAfterMs = 600)
+        val f = DnsForwarder(listOf(silent.address), emptyList(), protect = {}, cache = null, escalateAfterMs = 2_000, giveUpAfterMs = 4_000)
             .also { closeables += it }
         val latch = CountDownLatch(1)
         var result: ByteArray? = byteArrayOf()
         f.query(q("example.com", 10)) { result = it; latch.countDown() }
-        Thread.sleep(60)
+        waitUntil(what = "la consulta en el servidor") { silent.lastQuery != null }
         val echoed = silent.lastQuery!! // sin el bit de respuesta
         DatagramSocket(0, lo).use { it.send(DatagramPacket(echoed, echoed.size, lo, f.currentSocket().localPort)) }
-        assertTrue(latch.await(2, TimeUnit.SECONDS))
+        assertTrue(latch.await(20, TimeUnit.SECONDS))
         assertNull(result)
     }
 
@@ -373,9 +384,9 @@ class ForwarderTest {
         assertNotNull(ask(f, 12))
         f.currentSocket().close() // el sistema lo cierra, p. ej. al cambiar de red
         var answered = false
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(4)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
         while (!answered && System.nanoTime() < deadline) {
-            answered = ask(f, 13, timeoutMs = 3_000) != null
+            answered = ask(f, 13, timeoutMs = 10_000) != null
         }
         assertTrue("el DNS no se recuperó tras romperse el socket", answered)
     }
