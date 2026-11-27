@@ -380,6 +380,13 @@ Sólo actúan si encuentran el problema; si todo está bien, no escriben nada.
 | No vaciar la paginación en cada apagado | Medio |
 | Reactivar el ajuste automático de TCP (descargas lentas) | Alto |
 | Reactivar Windows Update | Bajo |
+| Reactivar la precarga de programas (Prefetch) | Medio |
+| Reactivar la compresión de memoria (no en Windows Server, donde viene apagada) | Medio |
+| Reactivar BITS y Optimización de distribución (descargas de la Tienda, Game Pass y Windows Update) | Bajo |
+| Reactivar los servicios de Xbox (inicio de sesión de Game Pass, partidas en la nube, mandos) | Bajo |
+| Reactivar la caché de fuentes (FontCache) | Bajo |
+| Reactivar la optimización semanal de unidades (TRIM del espacio libre en SSD) | Medio |
+| Quitar `TdrLevel = 0`: que la gráfica se recupere de un cuelgue en vez de congelar el PC | Bajo |
 
 ### Energía
 
@@ -1479,8 +1486,10 @@ siguiente partida tenga tirones.
 
 ## Lo que no hace, y por qué
 
-No desactiva SysMain, ni el archivo de paginación, ni la compresión de memoria,
-ni Defender, ni Windows Update, ni las mitigaciones de Spectre. No «libera RAM».
+No desactiva SysMain ni Prefetch, ni el archivo de paginación, ni la compresión de memoria,
+ni Defender, ni Windows Update, ni las mitigaciones de Spectre. No desactiva los
+servicios de Xbox, BITS ni Optimización de distribución, ni la detección de cuelgues
+de la gráfica (`TdrLevel`). No «libera RAM».
 No borra la caché de shaders. No fuerza el HPET. No toca las claves «Games» de
 MMCSS ni `Win32PrioritySeparation`. No cambia la prioridad ni la afinidad de `audiodg.exe`, ni desactiva el HPET,
 «para bajar la latencia del audio». No limpia el registro. No quita todas las

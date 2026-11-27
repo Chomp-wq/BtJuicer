@@ -541,7 +541,7 @@ Describe 'Portátiles con 8 GB de RAM' {
     It 'si la compresión está apagada lo dice, pero nunca la apaga' {
         $f = @(Get-JuicerLowRamFindings 8GB @{ Compression = $false; CommitPct = 50 } -1)
         @($f | Where-Object { $_.Title -like '*compresión de memoria está desactivada*' }).Count | Should -Be 1
-        @($f | Where-Object { $_.Detail -like '*Enable-MMAgent*' }).Count | Should -Be 1
+        @($f | Where-Object { $_.Detail -like '*Reactivar la compresión de memoria*' }).Count | Should -Be 1
     }
 
     It 'con más de 8 GB, o sin saber la RAM, no dice nada; lo desconocido no cuenta' {

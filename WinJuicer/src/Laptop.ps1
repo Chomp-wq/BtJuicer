@@ -469,7 +469,7 @@ function Get-JuicerLowRamFindings {
         New-JuicerFinding $area 'Medio' ('La memoria comprometida está al {0:N0} %' -f [double]$State.CommitPct) 'Es la parte de lo que Windows puede prometer (RAM más archivo de paginación) que ya está prometida. Cerca del 100 % los programas empiezan a ir a tirones o a cerrarse. Cierra lo que no uses y no desactives el archivo de paginación: no ayuda.'
     }
     if ($State -and $State.Compression -eq $false) {
-        New-JuicerFinding $area 'Bajo' 'La compresión de memoria está desactivada' 'Comprimir una página en RAM es mucho más rápido que escribirla a disco, y con poca RAM se nota. Para volver a activarla, en PowerShell como administrador: Enable-MMAgent -MemoryCompression, y reinicia. Win Juicer nunca la apaga.'
+        New-JuicerFinding $area 'Bajo' 'La compresión de memoria está desactivada' 'Comprimir una página en RAM es mucho más rápido que escribirla a disco, y con poca RAM se nota. Reparación la vuelve a activar («Reactivar la compresión de memoria»), y después hay que reiniciar. Win Juicer nunca la apaga.'
     }
 }
 

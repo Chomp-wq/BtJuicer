@@ -70,12 +70,29 @@ Describe 'Windows 10: textos que dependen de la versión' {
         $t.What | Should -BeLike '*Noticias e intereses*'
         $t.Gain | Should -BeLike '*batería*'
         $t.Cost | Should -BeLike '*barra de tareas*'
-        # The policy is the same one on both.
-        $planned = Resolve-JuicerActions $t
-        $planned[0].Name | Should -Be 'AllowNewsAndInterests'
+        # Not the same policy: Windows 10 reads Feeds.admx, «Allow widgets» (Dsh) is Windows 11's.
+        $planned = @(Resolve-JuicerActions $t)
+        $planned.Count | Should -Be 1
+        $planned[0].Path | Should -Be 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds'
+        $planned[0].Name | Should -Be 'EnableFeeds'
+        $planned[0].Value | Should -Be 0
         Set-FakeBuild 26100
-        (Find-JuicerTweak 'ui.widgets').Title | Should -Be 'Desactivar Widgets'
-        (Find-JuicerTweak 'ui.widgets').Gain | Should -BeLike '*100 y 300 MB*'
+        $t = Find-JuicerTweak 'ui.widgets'
+        $t.Title | Should -Be 'Desactivar Widgets'
+        $t.Gain | Should -BeLike '*100 y 300 MB*'
+        $planned = @(Resolve-JuicerActions $t)
+        $planned.Count | Should -Be 1
+        $planned[0].Path | Should -Be 'HKLM\SOFTWARE\Policies\Microsoft\Dsh'
+        $planned[0].Name | Should -Be 'AllowNewsAndInterests'
+    }
+
+    It '«Noticias e intereses»: en Windows 10 se aplica la directiva que Windows 10 lee, y se deshace' {
+        $t = Find-JuicerTweak 'ui.widgets'
+        (Invoke-JuicerTweak $t).Outcome | Should -Be 'Aplicado'
+        (Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds').Value | Should -Be 0
+        Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Dsh' 'AllowNewsAndInterests' | Should -BeNullOrEmpty
+        (Undo-JuicerTweak 'ui.widgets').Outcome | Should -Be 'Deshecho'
+        Read-JuicerReg 'HKLM\SOFTWARE\Policies\Microsoft\Windows\Windows Feeds' 'EnableFeeds' | Should -BeNullOrEmpty
     }
 
     It 'la Línea de tiempo de Windows 10 se pierde, y se dice' {

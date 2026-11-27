@@ -1094,6 +1094,8 @@ function New-JuicerWindowsBackend {
         PowerStatus  = ${function:Get-WinPowerStatus}
         Drivers      = ${function:Get-WinPnpDrivers}
         MemoryState  = ${function:Get-WinMemoryState}
+        MemCompressionGet = { try { [bool](Get-MMAgent -ErrorAction Stop).MemoryCompression } catch { $null } }
+        MemCompressionSet = { param([bool]$On) if ($On) { Enable-MMAgent -MemoryCompression -ErrorAction Stop } else { Disable-MMAgent -MemoryCompression -ErrorAction Stop } }
         Responsiveness = ${function:Measure-WinResponsiveness}
         PowerModeGet = { Initialize-JuicerNative; [WinJuicer.Native]::GetPowerMode() }
         PowerModeSet = { param([string]$Scheme) Initialize-JuicerNative; [WinJuicer.Native]::SetPowerMode($Scheme) }
@@ -1174,6 +1176,7 @@ function New-JuicerMemoryBackend {
         PowerMode = '00000000-0000-0000-0000-000000000000'   # the «Power mode» overlay (all zeros = none, i.e. Balanced)
         Drivers  = New-Object System.Collections.ArrayList   # @{ Class; Name; Manufacturer; Provider; Version; Date }
         MemoryState = @{ Compression = $null; CommitPct = $null }   # what MemoryState answers
+        Compression = $true   # memory compression (Get-MMAgent), on as Windows ships; $null = unreadable
         Responsiveness = $null   # what Responsiveness answers: @{ ExplorerMs; NotepadMs }, null = not measured
         Power    = $null   # what PowerStatus answers (see ConvertFrom-JuicerPowerStatus); null = unreadable, the WMI fallback applies
         Audio    = $null   # the default output, as ConvertTo-JuicerAudioInfo gives it; null = no device
@@ -1345,6 +1348,8 @@ function New-JuicerMemoryBackend {
         PowerStatus = { $script:Mem.Power }
         Drivers     = { , @($script:Mem.Drivers) }
         MemoryState = { $script:Mem.MemoryState }
+        MemCompressionGet = { $script:Mem.Compression }
+        MemCompressionSet = { param([bool]$On) $script:Mem.Compression = $On }
         Responsiveness = { $script:Mem.Responsiveness }
         PowerModeGet = { $script:Mem.PowerMode }
         PowerModeSet = { param([string]$Scheme) [void]$script:Mem.Calls.Add("powermode $Scheme"); $script:Mem.PowerMode = $Scheme }

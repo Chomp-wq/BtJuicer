@@ -71,6 +71,25 @@ Describe 'Windows de verdad' -Tag 'Windows' -Skip:(-not ($OnWindows -and $IsAdmi
         & (Get-JuicerBackend).SvcRead 'NoExisteEsteServicio' | Should -BeNullOrEmpty
     }
 
+    # Windows Server ships it off and the repair does not apply there, so the catalog round
+    # trip never reaches Enable-MMAgent on the runner: here it does, and puts it back.
+    It 'lee y cambia la compresión de memoria, y la deja como estaba' {
+        $b = Get-JuicerBackend
+        $was = & $b.MemCompressionGet
+        $was | Should -BeOfType [bool]
+        if ((Get-Service SysMain -ErrorAction SilentlyContinue).Status -ne 'Running') {
+            Set-ItResult -Skipped -Because 'SysMain no está en marcha en este equipo, y la compresión depende de él'
+            return
+        }
+        try {
+            & $b.MemCompressionSet (-not $was)
+            & $b.MemCompressionGet | Should -Be (-not $was)
+        } finally {
+            & $b.MemCompressionSet $was
+        }
+        & $b.MemCompressionGet | Should -Be $was
+    }
+
     It 'el catálogo entero, aplicado y deshecho, deja Windows como estaba' {
         $before = Get-RealSnapshot
         $results = @(foreach ($t in (Get-JuicerProfile 3)) { Invoke-JuicerTweak $t })
