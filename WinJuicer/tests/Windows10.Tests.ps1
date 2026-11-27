@@ -385,11 +385,26 @@ Describe 'Debloat: apps de Windows 10' {
         (New-JuicerAppxTweak (Find-JuicerDebloatApp 'microsoft.windowscommunicationsapps')).Level | Should -Be 3
         (New-JuicerAppxTweak (Find-JuicerDebloatApp 'Microsoft.People')).Level | Should -Be 1
         $m = New-FakeMachine
+        $m.Backend.State.Appx['Microsoft.Getstarted'] = @{ Installed = $true; Provisioned = $false }
         $m.Backend.State.Appx['Microsoft.People'] = @{ Installed = $true; Provisioned = $false }
         $m.Backend.State.Appx['microsoft.windowscommunicationsapps'] = @{ Installed = $true; Provisioned = $false }
         $state = @(Get-JuicerDebloatState @{ Cpu = @{}; GamePass = $false })
-        ($state | Where-Object { $_.Name -eq 'Microsoft.People' }).Recommended | Should -BeTrue
+        ($state | Where-Object { $_.Name -eq 'Microsoft.Getstarted' }).Recommended | Should -BeTrue
+        # Retired by Microsoft: it may not come back, so never in the batch.
+        ($state | Where-Object { $_.Name -eq 'Microsoft.People' }).Recommended | Should -BeFalse
         ($state | Where-Object { $_.Name -eq 'microsoft.windowscommunicationsapps' }).Recommended | Should -BeFalse
+    }
+
+    It 'las que Microsoft retiró de la Tienda avisan de que quitarlas puede ser para siempre' {
+        foreach ($n in 'Microsoft.MSPaint', 'microsoft.windowscommunicationsapps', 'Microsoft.People', 'Microsoft.WindowsMaps', 'Microsoft.SkypeApp', 'Microsoft.3DBuilder') {
+            $a = Find-JuicerDebloatApp $n
+            $a.Retired | Should -Not -BeNullOrEmpty -Because $n
+            (New-JuicerAppxTweak $a).Cost | Should -BeLike '*para siempre*' -Because $n
+            (New-JuicerAppxTweak $a).Cost | Should -Not -BeLike '*Deshacer la reinstala*' -Because $n
+        }
+        (New-JuicerAppxTweak (Find-JuicerDebloatApp 'Microsoft.Getstarted')).Cost | Should -BeLike '*Deshacer la reinstala*'
+        (Find-JuicerDebloatApp 'Microsoft.3DBuilder').StoreId | Should -Be '9WZDNCRFJ3T6'
+        (Find-JuicerDebloatApp 'microsoft.windowscommunicationsapps').What | Should -BeLike '*1 de enero de 2025*'
     }
 }
 

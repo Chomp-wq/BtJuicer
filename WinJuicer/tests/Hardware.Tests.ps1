@@ -237,6 +237,28 @@ Describe 'Plan de energía y estabilidad' {
         $ok[0].Severity | Should -Be 'Ok'
         $ok[0].Detail | Should -BeLike '*XMP/EXPO*'
     }
+
+    It 'una riada de errores de PCIe (WHEA 17) no tapa los fatales, y si llega al tope dice «al menos»' {
+        $f = @(Get-JuicerStabilityFindings -Whea @{ 17 = 500; 18 = 1 })
+        ($f | Where-Object { $_.Title -like '*WHEA 17*' }).Title | Should -BeLike 'Al menos 500 errores de PCIe*'
+        ($f | Where-Object { $_.Title -like '*WHEA 18*' }).Severity | Should -Be 'Alto'
+        (@(Get-JuicerStabilityFindings -Whea @{ 17 = 12 }) | Where-Object { $_.Title -like '*WHEA 17*' }).Title | Should -BeLike '12 errores de PCIe*'
+    }
+
+    It 'la auditoría pregunta por cada error de hardware por separado' {
+        Mock -ModuleName WinJuicer Get-JuicerEvents {
+            param($Filter)
+            if ($Filter.ProviderName -ne 'Microsoft-Windows-WHEA-Logger') { return , @() }
+            # A flood of 17 that a single query would have cut at 500, and one fatal 18.
+            if ($Filter.Id -eq 17) { return , @(1..500 | ForEach-Object { [pscustomobject]@{ Id = 17 } }) }
+            if ($Filter.Id -eq 18) { return , @([pscustomobject]@{ Id = 18 }) }
+            , @()
+        }
+        Mock -ModuleName WinJuicer Get-JuicerHardwareProfile { @{ Modules = @() } }
+        $f = @(Get-JuicerStabilityAudit)
+        ($f | Where-Object { $_.Title -like '*WHEA 18*' }).Title | Should -BeLike '1 errores de hardware fatales*'
+        Should -Invoke -ModuleName WinJuicer Get-JuicerEvents -ParameterFilter { $Filter.ProviderName -eq 'Microsoft-Windows-WHEA-Logger' } -Times 4 -Exactly
+    }
 }
 
 Describe 'BIOS y firmware' {

@@ -400,7 +400,7 @@ function Add-WinAppx {
     if (-not (Get-Command winget.exe -ErrorAction SilentlyContinue)) { throw 'winget no está disponible: instala «Instalador de aplicación» desde Microsoft Store.' }
     $script:AppxCache = $null
     $r = Invoke-WinNative 'winget.exe' @('install', '--id', $StoreId, '--source', 'msstore', '--accept-package-agreements', '--accept-source-agreements', '--silent', '--disable-interactivity') -TimeoutSec 0
-    if ($r.Code -ne 0) { throw "winget no pudo reinstalar $Name ($($r.Code)): $($r.Output)" }
+    if ($r.Code -ne 0) { throw "winget no pudo reinstalar $Name ($($r.Code)); si Microsoft la retiró de la Tienda, ya no hay de dónde: $($r.Output)" }
 }
 
 # Physical adapters that are connected. Virtual ones (VPN, Hyper-V) keep
@@ -894,13 +894,16 @@ function Test-WinProcessRunning {
 # Programs that closed with an error or stopped responding since a date,
 # from the Application log: «Application Error» 1000 (it crashed) and
 # «Application Hang» 1002 (it hung and was closed). @{ Exe; Kind; Time;
-# Module } each; null when the log cannot be read.
+# Module } each; null when the log cannot be read, or when it holds more than
+# can be read back to that date: one program crashing in a loop would push a
+# game's older crashes out, and «it never crashed before» would be a guess.
 function Read-WinAppIncidents {
     param([datetime]$Since)
     $out = @()
+    $max = 5000
     foreach ($f in @(@{ Provider = 'Application Error'; Id = 1000; Kind = 'Cierre' }, @{ Provider = 'Application Hang'; Id = 1002; Kind = 'Cuelgue' })) {
-        $ev = Get-JuicerEvents @{ LogName = 'Application'; ProviderName = $f.Provider; Id = $f.Id; StartTime = $Since }
-        if ($null -eq $ev) { return $null }
+        $ev = Get-JuicerEvents @{ LogName = 'Application'; ProviderName = $f.Provider; Id = $f.Id; StartTime = $Since } -Max $max
+        if ($null -eq $ev -or $ev.Count -ge $max) { return $null }
         foreach ($e in $ev) {
             $p = @($e.Properties | ForEach-Object { $_.Value })
             if ($p.Count -eq 0 -or -not $p[0]) { continue }

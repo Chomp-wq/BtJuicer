@@ -22,7 +22,7 @@ $script:DebloatApps = @(
     @{ Name = 'Microsoft.Windows.DevHome'; StoreId = '9N8MHTPHNGVV'; Title = 'Dev Home'; Class = 'Seguro'; What = 'Panel para programadores que Microsoft ya ha abandonado.' }
     @{ Name = 'Microsoft.StartExperiencesApp'; StoreId = '9PC1H9VN18CM'; Title = 'Experiencias de Inicio'; Class = 'Seguro'; What = 'Recomendaciones y paneles extra del menú Inicio.' }
     @{ Name = 'Microsoft.ZuneVideo'; StoreId = '9WZDNCRFJ3P2'; Title = 'Películas y TV'; Class = 'Seguro'; What = 'La tienda de vídeo de Microsoft, cerrada. Para reproducir vídeos está el Reproductor multimedia.' }
-    @{ Name = 'Microsoft.WindowsMaps'; StoreId = '9WZDNCRDTBVB'; Title = 'Mapas'; Class = 'Seguro'; What = 'Mapas de Windows, retirados por Microsoft.' }
+    @{ Name = 'Microsoft.WindowsMaps'; StoreId = '9WZDNCRDTBVB'; Title = 'Mapas'; Class = 'Seguro'; What = 'Mapas de Windows, retirados por Microsoft.'; Retired = 'Microsoft la retiró en 2025 y ya no la ofrece en la Tienda' }
     @{ Name = 'Microsoft.549981C3F5F10'; StoreId = '9NFFX4SZZ23L'; Title = 'Cortana'; Class = 'Seguro'; What = 'El asistente de Microsoft, retirado.' }
     @{ Name = 'SpotifyAB.SpotifyMusic'; StoreId = '9NCBCSZSJRSB'; Title = 'Spotify (preinstalado)'; Class = 'Seguro'; What = 'Promoción preinstalada. Si usas Spotify, déjalo.' }
     @{ Name = '4DF9E0F8.Netflix'; StoreId = '9WZDNCRFJ3TJ'; Title = 'Netflix (preinstalado)'; Class = 'Seguro'; What = 'Promoción preinstalada.' }
@@ -32,9 +32,9 @@ $script:DebloatApps = @(
     @{ Name = 'king.com.CandyCrushSaga'; StoreId = '9NBLGGH18846'; Title = 'Candy Crush Saga'; Class = 'Seguro'; What = 'Promoción preinstalada.' }
     # Windows 10 inbox apps (they are not there on a clean Windows 11, and only installed ones are listed).
     @{ Name = 'Microsoft.Getstarted'; StoreId = '9WZDNCRDTBJJ'; Title = 'Consejos'; Class = 'Seguro'; What = 'Consejos y trucos de Windows 10 que a veces saltan como aviso. Lo mismo está en la web de soporte de Microsoft.' }
-    @{ Name = 'Microsoft.People'; StoreId = '9NBLGGH10PG8'; Title = 'Contactos'; Class = 'Seguro'; What = 'La libreta de contactos de Windows 10, que casi nadie abre. Tus contactos siguen en tu cuenta de correo.' }
+    @{ Name = 'Microsoft.People'; StoreId = '9NBLGGH10PG8'; Title = 'Contactos'; Class = 'Seguro'; What = 'La libreta de contactos de Windows 10, que casi nadie abre. Tus contactos siguen en tu cuenta de correo.'; Retired = 'Microsoft dejó de darle soporte el 31 de diciembre de 2024, junto con Correo y Calendario' }
     @{ Name = 'Microsoft.MixedReality.Portal'; StoreId = '9NG1H8B3ZC7M'; Title = 'Portal de realidad mixta'; Class = 'Seguro'; What = 'Sólo sirve con unas gafas de realidad mixta de Windows. Sin ellas, no hace nada.' }
-    @{ Name = 'Microsoft.3DBuilder'; StoreId = '9WZDNCRFJ3T2'; Title = '3D Builder'; Class = 'Seguro'; What = 'Un modelador 3D sencillo para imprimir, que Microsoft dejó de mantener.' }
+    @{ Name = 'Microsoft.3DBuilder'; StoreId = '9WZDNCRFJ3T6'; Title = '3D Builder'; Class = 'Seguro'; What = 'Un modelador 3D sencillo para imprimir, que Microsoft dejó de mantener.'; Retired = 'Microsoft la abandonó y puede que la Tienda ya no la ofrezca' }
     @{ Name = 'Microsoft.Microsoft3DViewer'; StoreId = '9NBLGGH42THS'; Title = 'Visor 3D'; Class = 'Seguro'; What = 'Abre modelos 3D (.glb, .obj, .fbx). Si no trabajas con ellos, sobra.' }
     @{ Name = 'Microsoft.Print3D'; StoreId = '9NBLGGH5CMV9'; Title = 'Print 3D'; Class = 'Seguro'; What = 'Prepara modelos para una impresora 3D. Sin impresora 3D, no hace nada.' }
     @{ Name = 'Microsoft.OneConnect'; StoreId = '9NBLGGH5Z7JG'; Title = 'Planes móviles'; Class = 'Seguro'; What = 'Para contratar datos móviles con eSIM. Sin módem móvil en el equipo, no sirve de nada.' }
@@ -52,12 +52,12 @@ $script:DebloatApps = @(
     @{ Name = 'Microsoft.WindowsCamera'; StoreId = '9WZDNCRFJBBG'; Title = 'Cámara'; Class = 'Opcional'; What = 'Para probar la webcam o hacer fotos con ella. Las videollamadas no la necesitan.' }
     @{ Name = 'Microsoft.ZuneMusic'; StoreId = '9WZDNCRFJ3PT'; Title = 'Reproductor multimedia'; Class = 'Opcional'; What = 'El reproductor de música y vídeo por defecto. Quítalo sólo si usas otro, como VLC.' }
     @{ Name = '5319275A.WhatsAppDesktop'; StoreId = '9NKSQGP7F2NH'; Title = 'WhatsApp'; Class = 'Opcional'; What = 'Si lo usas en el PC, déjalo.' }
-    @{ Name = 'Microsoft.SkypeApp'; StoreId = '9WZDNCRFJ364'; Title = 'Skype (app de la Tienda)'; Class = 'Opcional'; What = 'El Skype que viene con Windows 10. Microsoft lo retiró en mayo de 2025: si ya no lo usas, sobra.' }
+    @{ Name = 'Microsoft.SkypeApp'; StoreId = '9WZDNCRFJ364'; Title = 'Skype (app de la Tienda)'; Class = 'Opcional'; What = 'El Skype que viene con Windows 10. Microsoft lo cerró en mayo de 2025: ya no sirve para llamar.'; Retired = 'Microsoft cerró Skype en mayo de 2025' }
     # --- Cuidado ---
     @{ Name = 'Microsoft.GamingApp'; StoreId = '9MV0B5HZVK9Z'; Title = 'App Xbox'; Class = 'Cuidado'; What = 'Game Pass para PC y la tienda de juegos de Xbox. Sin ella no puedes instalar ni actualizar esos juegos.' }
     @{ Name = 'Microsoft.XboxGamingOverlay'; StoreId = '9NZKPSTSNW4P'; Title = 'Xbox Game Bar'; Class = 'Cuidado'; What = 'La barra de Win+G. Además, es quien detecta qué es un juego para el modo juego y para repartir núcleos en los Ryzen X3D de dos CCD.' }
-    @{ Name = 'Microsoft.MSPaint'; StoreId = '9NBLGGH5FV99'; Title = 'Paint 3D'; Class = 'Cuidado'; What = 'Es Paint 3D, no el Paint de siempre: el Paint clásico (mspaint.exe) es otro programa y se queda. Pero «Editar con Paint 3D», en el Explorador y en Fotos, abre esta app: sin ella ese acceso deja de funcionar.' }
-    @{ Name = 'microsoft.windowscommunicationsapps'; StoreId = '9WZDNCRFHVQM'; Title = 'Correo y Calendario'; Class = 'Cuidado'; What = 'El correo y el calendario de Windows 10. Si lees aquí tu correo, o el calendario te avisa de tus citas, déjalo: al quitarlo se pierden esas cuentas configuradas y los avisos.' }
+    @{ Name = 'Microsoft.MSPaint'; StoreId = '9NBLGGH5FV99'; Title = 'Paint 3D'; Class = 'Cuidado'; What = 'Es Paint 3D, no el Paint de siempre: el Paint clásico (mspaint.exe) es otro programa y se queda. Pero «Editar con Paint 3D», en el Explorador y en Fotos, abre esta app: sin ella ese acceso deja de funcionar.'; Retired = 'Microsoft la quitó de la Tienda en noviembre de 2024' }
+    @{ Name = 'microsoft.windowscommunicationsapps'; StoreId = '9WZDNCRFHVQM'; Title = 'Correo y Calendario'; Class = 'Cuidado'; What = 'El correo y el calendario de Windows 10. Desde el 1 de enero de 2025 ya no envían ni reciben correo ni sincronizan citas: Microsoft los sustituyó por Outlook (nuevo). Tus correos y citas siguen en tu cuenta; lo que se pierde es lo que sólo estuviera guardado en este equipo.'; Retired = 'Microsoft dejó de darle soporte el 31 de diciembre de 2024' }
     @{ Name = 'Microsoft.XboxIdentityProvider'; StoreId = '9WZDNCRD1HKW'; Title = 'Proveedor de identidad de Xbox'; Class = 'Cuidado'; What = 'El inicio de sesión de Xbox dentro de juegos de PC (Forza, Halo, Minecraft, Sea of Thieves). Sin él, esos juegos no conectan.' }
 )
 
@@ -73,7 +73,9 @@ function Find-JuicerDebloatApp {
 
 function New-JuicerAppxTweak {
     param([Parameter(Mandatory)][hashtable]$App)
-    $restore = if ($App.StoreId) { 'Deshacer la reinstala desde Microsoft Store (necesita internet).' } else { 'Para recuperarla, búscala en Microsoft Store.' }
+    # A retired app may no longer be in the Store: removing it can be for good, and that is said.
+    $restore = if ($App.Retired) { "$($App.Retired): puede que no haya de dónde volver a instalarla, y entonces quitarla es para siempre. Deshacer lo intenta desde Microsoft Store." }
+    elseif ($App.StoreId) { 'Deshacer la reinstala desde Microsoft Store (necesita internet).' } else { 'Para recuperarla, búscala en Microsoft Store.' }
     @{
         Id = "app:$($App.Name)"; Category = 'Apps'; Level = $script:DebloatLevels[$App.Class]; Impact = 'Bajo'; Reboot = 'No'
         Title = "Quitar $($App.Title)"
@@ -112,7 +114,8 @@ function Get-JuicerDebloatState {
         @{
             Name = $app.Name; Title = $app.Title; Class = $app.Class; What = $app.What; StoreId = $app.StoreId
             Installed = [bool]$cur.Installed; Provisioned = [bool]$cur.Provisioned
-            Need = $need; Recommended = ($app.Class -eq 'Seguro' -and -not $need)
+            # What may not come back is never in the recommended batch: picked one by one, cost read.
+            Need = $need; Retired = [string]$app.Retired; Recommended = ($app.Class -eq 'Seguro' -and -not $need -and -not $app.Retired)
         }
     }
 }

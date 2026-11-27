@@ -1302,6 +1302,7 @@ function Show-JuicerDebloat {
                 Write-Host $a.Title
                 Write-JuicerWrapped $a.What 8 'DarkGray'
                 if ($a.Need) { Write-JuicerWrapped "Necesaria aquí: $($a.Need)" 8 'Yellow' }
+                if ($a.Retired) { Write-JuicerWrapped "$($a.Retired): puede que no se pueda volver a instalar." 8 'Yellow' }
             }
         }
         foreach ($t in $extras) {

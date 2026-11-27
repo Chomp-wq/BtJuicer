@@ -246,8 +246,9 @@ function Get-JuicerExeName {
 }
 
 # `powercfg /waketimers`: each timer is a line with a [TAG] and the program's path, followed by
-# an indented line that, for a scheduled task, quotes the task's path. Names the task when there
-# is one, else the program. Nothing when there are no timers.
+# an indented line that, for a scheduled task, quotes the task's path, which Windows 10 and 11
+# write as 'NT TASK\Microsoft\…'. Names the task when there is one, else the program. Nothing
+# when there are no timers.
 function ConvertFrom-JuicerWakeTimers {
     param([string]$Text)
     $lines = @(Split-JuicerLines $Text)
@@ -256,7 +257,7 @@ function ConvertFrom-JuicerWakeTimers {
         if ($lines[$i] -notmatch '^\S.*\[[^\]\s]+\]\s*\S') { continue }
         $exe = Get-JuicerExeName $lines[$i]
         $task = $null
-        if ($i + 1 -lt $lines.Count -and $lines[$i + 1] -match "'(\\[^']+)'") { $task = $Matches[1].TrimStart('\') }
+        if ($i + 1 -lt $lines.Count -and $lines[$i + 1] -match "'(?:NT TASK)?(\\[^']+)'") { $task = $Matches[1].TrimStart('\') }
         $name = if ($task) { $task } else { $exe }
         if ($name -and $names -notcontains $name) { $names += $name }
     }
