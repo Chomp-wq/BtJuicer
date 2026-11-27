@@ -1,5 +1,7 @@
 package com.secretsavior.vpn
 
+import java.util.concurrent.ConcurrentHashMap
+
 /**
  * Decide si un nombre de dominio se bloquea. Sin Android a propósito: es lógica
  * pura y se puede probar suelta.
@@ -14,6 +16,19 @@ object DnsFilter {
     /** Dominios que el usuario añade él mismo. Sólo se pueden añadir, nunca quitar. */
     @Volatile
     var extra: Set<String> = emptySet()
+        set(value) {
+            field = value
+            memo = ConcurrentHashMap() // lo memorizado con la lista vieja ya no vale
+        }
+
+    /**
+     * Resultado de [isBlocked] por nombre tal como llega (sin normalizar: es lo que se repite).
+     * El lector del túnel y el guardián lo usan a la vez. Al cambiar [extra] se sustituye el
+     * mapa entero: un lector que aún escriba en el viejo lo hace en uno ya descartado. Acotado:
+     * al llenarse se vacía, sin ceremonias de LRU.
+     */
+    @Volatile
+    private var memo = ConcurrentHashMap<String, Boolean>()
 
     private val blockedTlds = setOf("xxx", "porn", "sex", "adult")
 
@@ -108,6 +123,15 @@ object DnsFilter {
     }
 
     fun isBlocked(rawName: String): Boolean {
+        val m = memo
+        m[rawName]?.let { return it }
+        val r = compute(rawName)
+        if (m.size >= MEMO_MAX) m.clear() // se vacía ESE mapa: si ya lo habían sustituido, no importa
+        m[rawName] = r
+        return r
+    }
+
+    private fun compute(rawName: String): Boolean {
         val name = rawName.trim().trimEnd('.').lowercase()
         if (name.isEmpty()) return false
         if (matches(name, allowed)) return false
@@ -144,6 +168,8 @@ object DnsFilter {
             .substringBefore('/').substringBefore(':').trimEnd('.')
         return cleaned.takeIf { DOMAIN.matches(it) }
     }
+
+    private const val MEMO_MAX = 4096
 
     private val DOMAIN = Regex("^([a-z0-9]([a-z0-9-]*[a-z0-9])?\\.)+[a-z]{2,}$")
 }
