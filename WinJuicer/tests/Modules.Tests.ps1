@@ -1010,6 +1010,17 @@ Describe 'Monitor' {
         $m.Mode = 'Fijo'
         @(Get-JuicerMonitorFindings @($m) 'NVIDIA')[0].Detail | Should -BeLike '*lo usas a frecuencia fija*'
     }
+
+    It 'con el estrobo a menos Hz que el máximo, los consejos usan los Hz a los que va, como el frame pacer' {
+        # A 180 Hz monitor run at 120 Hz with ELMB (strobing often only works under the top rate).
+        $m = New-TestMonitor (New-TestEdid -Name 'VG27AQ3A' -RangeMax 180 -AmdVsdb @(48, 180)) 120 @(60, 100, 120, 144, 165, 180)
+        $m.Display.MaxHz = 180
+        $m.Mode = 'Estrobo'
+        $games = @(@{ Application = 'cyberpunk2077.exe'; Low1 = 151; AvgFps = 170; Fps90 = 160 })
+        $f = @(Get-JuicerMonitorFindings @($m) 'NVIDIA' $games)
+        $f[0].Detail | Should -BeLike '*exacto a los Hz (120 FPS)*'
+        @($f | Where-Object { $_.Title -like '*no sostiene*' }).Count | Should -Be 0
+    }
 }
 
 Describe 'Frame pacer' {

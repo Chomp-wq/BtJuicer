@@ -455,7 +455,7 @@ function Test-WinDnsServer {
 function Set-WinDns {
     param([string]$Interface, [string[]]$V4, [string[]]$V6)
     $a = Get-NetAdapter -ErrorAction Stop | Where-Object { [string]$_.InterfaceGuid -eq $Interface } | Select-Object -First 1
-    if (-not $a) { throw "No encuentro el adaptador $Interface." }
+    if (-not $a) { throw (New-Object System.Management.Automation.ItemNotFoundException "No encuentro el adaptador $Interface.") }
     Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ResetServerAddresses -ErrorAction Stop
     $all = @(@($V4) + @($V6) | Where-Object { $_ })
     if ($all.Count -gt 0) { Set-DnsClientServerAddress -InterfaceIndex $a.ifIndex -ServerAddresses $all -ErrorAction Stop }
@@ -785,7 +785,9 @@ function Set-WinFpsLimit {
     switch ($Backend) {
         'nvidia' {
             Initialize-JuicerNvApi
-            try { [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } else { -1 })) } catch { throw (Get-WinNvApiFailure $_) }
+            # -1 deletes the game's own value (it inherits the global one); 0 is an explicit
+            # «Off» the game had, which undo puts back as it was.
+            try { [WinJuicer.NvDrs]::SetDword($Exe, [WinJuicer.NvDrs]::FrameRateLimiterId, $(if ($n -gt 0) { $n } elseif ($Remove) { -1 } else { 0 })) } catch { throw (Get-WinNvApiFailure $_) }
         }
         'rtss' {
             $f = Get-WinRtssProfile $Exe
@@ -1157,6 +1159,7 @@ function New-JuicerMemoryBackend {
         Tasks    = @{}   # 'path|name' -> @{ Enabled }
         Appx     = @{}   # name -> @{ Installed; Provisioned }
         Adapters = New-Object System.Collections.ArrayList   # @{ Guid; Name; Description; Wireless; LinkSpeed }
+        RemovedAdapters = New-Object System.Collections.ArrayList   # interface GUIDs taken out of the machine: setting their DNS fails
         Features = @{}   # name -> @{ Enabled }
         FpsBackend = ''   # 'nvidia', 'rtss' or '' for none
         FpsLimits = @{}   # exe -> fps; an entry with 0 is a profile without a limit
@@ -1278,6 +1281,7 @@ function New-JuicerMemoryBackend {
         # they come from DHCP.
         DnsSet      = {
             param($Interface, $V4, $V6)
+            if (@($script:Mem.RemovedAdapters) -contains $Interface) { throw (New-Object System.Management.Automation.ItemNotFoundException "No encuentro el adaptador $Interface.") }
             Write-MemRegValue "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$Interface" 'NameServer' 'String' (@($V4) -join ',')
             Write-MemRegValue "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\$Interface" 'NameServer' 'String' (@($V6) -join ',')
         }

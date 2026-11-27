@@ -1453,7 +1453,7 @@ function Get-JuicerStateSuffix {
     @('', '#9A9AA5')
 }
 
-$script:LevelColors = @{ 0 = '#9A9AA5'; 1 = '#4CC38A'; 2 = '#4EA1FF'; 3 = '#E5484D' }
+$script:GuiLevelColors = @{ 0 = '#9A9AA5'; 1 = '#4CC38A'; 2 = '#4EA1FF'; 3 = '#E5484D' }
 
 # One tweak in the list: what it is and, at a glance, how far it goes (its
 # level), whether it needs a restart and its state. The rest, in the details
@@ -1475,7 +1475,7 @@ function New-JuicerTweakCheck {
     }
     if ($a -and $a.Verdict -eq 'Recomendado') { & $add '★ ' '#F5B400' 0 }
     & $add $Tweak.Title $(if ($Tweak.Level -eq 3) { '#FF8A80' } else { '#E8E8E8' }) 0
-    & $add ('  ' + $script:LevelNames[[int]$Tweak.Level].ToLowerInvariant()) $script:LevelColors[[int]$Tweak.Level] 11
+    & $add ('  ' + $script:LevelNames[[int]$Tweak.Level].ToLowerInvariant()) $script:GuiLevelColors[[int]$Tweak.Level] 11
     if ($Tweak.Reboot -in 'Reinicio', 'Sesion') { & $add $(if ($Tweak.Reboot -eq 'Reinicio') { '  ↻ reinicio' } else { '  ↻ sesión' }) '#6E6E78' 11 }
     $suffix = Get-JuicerStateSuffix $state
     if ($suffix[0]) { & $add $suffix[0] $suffix[1] 0 }
@@ -1619,7 +1619,7 @@ function Show-JuicerGuiTweakDetail {
     }
     & $add $t.Title '#E8E8E8' 'SemiBold' 16 '0,0,0,2'
     $rb = @{ No = 'efecto inmediato'; Explorador = 'reinicia el Explorador'; Sesion = 'al volver a iniciar sesión'; Reinicio = 'tras reiniciar' }[$t.Reboot]
-    & $add ('{0} · impacto {1} · {2}' -f $script:LevelNames[[int]$t.Level], ([string]$t.Impact).ToLowerInvariant(), $rb) $script:LevelColors[[int]$t.Level] 'Normal' 12
+    & $add ('{0} · impacto {1} · {2}' -f $script:LevelNames[[int]$t.Level], ([string]$t.Impact).ToLowerInvariant(), $rb) $script:GuiLevelColors[[int]$t.Level] 'Normal' 12
     $stateText = switch ($state) {
         'Aplicado' { if ($s.Undoable) { '✓ Aplicado por Win Juicer: se puede deshacer.' } else { '✓ Ya estaba así en este equipo.' } }
         'Parcial' { '~ A medias: algo de lo que cambia ya está y algo no.' }

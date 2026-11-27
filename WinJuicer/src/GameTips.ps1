@@ -145,7 +145,7 @@ function Get-JuicerGameTips {
     # Frame generation: the cap counts the frames it makes.
     $fg = Get-JuicerFrameGenName $Tech
     if ($fg) {
-        $capNow = if ($WjFps -gt 0) { $WjFps } elseif ($Hz -gt 0 -and $Use -in 'VRR', 'EstroboSync') { Get-JuicerVrrCap $Hz } elseif ($Hz -gt 0) { $Hz } else { 0 }
+        $capNow = if ($WjFps -gt 0) { $WjFps } elseif ($Hz -gt 0 -and $Use -in 'VRR', 'EstroboSync') { Get-JuicerVrrPacerCap $Hz } elseif ($Hz -gt 0) { $Hz } else { 0 }
         $real = if ($capNow -gt 0) { " Por ejemplo, un límite de $capNow FPS son unos $([int][Math]::Floor($capNow / 2)) reales." } else { '' }
         $forces = if ($Tech.DlssFG) { ' La generación de DLSS fuerza NVIDIA Reflex, así que su tope con G-SYNC también cuenta.' } else { '' }
         $out += New-JuicerFinding $area 'Info' 'Generación de fotogramas: el límite cuenta los generados' "La carpeta del juego trae los archivos de ${fg}: el juego puede usarla (que esté activada lo decides tú, y su ausencia no prueba que no la tenga). Si la activas, el límite de FPS cuenta también los fotogramas generados: con la generación al doble, la mitad son reales y el ratón responde a ese ritmo.$real$forces"

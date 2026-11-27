@@ -1323,3 +1323,72 @@ Describe 'El VRR no llega a los Hz del monitor' {
         $M.Backend.State.FpsLimits['cs2.exe'] | Should -Be 138
     }
 }
+
+Describe 'Frame pacer: correcciones de la revisión' {
+    BeforeEach {
+        $script:M = New-FakeMachine
+        Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+    }
+
+    It 'con VRR a 60 y 75 Hz el ritmo queda 3 por debajo, y no se avisa contra el propio ritmo' {
+        foreach ($c in @(@{ Hz = 60; Fps = 57 }, @{ Hz = 75; Fps = 72 }, @{ Hz = 144; Fps = 138 }, @{ Hz = 180; Fps = 171 })) {
+            $cap = Get-JuicerFpsCap $c.Hz 'VRR'
+            $cap.Fps | Should -Be $c.Fps -Because "$($c.Hz) Hz"
+            Get-JuicerVsyncEdgeNote $cap.Fps $c.Hz 'VRR' | Should -BeNullOrEmpty -Because "$($c.Hz) Hz"
+            (Get-JuicerFpsCap $c.Hz 'EstroboSync').Fps | Should -Be $c.Fps -Because "$($c.Hz) Hz"
+        }
+        (Get-JuicerFpsCap 60 'VRR').Why | Should -BeLike '*3 por debajo de los Hz*59*'
+        (Get-JuicerFpsCap 144 'VRR').Why | Should -BeLike '*la misma cifra que usa NVIDIA Reflex*'
+        # The Reflex formula itself, which the Reflex detection needs, does not change.
+        Get-JuicerVrrCap 60 | Should -Be 59
+    }
+
+    It 'las fechas guardadas se ordenan como fechas, también cuando PowerShell 7 las lee como DateTime' {
+        $per = @{
+            sigA = @{ Fps = 100; Date = [datetime]'2025-12-20T10:00:00' }
+            sigB = @{ Fps = 141; Date = [datetime]'2026-11-05T10:00:00' }
+        }
+        (Select-JuicerCalibration $per $null).Fps | Should -Be 141
+        $per.sigB.Date = '2026-11-05T10:00:00'
+        (Select-JuicerCalibration $per $null).Fps | Should -Be 141
+        $pacer = @{ Calibrated = @{ 'juego.exe' = @{} } }
+        foreach ($e in @(@{ S = 'a'; D = [datetime]'2025-12-20' }, @{ S = 'b'; D = [datetime]'2026-11-05' }, @{ S = 'c'; D = [datetime]'2026-01-10' }, @{ S = 'd'; D = [datetime]'2026-02-10' }, @{ S = 'e'; D = [datetime]'2026-03-10' })) {
+            Set-JuicerCalibrationEntry $pacer 'juego.exe' $e.S @{ Fps = 100; Date = $e.D }
+        }
+        @($pacer.Calibrated['juego.exe'].Keys | Sort-Object) | Should -Be @('b', 'c', 'd', 'e')
+        ConvertTo-JuicerSortDate 'no es una fecha' | Should -Be ([datetime]::MinValue)
+    }
+
+    It 'un ritmo de NVIDIA que no se puede leer ahora no cuenta como borrado, aunque haya RivaTuner' {
+        $M.Backend.State.FpsEngines = @('nvidia', 'rtss')
+        $M.Backend.State.FpsBackend = 'nvidia'
+        [void](Add-JuicerFpsLimit 'cs2.exe' 141)
+        @(Get-JuicerWipedFpsLimits).Count | Should -Be 0
+        # NVAPI down for a moment (a driver restart): only RivaTuner answers.
+        $M.Backend.State.FpsEngines = @('rtss')
+        $M.Backend.State.FpsBackend = 'rtss'
+        $l = @(Get-JuicerFpsLimits)
+        $l[0].Unreadable | Should -BeTrue
+        @(Get-JuicerWipedFpsLimits).Count | Should -Be 0
+        @(Restore-JuicerWipedFpsLimits).Count | Should -Be 0
+    }
+
+    It 'la latencia de las columnas por defecto de PresentMon va del inicio del fotograma, no desde Present()' {
+        $inv = [Globalization.CultureInfo]::InvariantCulture
+        $rows = foreach ($i in 1..200) {
+            [pscustomobject][ordered]@{
+                Application = 'juego.exe'; ProcessID = '1'; SyncInterval = '0'; AllowsTearing = '1'; PresentMode = 'Hardware: Independent Flip'
+                MsBetweenAppStart = '8.0'; MsCPUBusy = (5.0).ToString($inv); MsGPUBusy = '6.0'; MsUntilDisplayed = (3.0).ToString($inv)
+            }
+        }
+        (Measure-JuicerFrames @($rows)).Latency | Should -Be 8
+    }
+
+    It 'el detalle del ritmo dice el frametime donde están los fotogramas, no el del objetivo' {
+        $r = @{ Application = 'juego.exe'; AvgFps = 99.5; Steady = 100; MedianMs = 10.05; JitterMs = 0.1; P95Ms = 10.2; Frames = 3000; Seconds = 30 }
+        $f = @(Get-JuicerPacerFindings $r 141)
+        ($f.Detail -join ' ') | Should -BeLike '*100 % de los fotogramas a 10*05 ms*'
+        ($f.Detail -join ' ') | Should -Not -BeLike '*a 7*09 ms*'
+    }
+}
+
