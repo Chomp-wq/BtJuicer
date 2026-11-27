@@ -5,7 +5,7 @@ name: APK
 # iniciar sesión y llega comprimido.
 on:
   push:
-    branches: [main, claude/secret-savior-05ik70]
+    branches: [main, claude/secret-savior-05ik70, claude/vibrant-einstein-zmegxo]
   workflow_dispatch:
 
 permissions:
@@ -36,16 +36,22 @@ jobs:
       - name: Compilar
         run: |
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
       - name: Pruebas de Secret Savior
         run: ./gradlew :savior:testDebugUnitTest --no-daemon --stacktrace
+
+      # Release (R8 activado), no debug: una app «debuggable» corre con menos optimización de ART
+      # y sin R8, y el DNS y el guardián lo notan. Va firmada con la clave de depuración fija,
+      # así que se instala encima del APK anterior.
+      - name: Compilar Secret Savior (release)
+        run: ./gradlew :savior:assembleRelease --no-daemon --stacktrace
 
       - name: Renombrar los APK
         run: |
           mkdir -p out
           cp app/build/outputs/apk/debug/app-debug.apk out/BT-Juicer.apk
-          cp savior/build/outputs/apk/debug/savior-debug.apk out/Secret-Savior.apk
+          cp savior/build/outputs/apk/release/savior-release.apk out/Secret-Savior.apk
 
       - name: Subir como artefacto
         uses: actions/upload-artifact@v4
@@ -71,7 +77,7 @@ jobs:
           if ! gh release view "$TAG" >/dev/null 2>&1; then
             gh release create "$TAG" \
               --title "BT Juicer — última compilación" \
-              --notes "APK de depuración compilados automáticamente (BT-Juicer.apk y Secret-Savior.apk). Descarga el que quieras y ábrelo en el teléfono." \
+              --notes "APK compilados automáticamente (BT-Juicer.apk de depuración y Secret-Savior.apk de release). Descarga el que quieras y ábrelo en el teléfono." \
               --prerelease
           fi
           gh release upload "$TAG" out/BT-Juicer.apk out/Secret-Savior.apk --clobber

@@ -37,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -55,6 +56,9 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import com.secretsavior.data.Store
 import com.secretsavior.guard.Status
+import com.secretsavior.provision.ProvisionState
+import com.secretsavior.provision.Provisioner
+import com.secretsavior.provision.ShellVerdict
 import com.secretsavior.vpn.SaviorVpnService
 import kotlinx.coroutines.delay
 import java.text.DateFormat
@@ -69,34 +73,66 @@ interface Actions {
     fun openNetworkSettings()
     fun exemptBattery()
     fun openAutostart()
+    fun openNotificationAccess()
+    fun openVpnSettings()
+    fun openAutoRevoke()
+    fun openDevOptions()
+    fun copy(text: String)
+    fun harden(kind: Hardening)
     fun commit()
 }
+
+/** Endurecimientos que se resuelven con un interruptor propio (los demás pasan por ADB). */
+enum class Hardening { DEV_OPTIONS, ADB }
 
 private data class Snapshot(
     val locked: Boolean,
     val vpn: Boolean,
     val guard: Boolean,
     val admin: Boolean,
+    val notif: Boolean,
     val dnsStrict: Boolean,
     val battery: Boolean,
     /** Xiaomi/Redmi/POCO: el autoencendido de la app se vio activado. En otras marcas no se pide. */
     val autostart: Boolean,
+    /** null = no se sabe (no bloquea). */
+    val alwaysOn: Boolean?,
+    val lockdown: Boolean?,
+    val autoRevoke: Boolean,
+    val secure: Boolean,
+    val owner: Boolean,
+    val devBlocked: Boolean,
+    val adbBlocked: Boolean,
+    val pending: Boolean,
     val days: Long,
     val since: Long,
     val blocked: Int,
     val dns: SaviorVpnService.Companion.DnsHealth?,
 ) {
-    val ready get() = vpn && guard && admin && !dnsStrict && autostart
+    /** Pasos 1–8; lo desconocido (null) no bloquea. */
+    val ready get() = vpn && guard && notif && battery && !dnsStrict && autostart && alwaysOn != false && autoRevoke
 }
+
+private fun <T> safe(default: T, f: () -> T): T = try { f() } catch (e: Throwable) { default }
 
 private fun read(c: Context) = Snapshot(
     locked = Store.isLocked(c),
     vpn = Status.isVpnRunning(),
     guard = Status.isGuardEnabled(c),
     admin = Status.isAdminActive(c),
+    // isNotificationListenerAccessGranted existe desde Android 8.1; antes no se puede preguntar ni exigir.
+    notif = Build.VERSION.SDK_INT < Build.VERSION_CODES.O_MR1 || safe(false) { Status.isReviveEnabled(c) },
     dnsStrict = Status.isPrivateDnsStrict(c),
     battery = Status.isBatteryExempt(c),
     autostart = !isXiaomiFamily() || Store.autostartSeen(c),
+    alwaysOn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) safe(null) { Status.isAlwaysOnVpn() } else true,
+    lockdown = SaviorVpnService.lockdown,
+    autoRevoke = safe(true) { Status.isAutoRevokeExempt(c) },
+    secure = safe(false) { Status.hasSecureSettings(c) },
+    owner = safe(false) { Status.isDeviceOwner(c) },
+    devBlocked = Store.devOptionsBlocked(c),
+    adbBlocked = Store.adbBlocked(c),
+    pending = Store.pendingCommit(c),
     days = Store.daysLocked(c),
     since = Store.lockedAt(c),
     blocked = Store.blockedCount(c),
@@ -132,10 +168,13 @@ private const val PHRASE = "ME COMPROMETO"
 
 @Composable
 private fun SetupScreen(s: Snapshot, a: Actions) {
+    val context = LocalContext.current
     var phrase by rememberSaveable { mutableStateOf("") }
     var understood by rememberSaveable { mutableStateOf(false) }
     var confirm by remember { mutableStateOf(false) }
+    var wireless by remember { mutableStateOf<ShellVerdict.Goal?>(null) }
     val canLock = s.ready && understood && phrase.trim().equals(PHRASE, ignoreCase = true)
+    var n = 0
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
@@ -159,16 +198,16 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
             }
         }
 
-        Text("Cuatro permisos", style = MaterialTheme.typography.titleLarge)
+        Text("Permisos", style = MaterialTheme.typography.titleLarge)
 
         Step(
-            "1. Filtro de sitios (VPN local)", s.vpn,
+            "${++n}. Filtro de sitios (VPN local)", s.vpn,
             "Intercepta únicamente las consultas DNS: los sitios para adultos no llegan a resolver. " +
                 "No pasa tu tráfico por ningún servidor.",
         ) { Button(onClick = a::enableVpn) { Text("Permitir y arrancar") } }
 
         Step(
-            "2. Guardián (Accesibilidad)", s.guard,
+            "${++n}. Guardián (Accesibilidad)", s.guard,
             "Cierra las pantallas de Ajustes desde las que se podría apagar todo, y el texto " +
                 "explícito. Si Android 13+ lo muestra en gris porque instalaste el APK a mano: " +
                 "abre «Información de la app», menú ⋮ y «Permitir ajustes restringidos».",
@@ -180,12 +219,20 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
         }
 
         Step(
-            "3. Protección contra desinstalación", s.admin,
-            "Con la app como administradora, Android se niega a desinstalarla.",
-        ) { Button(onClick = a::enableAdmin) { Text("Activar administrador") } }
+            "${++n}. Resurrección (acceso a notificaciones)", s.notif,
+            "Si alguien fuerza la detención de la app, Android la vuelve a levantar a los pocos " +
+                "segundos gracias a este permiso. No se lee ninguna notificación: ni su contenido " +
+                "ni cuáles llegan.",
+        ) { Button(onClick = a::openNotificationAccess) { Text("Abrir acceso a notificaciones") } }
 
         Step(
-            "4. Sin DNS privado estricto", !s.dnsStrict,
+            "${++n}. Batería sin restricciones", s.battery,
+            "Obligatorio: sin esto, Android 12 o superior no deja que la app reinicie el filtro " +
+                "desde segundo plano, y muchos fabricantes lo matan para ahorrar batería.",
+        ) { Button(onClick = a::exemptBattery) { Text("Excluir de ahorro") } }
+
+        Step(
+            "${++n}. Sin DNS privado estricto", !s.dnsStrict,
             if (s.dnsStrict) {
                 "Tienes un DNS privado con nombre de host: cifra las consultas y se salta el filtro. " +
                     "Ponlo en «Automático» o «Desactivado» (Ajustes → Red → DNS privado)."
@@ -196,23 +243,50 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
 
         if (isXiaomiFamily()) {
             Step(
-                "5. Autoencendido (Xiaomi)", s.autostart,
+                "${++n}. Autoencendido (Xiaomi)", s.autostart,
                 "Abre la pantalla y comprueba que Secret Savior está activado: la app lo detecta " +
                     "sola (necesita el paso 2). Una vez bloqueado, esa pantalla se cierra para " +
                     "siempre, así que cambia antes el autoencendido de tus otras apps.",
             ) { Button(onClick = a::openAutostart) { Text("Abrir autoencendido") } }
         }
 
-        if (!s.battery) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             Step(
-                "Opcional: que no lo duerman", false,
-                "Algunos fabricantes matan los servicios para ahorrar batería. Excluir la app lo evita.",
-            ) { OutlinedButton(onClick = a::exemptBattery) { Text("Excluir de ahorro") } }
+                "${++n}. VPN siempre activa", s.alwaysOn == true,
+                "En la pantalla de VPN, toca el engranaje junto a Secret Savior y activa «VPN siempre " +
+                    "activa». NO actives «Bloquear conexiones sin VPN»: el filtro sólo lleva el DNS y " +
+                    "el teléfono podría quedarse sin internet." +
+                    if (s.alwaysOn == null) " (Ahora mismo no se puede comprobar: no impide continuar.)" else "",
+            ) { Button(onClick = a::openVpnSettings) { Text("Abrir ajustes de VPN") } }
+        }
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            Step(
+                "${++n}. Pausar actividad si no se usa", s.autoRevoke,
+                "Apaga «Pausar la actividad de la app si no se usa» (o «Quitar permisos si no se usa»). " +
+                    "Si no, Android puede detener la app por su cuenta tras semanas sin abrirla.",
+            ) { Button(onClick = a::openAutoRevoke) { Text("Abrir permisos de la app") } }
+        }
+
+        Step(
+            "Opcional, recomendado: autocuración", s.secure,
+            "Con un permiso que se da una sola vez por ADB, la app vuelve a encender su propio " +
+                "guardián si alguien lo apaga. Desde un ordenador: ${ShellVerdict.pcCommand(ShellVerdict.Goal.SECURE_SETTINGS)}",
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                OutlinedButton(onClick = { a.copy(ShellVerdict.pcCommand(ShellVerdict.Goal.SECURE_SETTINGS)) }) { Text("Copiar comando") }
+                OutlinedButton(onClick = { wireless = ShellVerdict.Goal.SECURE_SETTINGS }) { Text("Sin ordenador") }
+            }
         }
 
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 Text("Activar para siempre", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+                Text(
+                    "Lo último: Android te pedirá que la app sea administradora del dispositivo, y eso " +
+                        "es lo que la protege de desinstalarse. Hasta ese momento nada queda fijo.",
+                    style = MaterialTheme.typography.bodySmall,
+                )
                 OutlinedTextField(
                     value = phrase,
                     onValueChange = { phrase = it },
@@ -236,6 +310,12 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
                         color = MaterialTheme.colorScheme.error,
                     )
                 }
+                if (s.pending) {
+                    Text(
+                        "Esperando la confirmación de Android para el administrador…",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         }
     }
@@ -255,6 +335,12 @@ private fun SetupScreen(s: Snapshot, a: Actions) {
             },
             dismissButton = { TextButton(onClick = { confirm = false }) { Text("Todavía no") } },
         )
+    }
+    wireless?.let { goal ->
+        WirelessDialog(goal, s.devBlocked, a) {
+            wireless = null
+            Provisioner.reset(context)
+        }
     }
 }
 
@@ -278,6 +364,8 @@ private fun Step(title: String, done: Boolean, text: String, action: @Composable
 
 // --- Con el bloqueo activo ----------------------------------------------------------
 
+private enum class Harden { SECURE, OWNER, DEV, ADB }
+
 @Composable
 private fun LockedScreen(s: Snapshot, a: Actions) {
     val context = LocalContext.current
@@ -286,6 +374,7 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
     var reason by remember { mutableStateOf(Store.reason(context)) }
     var domain by remember { mutableStateOf("") }
     var domainMsg by remember { mutableStateOf<String?>(null) }
+    var harden by remember { mutableStateOf<Harden?>(null) }
 
     Column(
         Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
@@ -309,12 +398,37 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
             Text("Tengo ganas ahora mismo", fontSize = 18.sp)
         }
 
+        if (s.lockdown == true) {
+            Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.errorContainer)) {
+                Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("«Bloquear conexiones sin VPN» está activado", fontWeight = FontWeight.Bold)
+                    Text(
+                        "El filtro sólo lleva el DNS: con esa opción el teléfono puede quedarse sin " +
+                            "internet. Apágala en Ajustes → VPN → engranaje de Secret Savior (deja " +
+                            "«VPN siempre activa» encendida).",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    OutlinedButton(onClick = a::openVpnSettings) { Text("Abrir ajustes de VPN") }
+                }
+            }
+        }
+
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text("Estado", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 StatusRow("Filtro de sitios", s.vpn, a::enableVpn)
                 StatusRow("Guardián", s.guard, a::openAccessibility)
+                StatusRow("Resurrección", s.notif, a::openNotificationAccess)
                 StatusRow("Anti-desinstalación", s.admin, a::enableAdmin)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && s.alwaysOn != null) {
+                    StatusRow("VPN siempre activa", s.alwaysOn, a::openVpnSettings)
+                }
+                StatusRow("Sin ahorro de batería", s.battery, a::exemptBattery)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    StatusRow("Sin pausa por inactividad", s.autoRevoke, a::openAutoRevoke)
+                }
+                StatusRow("Autocuración (opcional)", s.secure, { harden = Harden.SECURE }, optional = true)
+                StatusRow("Propietario del dispositivo (opcional)", s.owner, { harden = Harden.OWNER }, optional = true)
                 if (s.dnsStrict) StatusRow("DNS privado estricto (esquiva el filtro)", false, a::openNetworkSettings)
                 Text("${s.blocked} sitios bloqueados hasta hoy", style = MaterialTheme.typography.bodySmall)
                 s.dns?.let { dns ->
@@ -343,10 +457,9 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                 Text("Siempre activo", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
                 Text(
                     "El filtro sigue aunque cierres la app: va en primer plano con una notificación fija. " +
-                        "Para que el sistema no lo duerma:",
+                        "Si alguien fuerza su detención, el acceso a notificaciones hace que Android la vuelva a levantar.",
                     style = MaterialTheme.typography.bodySmall,
                 )
-                StatusRow("Sin ahorro de batería", s.battery, a::exemptBattery)
                 if (isXiaomi) {
                     Text(
                         "Xiaomi / Redmi / POCO: el autoencendido de esta app queda fijado, y su pantalla " +
@@ -361,6 +474,8 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
                 }
             }
         }
+
+        HardenCard(s) { harden = it }
 
         Card {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -409,20 +524,212 @@ private fun LockedScreen(s: Snapshot, a: Actions) {
     }
 
     if (urge) UrgeDialog(reason) { urge = false }
+    harden?.let { HardenDialog(it, s, a) { harden = null } }
+}
+
+/** «Endurecer más»: cada botón es de ida y antes pide confirmación que lo dice. */
+@Composable
+private fun HardenCard(s: Snapshot, open: (Harden) -> Unit) {
+    if (s.secure && s.owner && s.devBlocked && s.adbBlocked) return
+    Card {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Endurecer más", style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold)
+            Text(
+                "Cada una de estas medidas sólo se puede encender, nunca apagar. Antes se explica lo que no se puede deshacer.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (!s.secure) OutlinedButton(onClick = { open(Harden.SECURE) }, Modifier.fillMaxWidth()) { Text("Autocuración") }
+            if (!s.owner) OutlinedButton(onClick = { open(Harden.OWNER) }, Modifier.fillMaxWidth()) { Text("Blindaje total (propietaria del dispositivo)") }
+            if (!s.devBlocked) OutlinedButton(onClick = { open(Harden.DEV) }, Modifier.fillMaxWidth()) { Text("Cerrar opciones de desarrollador") }
+            if (s.owner && !s.adbBlocked) OutlinedButton(onClick = { open(Harden.ADB) }, Modifier.fillMaxWidth()) { Text("Prohibir ADB para siempre") }
+        }
+    }
 }
 
 @Composable
-private fun StatusRow(label: String, ok: Boolean, repair: () -> Unit) {
+private fun HardenDialog(kind: Harden, s: Snapshot, a: Actions, close: () -> Unit) {
+    val context = LocalContext.current
+    var wireless by remember { mutableStateOf<ShellVerdict.Goal?>(null) }
+    var confirmWireless by remember { mutableStateOf(false) }
+    val goal = if (kind == Harden.SECURE) ShellVerdict.Goal.SECURE_SETTINGS else ShellVerdict.Goal.DEVICE_OWNER
+
+    wireless?.let { g ->
+        WirelessDialog(g, s.devBlocked, a) {
+            wireless = null
+            Provisioner.reset(context)
+            close()
+        }
+        return
+    }
+
+    when (kind) {
+        Harden.SECURE, Harden.OWNER -> AlertDialog(
+            onDismissRequest = close,
+            title = { Text(if (kind == Harden.SECURE) "Autocuración" else "Blindaje total") },
+            text = {
+                Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (kind == Harden.SECURE) {
+                        Text(
+                            "Un permiso que se concede una vez por ADB. Con él, si alguien apaga el guardián, " +
+                                "la app lo vuelve a encender sola.",
+                        )
+                    } else {
+                        Text(
+                            "Secret Savior pasa a ser propietaria del dispositivo. Eso impide: forzar la " +
+                                "detención o borrar los datos de la app, el modo seguro, restablecer desde " +
+                                "Ajustes, crear otros usuarios y cambiar la VPN.",
+                        )
+                        Text("Antes de empezar:", fontWeight = FontWeight.Bold)
+                        Text(
+                            "• Quita temporalmente TODAS las cuentas (Ajustes → Cuentas: Google, Xiaomi y las " +
+                                "de apps como WhatsApp o Telegram).\n" +
+                                "• Sin «Segundo espacio» ni «Apps duales».\n" +
+                                (if (isXiaomiFamily()) "• En Xiaomi, activa «Depuración USB (ajustes de seguridad)» en Opciones de desarrollador.\n" else "") +
+                                "• Después vuelve a añadir tus cuentas.",
+                        )
+                        Text(
+                            "No se puede deshacer: después, la única salida es restablecer el teléfono de fábrica " +
+                                "desde el modo recovery, y eso borra todo.",
+                            fontWeight = FontWeight.Bold,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    Text("Con ordenador:", fontWeight = FontWeight.Bold)
+                    Text(ShellVerdict.pcCommand(goal), style = MaterialTheme.typography.bodySmall)
+                }
+            },
+            confirmButton = {
+                Row {
+                    TextButton(onClick = { a.copy(ShellVerdict.pcCommand(goal)) }) { Text("Copiar comando") }
+                    TextButton(
+                        onClick = { if (kind == Harden.OWNER) confirmWireless = true else wireless = goal },
+                    ) { Text("Sin ordenador") }
+                }
+            },
+            dismissButton = { TextButton(onClick = close) { Text("Cancelar") } },
+        )
+
+        Harden.DEV -> ConfirmOneWay(
+            "¿Cerrar las opciones de desarrollador?",
+            "Mientras dure el bloqueo, Opciones de desarrollador se cierra en cuanto se abre. Es la vía " +
+                "para usar ADB, así que no se podrá deshacer.\n\nTen en cuenta que también corta la " +
+                "depuración inalámbrica de BT Juicer (sus funciones de códec la necesitan) y el vinculado " +
+                "sin ordenador de esta app. Si aún quieres usar cualquiera de las dos, hazlo antes.",
+            "Sí, cerrarlas", { a.harden(Hardening.DEV_OPTIONS); close() }, close,
+        )
+
+        Harden.ADB -> ConfirmOneWay(
+            "¿Prohibir ADB para siempre?",
+            "Como propietaria del dispositivo, Android deja de permitir la depuración USB e inalámbrica. " +
+                "No se podrá deshacer: ni tú ni BT Juicer ni esta app podréis usar ADB nunca más, salvo " +
+                "restableciendo el teléfono de fábrica.",
+            "Sí, prohibirlo", { a.harden(Hardening.ADB); close() }, close,
+        )
+    }
+
+    if (confirmWireless) {
+        ConfirmOneWay(
+            "¿Hacerla propietaria ahora?",
+            "No se puede deshacer. Después, la única salida es restablecer el teléfono de fábrica " +
+                "(modo recovery), que borra todo. ¿Has quitado ya todas las cuentas?",
+            "Sí, continuar", { confirmWireless = false; wireless = goal }, { confirmWireless = false },
+        )
+    }
+}
+
+@Composable
+private fun ConfirmOneWay(title: String, text: String, yes: String, onYes: () -> Unit, onNo: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = onNo,
+        title = { Text(title) },
+        text = { Text(text, Modifier.verticalScroll(rememberScrollState())) },
+        confirmButton = { Button(onClick = onYes) { Text(yes) } },
+        dismissButton = { TextButton(onClick = onNo) { Text("Todavía no") } },
+    )
+}
+
+/** Guía de la vinculación sin ordenador; el código se escribe en una notificación (ver Provisioner). */
+@Composable
+private fun WirelessDialog(goal: ShellVerdict.Goal, devBlocked: Boolean, a: Actions, close: () -> Unit) {
+    val context = LocalContext.current
+    val state by Provisioner.state.collectAsState()
+    val paired = remember { Provisioner.alreadyPaired(context) }
+
+    AlertDialog(
+        onDismissRequest = { if (state !is ProvisionState.Working) close() },
+        title = { Text("Sin ordenador") },
+        text = {
+            Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                when (val st = state) {
+                    is ProvisionState.Working -> Text("${st.step}\n\nNo cierres la app.")
+                    is ProvisionState.Done -> Text(st.message)
+                    else -> {
+                        if (devBlocked) {
+                            Text("Las opciones de desarrollador están cerradas: esto ya no es posible sin ordenador.")
+                        } else {
+                            Text(
+                                "1. Abre Opciones de desarrollador y activa «Depuración inalámbrica» " +
+                                    "(necesita Wi-Fi). Si no ves las opciones: Ajustes → Acerca del teléfono, " +
+                                    "toca siete veces el número de compilación.",
+                            )
+                            OutlinedButton(onClick = a::openDevOptions) { Text("Abrir opciones de desarrollador") }
+                            Text(
+                                "2. Entra en «Depuración inalámbrica» y toca «Vincular dispositivo con código». " +
+                                    "Esa ventana se cierra si sales de Ajustes: déjala abierta.",
+                            )
+                            Text(
+                                "3. Pulsa «Preparar el código» aquí abajo, vuelve a Ajustes y, con la ventana " +
+                                    "abierta, baja las notificaciones: toca «Escribir el código» y teclea las " +
+                                    "6 cifras.",
+                            )
+                            if (state is ProvisionState.WaitingCode) {
+                                Text("Esperando el código en la notificación…", fontWeight = FontWeight.Bold)
+                            }
+                            if (paired) {
+                                Text("Este teléfono ya estaba vinculado: puedes probar sin código.", style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            when (state) {
+                is ProvisionState.Working -> {}
+                is ProvisionState.Done -> TextButton(onClick = close) { Text("Cerrar") }
+                else -> if (!devBlocked) {
+                    Row {
+                        if (paired) TextButton(onClick = { Provisioner.runPaired(context, goal) }) { Text("Ya vinculado") }
+                        Button(onClick = { Provisioner.begin(context, goal) }) { Text("Preparar el código") }
+                    }
+                }
+            }
+        },
+        dismissButton = {
+            if (state !is ProvisionState.Working && state !is ProvisionState.Done) {
+                TextButton(onClick = close) { Text("Cancelar") }
+            }
+        },
+    )
+}
+
+@Composable
+private fun StatusRow(label: String, ok: Boolean?, repair: () -> Unit, optional: Boolean = false) {
+    val good = ok == true
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Icon(
-            if (ok) Icons.Filled.CheckCircle else Icons.Filled.Warning,
-            contentDescription = if (ok) "Activo" else "Caído",
-            tint = if (ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+            if (good) Icons.Filled.CheckCircle else Icons.Filled.Warning,
+            contentDescription = if (good) "Activo" else "Caído",
+            tint = when {
+                good -> MaterialTheme.colorScheme.primary
+                optional -> MaterialTheme.colorScheme.outline
+                else -> MaterialTheme.colorScheme.error
+            },
         )
         Spacer(Modifier.size(8.dp))
         Text(label, Modifier.weight(1f))
         // Reparar es volver a conceder lo que se cayó; nunca apagar.
-        if (!ok) TextButton(onClick = repair) { Text("Reparar") }
+        if (!good) TextButton(onClick = repair) { Text(if (optional) "Activar" else "Reparar") }
     }
 }
 
