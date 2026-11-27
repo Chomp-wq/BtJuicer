@@ -56,10 +56,22 @@ object Status {
     fun hasSecureSettings(c: Context): Boolean =
         c.checkSelfPermission(Manifest.permission.WRITE_SECURE_SETTINGS) == PackageManager.PERMISSION_GRANTED
 
-    /** Acceso a notificaciones: es lo que hace que Android vuelva a levantar la app tras forzar su detención. */
+    /**
+     * Acceso a notificaciones: es lo que hace que Android vuelva a levantar la app tras forzar su
+     * detención. La pregunta directa existe desde Android 8.1; en 8.0 llamarla lanza
+     * NoSuchMethodError (un Error, no lo atrapa `catch (Exception)`), así que se lee el ajuste.
+     */
     fun isReviveEnabled(c: Context): Boolean = try {
-        (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
-            .isNotificationListenerAccessGranted(ComponentName(c, ReviveListener::class.java))
+        val me = ComponentName(c, ReviveListener::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+            (c.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+                .isNotificationListenerAccessGranted(me)
+        } else {
+            val enabled = Settings.Secure.getString(c.contentResolver, "enabled_notification_listeners").orEmpty()
+            val full = me.flattenToString()
+            val short = me.flattenToShortString()
+            enabled.split(':').any { it.equals(full, ignoreCase = true) || it.equals(short, ignoreCase = true) }
+        }
     } catch (e: Exception) {
         false
     }

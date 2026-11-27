@@ -27,8 +27,28 @@
         android:name="android.permission.WRITE_SECURE_SETTINGS"
         tools:ignore="ProtectedPermissions" />
 
-    <!-- Qué apps son navegadores (ver guard/Browsers.kt). -->
+    <!-- Visibilidad de paquetes (Android 11+). Sin ella getResourcesForApplication, getPackageInfo y
+         resolveActivity no ven estas apps: ni se leen sus textos en cualquier idioma (Labels.kt),
+         ni se reconoce X, el lanzador o el teléfono (Owner.kt). Sin QUERY_ALL_PACKAGES. -->
     <queries>
+        <package android:name="com.android.settings" />
+        <package android:name="com.miui.securitycenter" />
+        <package android:name="com.android.vpndialogs" />
+        <package android:name="com.miui.powerkeeper" />
+        <package android:name="com.twitter.android" />
+        <package android:name="com.twitter.android.lite" />
+
+        <!-- Lanzador y teléfono: protectedPackages() no los suspende. -->
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.HOME" />
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.DIAL" />
+            <data android:scheme="tel" />
+        </intent>
+
+        <!-- Qué apps son navegadores (ver guard/Browsers.kt). -->
         <intent>
             <action android:name="android.intent.action.VIEW" />
             <category android:name="android.intent.category.BROWSABLE" />

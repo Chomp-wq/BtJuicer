@@ -10,15 +10,20 @@ sin cuentas, sin anuncios, sin telemetría.
 
 ## Cómo funciona
 
-Cuatro capas, cada una cubre un hueco de la anterior.
+Varias capas, cada una cubre un hueco de la anterior. Las marcadas «opcional» se piden
+aparte porque necesitan ADB una sola vez.
 
 | Capa | Qué hace |
 |---|---|
-| **Filtro DNS** (`VpnService` local) | Captura sólo las consultas DNS del teléfono. Los dominios de la lista local (palabras clave, TLD `.xxx/.porn/.sex/.adult`, ~70 sitios y CDN, redes de anuncios para adultos) reciben `0.0.0.0`. El resto se reenvía a **CleanBrowsing Adult Filter** (185.228.168.10), que bloquea pornografía y contenido explícito y fuerza búsqueda segura en Google y Bing (deja pasar sitios mixtos como Reddit: ahí actúa el guardián); Cloudflare for Families (1.1.1.3) queda de reserva. Se usan también sus direcciones IPv6. Los proveedores de DNS cifrado (DoH) también se bloquean para que el navegador no se salte el filtro. No pasa tu tráfico por ningún servidor. |
-| **Guardián** (`AccessibilityService`) | Manda al inicio cualquier pantalla de Ajustes/instalador/VPN que nombre a la app (ficha, desinstalar, administradores, accesibilidad, «Desconectar» VPN) y el campo de DNS privado. Cierra el navegador si apunta a un sitio bloqueado, y **falla cerrado**: si el filtro está caído, los navegadores no funcionan hasta repararlo. Cierra el texto explícito que se escribe, sólo en navegadores, buscadores (Google, YouTube), Telegram y Reddit: WhatsApp, SMS y el resto de chats no se vigilan, para no limitar la comunicación. En Ajustes, las filas que llevan a Accesibilidad o nombran a la app quedan **tapadas por una capa transparente que se traga el toque**: cerrar una pantalla al verla llega tarde, porque si el toque apaga la accesibilidad el guardián muere antes de poder cerrar nada. Mientras la pantalla cambia o se desplaza, una capa tapa todo (como mucho 1,5 s) hasta recolocar las de las filas. Además, la pantalla de Accesibilidad se cierra en cuanto se abre. **Forzar detención** es irreversible (Android saca la app de Accesibilidad, cancela sus alarmas y no la deja volver a arrancar sola), así que en la ficha de la app sus botones de forzar detención, desinstalar, borrar datos y desactivar administrador quedan tapados; la ficha de Xiaomi (de la app de Seguridad) se tapa entera hasta haberla leído; y un diálogo de confirmación de esas acciones que aparezca poco después de ver la ficha se cierra. Tocar una capa, o que el guardián cierre una pantalla peligrosa, cuenta como intento: durante 30 s (renovables con cada intento) Ajustes, el instalador y la app de Seguridad se cierran en cuanto se abren, sin esperar a leerlos. Instalar una actualización (el APK nuevo, a mano o por Play Store) sí se deja pasar: esa pantalla nombra a la app sin ser un riesgo. |
-| **Administrador del dispositivo** | Mientras la app sea administradora, Android se niega a desinstalarla. Quitarla de la lista es la pantalla que el guardián cierra. |
-| **Siempre activo** | El filtro va como servicio en primer plano con notificación fija, así que cerrar la app no lo detiene. Si el sistema aun así lo mata (Xiaomi al «Limpiar» Recientes), una alarma lo vuelve a levantar en segundos; la pantalla principal guía el autoinicio y la exclusión de ahorro de batería. |
-| **Vigilante** | Cada 10 s, al arrancar y al caerse el filtro, levanta lo que falte. Si otra VPN le quita el permiso o se retira un permiso, trae la app al frente para repararlo. |
+| **Filtro DNS** (`VpnService` local) | Captura las consultas DNS del teléfono. Los dominios de la lista local (palabras clave, TLD `.xxx/.porn/.sex/.adult`, ~70 sitios y CDN, redes de anuncios para adultos) reciben `0.0.0.0`. El resto se reenvía a **CleanBrowsing Adult Filter** (185.228.168.10), que bloquea pornografía y fuerza búsqueda segura (deja pasar sitios mixtos como Reddit: ahí actúa el guardián); Cloudflare for Families (1.1.1.3) queda de reserva. Se usan también sus direcciones IPv6. Además **captura por IP los resolutores públicos conocidos** (Google, Cloudflare, Quad9, OpenDNS, AdGuard, NextDNS, Mullvad…): el DNS clásico a esas IP, también **por TCP**, se filtra aquí mismo; DoH, DoT y QUIC a esas IP se rechazan al instante (RST o «puerto inaccesible») para que la app vuelva al DNS del sistema; el ping (ICMP) a ellas se contesta en el túnel. Los proveedores de DNS cifrado por nombre también se bloquean. No pasa tu tráfico por ningún servidor. |
+| **Guardián** (`AccessibilityService`) | Reconoce las pantallas peligrosas **en cualquier idioma**: no se fía de una sola traducción, sino de la clase de la ventana, los ids de las vistas, una tabla de 27 idiomas y los textos que lee de los propios Ajustes. En un idioma que no conoce pasa a modo estricto. **Tapa antes de leer**: una capa cubre la pantalla hasta haberla leído, de modo que un toque rápido no llega a «Forzar detención». Vigila la ficha de la app (también la de Seguridad de Xiaomi), desinstalar, administradores, accesibilidad, VPN, DNS privado, **proxy manual de Wi-Fi**, **usuarios y segundo espacio**, restricciones de batería en segundo plano, autoinicio, opciones de desarrollador (si se cerraron) y el gestor de apps activas de Android 13+. Cierra el navegador si apunta a un sitio bloqueado y **falla cerrado**: si el filtro está caído, los navegadores no funcionan hasta repararlo. Cierra el texto explícito que se escribe, sólo en navegadores, buscadores (Google, YouTube), Telegram y Reddit. **Cierra al abrirse** X / Twitter, Tor Browser, Orbot y Aloha. Tocar una capa o que el guardián cierre una pantalla peligrosa cuenta como intento: durante 30 s Ajustes, el instalador y la app de Seguridad se cierran en cuanto se abren. Instalar una actualización se deja pasar. |
+| **Administrador del dispositivo** | Mientras la app sea administradora, Android se niega a desinstalarla. Se pide **el último**, con «Activar y bloquear». |
+| **Siempre activo** | El filtro va como servicio en primer plano con notificación fija. Si el sistema lo mata, una alarma lo levanta en segundos. La pantalla principal guía el autoinicio de Xiaomi, la exclusión de batería, «VPN siempre activa» y «Pausar la actividad si no se usa». |
+| **Vigilante** | Cada 10 s, al arrancar y al caerse el filtro, levanta lo que falte; si otra VPN le quita el permiso o se retira un permiso, trae la app al frente. |
+| **Resurrección** (acceso a notificaciones) | Un `NotificationListenerService` que **no lee ninguna notificación**. Tras forzar la detención, Android vuelve a enlazar los oyentes aprobados, lo que arranca el proceso y, con él, el vigilante, el filtro y la autocuración. |
+| **Autocuración** (opcional, `WRITE_SECURE_SETTINGS`) | Con ese permiso concedido una vez por ADB, la app vuelve a escribir su propia entrada en `enabled_accessibility_services` (Android la borra al forzar la detención), deshace el DNS privado estricto y, si se cerraron, las opciones de desarrollador y ADB. Observa esos ajustes: el cambio se deshace al instante. |
+| **Propietaria del dispositivo** (opcional, ver abajo) | La versión dura: Android impide **forzar la detención y borrar los datos** de la app, el modo seguro, el restablecimiento desde Ajustes, otros usuarios y perfiles, y cambiar la VPN o el DNS privado; la app no se puede desinstalar, y queda como VPN siempre activa. Si la protección lleva ≥ 20 s rota, **suspende los navegadores** hasta repararla. Oculta X. Opcionalmente prohíbe también ADB. |
+| **Endurecimientos de ida** | «Cerrar opciones de desarrollador» (la vía de ADB; también deja sin depuración inalámbrica a BT Juicer) y, como propietaria, «Prohibir ADB para siempre». Como todo lo demás, sólo se pueden encender. |
 
 El bloqueo no se guarda sólo en las preferencias de la app: si alguien borra los
 datos, el administrador sigue activo en el sistema y la app lo detecta como
@@ -32,6 +37,43 @@ Dentro de la app, con el bloqueo activo: contador de días, botón **«Tengo gan
 ahora mismo»** (respiración 4-7-8 y tu propia razón, escrita por ti), y añadir más
 sitios a la lista (sólo se puede añadir, nunca quitar). No hay ninguna acción de
 apagar en el código.
+
+## Novedades de la 4.0
+
+Motivo: en un Xiaomi, **«Forzar detención» bastaba para apagarlo todo.** Android saca entonces a
+la app de Accesibilidad, cancela sus alarmas, tira la VPN y deja el paquete «detenido», sin que le
+llegue nada hasta que alguien la abra. El guardián intentaba cerrar la pantalla antes de que se
+pudiera pulsar, pero eso es una carrera, y en MIUI la ficha de la app vive en la app de Seguridad.
+
+- **Forzar detención en modo normal: se recupera en segundos.** El acceso a notificaciones
+  (`ReviveListener`) hace que Android vuelva a enlazar la app tras forzar su detención; al arrancar
+  levanta el filtro y el vigilante, y la autocuración (si se concedió `WRITE_SECURE_SETTINGS`)
+  vuelve a encender la accesibilidad. Sigue habiendo una ventana de unos segundos sin protección.
+  Depende de que el sistema reenlace el oyente (y en Xiaomi, del autoinicio): hay que comprobarlo en
+  cada teléfono.
+- **Forzar detención en modo propietaria del dispositivo: imposible.** El botón queda inutilizado
+  (`setUserControlDisabledPackages`, Android 11+).
+- **Cambiar el idioma ya no sirve para saltarse el guardián.** Antes reconocía las pantallas por
+  sus textos en unos pocos idiomas. Ahora usa la clase de la ventana, los ids de las vistas, una
+  tabla de 27 idiomas y los textos que lee de Ajustes. Y la pantalla se tapa hasta haberla leído.
+- **DNS cifrado a una IP.** Un navegador con «DNS seguro personalizado» hacia `https://1.1.1.1/dns-query`
+  no tiene nombre que bloquear. Ahora esas IP (y las de decenas de resolutores públicos) van al túnel
+  y allí se filtran o se rechazan, y el navegador vuelve al DNS del sistema.
+- **Apps con DNS fijo** (8.8.8.8 en el código): su consulta a un resolutor público conocido también
+  cae en el túnel y se filtra.
+- **Navegadores desconocidos.** La lista fija se completa preguntando al sistema qué apps abren una
+  dirección web, y se refresca al instalar o actualizar una. Hace falta `<queries>` en el manifiesto.
+- **Proxy manual de Wi-Fi** (resuelve el DNS fuera del teléfono): la pantalla del editor se cierra.
+- **Segundo espacio y usuarios** (también el «Segundo espacio» de Xiaomi): se cierran; como
+  propietaria, se prohíben.
+- **Restricciones de batería de Xiaomi** (`com.miui.powerkeeper`) y su autoinicio: la pantalla se
+  cierra salvo con la ventana de gracia abierta desde la propia app.
+- **Fallo de la configuración inicial.** Activar el administrador en el paso 3 bloqueaba la app a
+  mitad de la configuración, y se saltaban la frase de compromiso y el paso de autoinicio de Xiaomi.
+  Ahora **el administrador se pide el último**, con «Activar y bloquear», y hasta entonces nada
+  queda fijo.
+- **Apps bloqueadas:** X / Twitter, Tor Browser, Orbot y Aloha se cierran al abrirse. Como
+  propietaria, X se oculta.
 
 ## Rendimiento
 
@@ -94,6 +136,17 @@ El filtro no debe notarse. Lo que hace para conseguirlo:
 - **Prioridad de los hilos del DNS.** El lector del túnel y el receptor de respuestas
   (y los hilos de DNS por TCP) corren con prioridad de primer plano: todas las conexiones
   del teléfono esperan por ellos y no deben perder la CPU frente a trabajo en segundo plano.
+- **Release, no depuración.** CI publica la compilación **release** (R8 activado, no
+  «debuggable»): una app depurable corre con menos optimización de ART y el DNS y el guardián lo
+  notan. Va firmada con la clave de depuración fija, así que se instala encima de la anterior.
+- **Un solo recorrido por pasada.** El guardián recorre la ventana una vez y recoge todo lo que
+  necesita (textos, ids, barra de direcciones) en lugar de un recorrido por cada pregunta.
+- **Autómata Aho–Corasick** para reconocer las frases de los 27 idiomas: una sola lectura de cada
+  texto, sin importar cuántas frases haya.
+- **Precarga del árbol en Android 13+** (`FLAG_PREFETCH_DESCENDANTS_HYBRID`): menos viajes entre
+  procesos que pedir nodo a nodo.
+- **Comprobación del administrador en caché** (es una llamada entre procesos y se pedía en cada
+  evento) y **memoria del filtro DNS** de los dominios ya decididos.
 
 Lo que no depende de la app: la primera visita a cada dominio espera la respuesta de
 CleanBrowsing, que según dónde estés puede estar más lejos que el DNS de tu
@@ -136,9 +189,9 @@ código anterior):
   respuesta sólo vale si viene de un servidor al que se preguntó, es de la misma pregunta
   (nombre, tipo y clase, sin distinguir mayúsculas) y todavía hay quien la espera; si no lo es,
   no gasta la consulta.
-- **Respuestas cortadas (TC).** El túnel no sirve DNS por TCP, así que cuando el resolutor cortaba
-  una respuesta, la búsqueda fallaba. Ahora se repite por TCP contra quien contestó y se entrega
-  completa.
+- **Respuestas cortadas (TC).** Cuando el resolutor cortaba una respuesta, la búsqueda fallaba. Ahora
+  se repite por TCP contra quien contestó y se entrega completa; en la 4.0 el túnel además atiende
+  él mismo el DNS por TCP.
 - **Choque de subredes.** El túnel usaba siempre 10.255.255.0/24; si el Wi-Fi o la red del operador
   usaba esa subred, el teléfono dejaba de ver a su propio router. Ahora se mira qué redes hay en
   uso y se elige una libre (10.255.255 → 172.31.255 → 198.18.255 → 192.0.2).
@@ -174,47 +227,78 @@ La pantalla principal muestra el tiempo medio del DNS y avisa cuando más de la 
 
 ## Instalar
 
-CI publica `Secret-Savior.apk` en la release `latest`. En Android 13+, si lo
-instalas a mano: **Información de la app → ⋮ → Permitir ajustes restringidos**
-antes de activar la accesibilidad. La app te guía en cuatro pasos y exige escribir
-una frase de compromiso antes de activar.
+CI publica `Secret-Savior.apk` (release) en la release `latest`. En Android 13+, si lo instalas
+a mano: **Información de la app → ⋮ → Permitir ajustes restringidos** antes de activar la
+accesibilidad. La app te guía en pasos y exige escribir una frase de compromiso antes de activar;
+el administrador se pide al final.
+
+### Actualizar desde la 3.x
+
+Se instala encima (misma clave de firma). Las piezas nuevas no se conceden solas. Si ya estaba
+bloqueada, concédelas desde los botones de la pantalla principal, que abren una **ventana de
+gracia** breve (2 minutos) sólo para esa pantalla: acceso a notificaciones, batería, VPN siempre
+activa y «Pausar la actividad si no se usa». Esas ventanas nunca dejan ver la ficha de la app con
+sus botones, el administrador, Accesibilidad ni la desinstalación.
+
+**No actives «Bloquear conexiones sin VPN»**: el túnel sólo lleva DNS y el teléfono se quedaría
+sin internet. La app avisa si está activado.
+
+### Autocuración (opcional, recomendada)
+
+Un permiso que se concede una vez por ADB:
+
+```
+adb shell pm grant com.secretsavior android.permission.WRITE_SECURE_SETTINGS
+```
+
+O sin ordenador, con el botón «Autocuración» de la app (depuración inalámbrica: el código de
+vinculación se escribe en una notificación con campo de respuesta).
+
+### Propietaria del dispositivo (opcional, de ida)
+
+Quita la pega de forzar la detención y del modo seguro, pero **sólo se deshace restableciendo de
+fábrica desde recovery**. Requisitos:
+
+- Quitar temporalmente **todas** las cuentas (Ajustes → Cuentas: Google, Xiaomi y las de apps
+  como WhatsApp o Telegram).
+- Sin «Segundo espacio» ni «Apps duales» ni usuarios extra.
+- En Xiaomi, activar «Depuración USB (ajustes de seguridad)» en Opciones de desarrollador.
+
+```
+adb shell dpm set-device-owner com.secretsavior/.guard.AdminReceiver
+```
+
+También sin ordenador desde la app («Blindaje total»). Después, volver a añadir las cuentas.
 
 ## Lo que no hace (honestidad)
 
-Ningún bloqueo en el propio teléfono es imposible de quitar, y esta app no finge
-lo contrario:
+Ningún bloqueo en el propio teléfono es imposible de quitar, y esta app no finge lo contrario:
 
-- **Restablecer de fábrica** lo quita, como cualquier otra app.
-- **Modo seguro** (mantener «Apagar» en el menú de apagado): en él no corre
-  ninguna app de terceros, tampoco el guardián, y desde Ajustes se puede quitar el
-  administrador y desinstalar. Es el punto débil más fácil y una app normal no
-  puede cerrarlo; sólo una app «propietaria del dispositivo» podría (ver abajo).
-- Con un ordenador y **ADB** se puede apagar el guardián
-  (`settings put secure enabled_accessibility_services …`) y después quitar el
-  administrador desde Ajustes. `adb uninstall` a secas falla mientras sea
-  administradora.
-- Crear **otro usuario o un invitado** en el teléfono da un espacio sin filtro.
-- Otro navegador/app con **DNS-sobre-HTTPS por IP fija** o una **VPN** de terceros
-  evita el filtro DNS. Una VPN ajena le quita el puesto a la nuestra y los
-  navegadores se cierran hasta recuperarlo; una app con DoH propio por IP no se
-  detecta.
-- El filtro de URL del guardián sólo entiende las barras de direcciones de los
-  navegadores conocidos; la lista de palabras es amplia pero no perfecta (puede
-  bloquear algo inocente y dejar pasar algo).
-- No filtra el contenido de imágenes o vídeo dentro de apps (redes sociales,
-  etc.): bloquea sitios y búsquedas, no lo que una app decida mostrar.
-- **Netflix** se excluye del túnel por completo (su DNS incluido): detecta cualquier
-  VPN activa, sea cual sea su propósito, y se niega a reproducir si no. El filtro de
-  contenido no le llega, pero no es una vía de pornografía. Si otra app da el mismo
-  problema, se le puede añadir la misma excepción.
-
-Una versión más dura existe: si la app fuera **propietaria del dispositivo**
-(`adb shell dpm set-device-owner`, sólo en un teléfono sin cuentas añadidas)
-podría prohibir el modo seguro, el restablecimiento desde Ajustes, otros usuarios
-y otras VPN. Esta versión todavía no lo hace.
-
-Por eso el método real es **combinarlo con una persona**: cuéntaselo a alguien de
-confianza. La app sube mucho el esfuerzo; la otra mitad es humana.
+- **Restablecer de fábrica desde recovery** lo quita siempre, también como propietaria.
+- **Sin propietaria del dispositivo:**
+  - **Modo seguro** (mantener «Apagar»): no corre ninguna app de terceros, y desde Ajustes se puede
+    quitar el administrador y desinstalar.
+  - **ADB**: con un ordenador se puede apagar el guardián o quitar el administrador. Sólo lo cierran
+    las opciones de desarrollador cerradas (de ida) o, como propietaria, la prohibición de ADB.
+  - **Forzar detención**: queda una ventana de unos segundos hasta la resurrección. Ésta depende de
+    que el sistema reenlace el oyente de notificaciones y, en Xiaomi, del autoinicio; **hay que
+    verificarlo en el propio teléfono**, no está garantizado en todas las ROM.
+  - Crear otro usuario o invitado: da un espacio sin filtro (el guardián cierra esas pantallas).
+- **DoH/DoT a IP que no están en la lista** de resolutores conocidos no se captura.
+- **Proxies configurados dentro de apps**, y navegadores con proxy o VPN propios (el de Opera, por
+  ejemplo), sacan el DNS del teléfono. Una VPN ajena le quita el puesto a la nuestra y los
+  navegadores se cierran hasta recuperarlo.
+- El filtro de URL del guardián sólo entiende las barras de direcciones de navegadores conocidos;
+  la lista de palabras es amplia pero no perfecta.
+- **No filtra imágenes ni vídeo dentro de apps** (redes sociales, etc.): bloquea sitios y búsquedas,
+  no lo que una app decida mostrar.
+- **Netflix** se excluye del túnel por completo (su DNS incluido): detecta cualquier VPN y se niega a
+  reproducir si no. No es una vía de pornografía.
+- **Quien controle el repositorio puede saltarse el bloqueo.** `debug.keystore` está commiteado, así
+  que quien tenga acceso al repositorio puede compilar y firmar una actualización con esa clave e
+  instalarla encima, sin pasar por el bloqueo. La salvaguarda real es la persona a quien se lo
+  cuentas: **cuéntaselo a alguien de confianza.** La app sube mucho el esfuerzo; la otra mitad es
+  humana.
 
 ## Privacidad
 
@@ -230,8 +314,13 @@ confianza. La app sube mucho el esfuerzo; la otra mitad es humana.
 
 ```
 ./gradlew :savior:assembleDebug
-./gradlew :savior:testDebugUnitTest   # filtro, paquetes DNS/IP y reglas de texto
+./gradlew :savior:assembleRelease     # la que publica CI (R8)
+./gradlew :savior:testDebugUnitTest   # filtro, paquetes DNS/IP, reglas de texto y de pantalla
 ```
 
-La lógica sin Android (`DnsFilter`, `DnsPacket`, `IpPacket`, `ContentRules`) está
-aislada para poder probarla suelta.
+La lógica sin Android (`DnsFilter`, `DnsPacket`, `IpPacket`, `Resolvers`, `ContentRules`, `Policy`,
+`Matcher`, `BackendLogic`) está aislada para poder probarla suelta.
+
+El manifiesto declara en `<queries>` los paquetes y los intents que la app consulta (Android 11+):
+sin ellos no se leen los textos de Ajustes ni se reconoce X, el lanzador o el teléfono. No usa
+`QUERY_ALL_PACKAGES`.
