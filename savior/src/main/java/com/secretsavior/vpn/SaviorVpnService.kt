@@ -24,7 +24,10 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.Inet4Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.util.concurrent.ScheduledThreadPoolExecutor
+import java.util.concurrent.TimeUnit
 
 /**
  * Filtro DNS local. No es una VPN de verdad: ningún dato viaja por un servidor
@@ -48,6 +51,12 @@ class SaviorVpnService : VpnService() {
     /** Los bytes de la dirección del "servidor DNS" de este túnel (la subred se elige al arrancar). */
     @Volatile
     private var dnsBytes = Subnets.CANDIDATES.first().dnsBytes
+
+    private val pipeline = DnsPipeline({ forwarder }, { Store.countBlock(this) })
+
+    /** Barrido de conexiones DNS-sobre-TCP inactivas; el hilo sólo existe mientras las hay. */
+    @Volatile
+    private var sweeper: ScheduledThreadPoolExecutor? = null
 
     /** Lo destruye el sistema: el hilo lector no debe llamar a stopSelf sobre un servicio ya relanzado. */
     @Volatile
@@ -84,33 +93,17 @@ class SaviorVpnService : VpnService() {
         if (running) return
         DnsFilter.extra = Store.extraDomains(this)
         val subnet = chooseSubnet()
-        val builder = Builder()
-            .setSession("Secret Savior")
-            .setMtu(1500)
-            // Por defecto el descriptor del túnel es no bloqueante: read() devuelve 0 al
-            // instante si no hay nada y el bucle lector giraría sin parar con un núcleo al 100 %.
-            .setBlocking(true)
-            .addAddress(subnet.address, 24)
-            .addDnsServer(subnet.dns)
-            .addRoute(subnet.network, 24)
-            // Imprescindible. Este túnel sólo declara IPv4, y Android, ante una VPN sin nada de
-            // una familia, da por hecho que no la soporta y BLOQUEA todo el tráfico de esa
-            // familia: sin esta línea ninguna app del teléfono puede usar IPv6. En redes móviles
-            // sólo IPv6 eso manda todo por la traducción a IPv4 (464XLAT), más lenta.
-            .allowFamily(OsConstants.AF_INET)
-            .allowFamily(OsConstants.AF_INET6)
-            .setConfigureIntent(
-                PendingIntent.getActivity(
-                    this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
-                ),
-            )
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
-        excludeFromTunnel(builder)
-        val established = try {
-            builder.establish()
-        } catch (e: Exception) {
-            Log.w(TAG, "establish falló", e)
-            null
+        // Con las direcciones IPv6 de los resolutores públicos; si el sistema las rechaza (algún
+        // fabricante), un segundo intento sin ellas: el filtro por IPv4 es lo imprescindible.
+        var established: ParcelFileDescriptor? = null
+        for (withV6 in booleanArrayOf(true, false)) {
+            established = try {
+                buildTunnel(subnet, withV6).establish()
+            } catch (e: Exception) {
+                Log.w(TAG, "establish falló (v6=$withV6)", e)
+                null
+            }
+            if (established != null) break
         }
         val pfd = established ?: run {
             failures++
@@ -142,8 +135,6 @@ class SaviorVpnService : VpnService() {
             return
         }
         failures = 0
-        alwaysOn = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) isAlwaysOn else null
-        lockdown = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) isLockdownEnabled else null
         forwarder = fwd
         dnsBytes = subnet.dnsBytes
         tun = pfd
@@ -151,6 +142,45 @@ class SaviorVpnService : VpnService() {
         running = true
         watchNetworks()
         reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
+    }
+
+    private fun buildTunnel(subnet: Subnets.Candidate, withV6: Boolean): Builder {
+        val builder = Builder()
+            .setSession("Secret Savior")
+            .setMtu(1500)
+            // Por defecto el descriptor del túnel es no bloqueante: read() devuelve 0 al
+            // instante si no hay nada y el bucle lector giraría sin parar con un núcleo al 100 %.
+            .setBlocking(true)
+            .addAddress(subnet.address, 24)
+            .addDnsServer(subnet.dns)
+            .addRoute(subnet.network, 24)
+            // Imprescindible. Este túnel sólo declara IPv4, y Android, ante una VPN sin nada de
+            // una familia, da por hecho que no la soporta y BLOQUEA todo el tráfico de esa
+            // familia: sin esta línea ninguna app del teléfono puede usar IPv6. En redes móviles
+            // sólo IPv6 eso manda todo por la traducción a IPv4 (464XLAT), más lenta.
+            .allowFamily(OsConstants.AF_INET)
+            .allowFamily(OsConstants.AF_INET6)
+            .setConfigureIntent(
+                PendingIntent.getActivity(
+                    this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE,
+                ),
+            )
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) builder.setMetered(false)
+        // DNS público por IP (DoH/DoT/DNS clásico): al túnel, donde se filtra o se rechaza.
+        // Rutas sueltas, nunca por defecto: el resto del tráfico sigue su camino normal.
+        // IPv6 necesita una dirección propia para poder declarar rutas: una ULA fija (RFC 4193,
+        // no enrutable en internet) que no se usa para nada más. Sin ruta ni DNS v6 por defecto.
+        if (withV6) builder.addAddress(TUN_ULA, 64)
+        for (r in resolverTable.routes) {
+            if (r.v6 && !withV6) continue
+            try {
+                builder.addRoute(r.inet, r.prefix)
+            } catch (e: Exception) {
+                Log.w(TAG, "ruta rechazada", e) // una ruta de más no vale un túnel caído
+            }
+        }
+        excludeFromTunnel(builder)
+        return builder
     }
 
     /**
@@ -236,6 +266,11 @@ class SaviorVpnService : VpnService() {
         try { Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND) } catch (e: Exception) { }
         val input = FileInputStream(pfd.fileDescriptor)
         val output = FileOutputStream(pfd.fileDescriptor)
+        val tcp = TcpDns(
+            send = { write(output, it) },
+            resolve = { q, done -> pipeline.resolve(q, done) },
+            schedule = { delay, task -> scheduleSweep(delay, task) },
+        )
         val buf = ByteArray(32767)
         try {
             while (!Thread.currentThread().isInterrupted) {
@@ -243,7 +278,7 @@ class SaviorVpnService : VpnService() {
                 if (n < 0) break
                 if (n > 0) {
                     try {
-                        handle(buf, n, output)
+                        handle(buf, n, output, tcp)
                     } catch (e: Exception) {
                         // Un paquete raro no puede tumbar el túnel: se rehace con un parón de
                         // todas las conexiones del teléfono (cada VPN nueva las corta).
@@ -263,82 +298,79 @@ class SaviorVpnService : VpnService() {
         if (!destroyed) stopSelf()
     }
 
-    private fun handle(buf: ByteArray, n: Int, out: FileOutputStream) {
-        if (n < 28 || (buf[0].toInt() and 0xF0) shr 4 != 4) return
-        val ihl = (buf[0].toInt() and 0x0F) * 4
-        if (n < ihl + 8) return
-        val dns = dnsBytes
-        for (i in 0..3) if (buf[16 + i] != dns[i]) return
+    private fun scheduleSweep(delayMs: Long, task: Runnable) {
+        if (destroyed) return
+        val ex = sweeper ?: synchronized(this) {
+            sweeper ?: ScheduledThreadPoolExecutor(1) { r -> Thread(r, "savior-tcp-sweep").apply { isDaemon = true } }
+                .apply {
+                    setKeepAliveTime(10, TimeUnit.SECONDS)
+                    allowCoreThreadTimeOut(true)
+                }.also { sweeper = it }
+        }
+        try {
+            ex.schedule(task, delayMs, TimeUnit.MILLISECONDS)
+        } catch (e: Exception) {
+            // cerrándose el servicio
+        }
+    }
 
-        when (buf[9].toInt() and 0xFF) {
+    /**
+     * Al túnel sólo llegan paquetes para la dirección del "servidor DNS" propio y para las de
+     * [resolverTable]. Primero una comprobación sin asignar nada (el 99 % de lo que se lee); sólo
+     * lo que de verdad nos toca se analiza.
+     */
+    private fun handle(buf: ByteArray, n: Int, out: FileOutputStream, tcp: TcpDns) {
+        val own: Boolean
+        val captured: Boolean
+        when ((buf[0].toInt() and 0xF0) shr 4) {
+            4 -> {
+                if (n < 28) return
+                val dns = dnsBytes
+                own = buf[16] == dns[0] && buf[17] == dns[1] && buf[18] == dns[2] && buf[19] == dns[3]
+                captured = !own && resolverTable.containsV4(
+                    ((buf[16].toInt() and 0xFF) shl 24) or ((buf[17].toInt() and 0xFF) shl 16) or
+                        ((buf[18].toInt() and 0xFF) shl 8) or (buf[19].toInt() and 0xFF),
+                )
+            }
+            6 -> {
+                if (n < 48) return
+                own = false
+                captured = resolverTable.containsV6(Resolvers.long(buf, 24), Resolvers.long(buf, 32))
+            }
+            else -> return
+        }
+        if (!own && !captured) return
+        val p = IpPacket.parse(buf, n) ?: return
+
+        when (p.proto) {
             IpPacket.PROTO_UDP -> {
-                val port = ((buf[ihl + 2].toInt() and 0xFF) shl 8) or (buf[ihl + 3].toInt() and 0xFF)
-                if (port != 53) return
-                val udpLen = ((buf[ihl + 4].toInt() and 0xFF) shl 8) or (buf[ihl + 5].toInt() and 0xFF)
-                val len = minOf(udpLen - 8, n - ihl - 8)
+                if (p.l4Len < 8 || n < p.l4 + 8) return
+                val port = IpPacket.u16(buf, p.l4 + 2)
+                if (port != 53) {
+                    // QUIC (443) o DNS-sobre-QUIC (853) a un resolutor público: "puerto inaccesible"
+                    // y la app vuelve a TCP/DNS normal al instante. Al DNS propio no se contesta.
+                    if (captured) IpPacket.icmpPortUnreachable(buf, n, p)?.let { write(out, it) }
+                    return
+                }
+                val len = minOf(IpPacket.u16(buf, p.l4 + 4) - 8, n - p.l4 - 8)
                 if (len <= 0) return
-                val header = buf.copyOf(ihl + 8)
-                val query = buf.copyOfRange(ihl + 8, ihl + 8 + len)
-                answer(header, ihl, query, out)
+                val header = buf.copyOf(p.l4 + 8)
+                val query = buf.copyOfRange(p.l4 + 8, p.l4 + 8 + len)
+                pipeline.resolve(query) { reply ->
+                    if (reply != null) write(out, IpPacket.udpReply(header, p, reply))
+                }
             }
 
-            IpPacket.PROTO_TCP -> IpPacket.tcpReset(buf, n, ihl)?.let { write(out, it) }
-        }
-    }
+            IpPacket.PROTO_TCP -> {
+                if (p.l4Len < 20 || n < p.l4 + 20) return
+                // 53: un servidor DNS de verdad. 853 (DoT) y 443 (DoH) y todo lo demás: RST, para
+                // que Android y los navegadores vuelvan al DNS normal sin esperar.
+                if (IpPacket.u16(buf, p.l4 + 2) == 53) tcp.onPacket(buf, n, p)
+                else IpPacket.tcpReset(buf, n, p)?.let { write(out, it) }
+            }
 
-    /**
-     * Lo bloqueado se contesta aquí mismo, sin salir del teléfono. Lo demás se entrega al
-     * reenviador, que no bloquea este hilo: el lector del túnel sigue leyendo mientras
-     * las respuestas llegan.
-     */
-    private fun answer(header: ByteArray, ihl: Int, query: ByteArray, out: FileOutputStream) {
-        val q = DnsPacket.parseQuestion(query)
-        if (q != null && DnsFilter.isCanary(q.name)) {
-            write(out, IpPacket.udpReply(header, ihl, DnsPacket.nxdomain(query, q)))
-            return
-        }
-        if (q != null && DnsFilter.isBlocked(q.name)) {
-            if (q.type == DnsPacket.TYPE_A) Store.countBlock(this)
-            write(out, IpPacket.udpReply(header, ihl, DnsPacket.blocked(query, q)))
-            return
-        }
-        val safe = q?.let { SafeSearch.target(it.name) }
-        if (q != null && safe != null) {
-            answerSafeSearch(header, ihl, query, q, safe, out)
-            return
-        }
-        val fwd = forwarder
-        if (fwd == null) {
-            // No debería pasar; si pasa, un error al momento es mejor que 5 s de espera por consulta.
-            q?.let { write(out, IpPacket.udpReply(header, ihl, DnsPacket.servfail(query, it))) }
-            return
-        }
-        fwd.query(query) { response ->
-            val reply = response ?: q?.let { DnsPacket.servfail(query, it) }
-            if (reply != null) write(out, IpPacket.udpReply(header, ihl, reply))
-        }
-    }
-
-    /**
-     * Un buscador: se resuelve su nombre de búsqueda segura y se contesta con esas direcciones.
-     * Los demás tipos de registro (HTTPS/SVCB, que podrían señalar a otros servidores) se
-     * contestan vacíos. Si el nombre seguro no resuelve, falla: nunca el buscador sin filtrar.
-     */
-    private fun answerSafeSearch(
-        header: ByteArray, ihl: Int, query: ByteArray, q: DnsPacket.Question, safe: String, out: FileOutputStream,
-    ) {
-        if (q.type != DnsPacket.TYPE_A && q.type != DnsPacket.TYPE_AAAA) {
-            write(out, IpPacket.udpReply(header, ihl, DnsPacket.blocked(query, q))) // sin registros
-            return
-        }
-        val fwd = forwarder
-        if (fwd == null) {
-            write(out, IpPacket.udpReply(header, ihl, DnsPacket.servfail(query, q)))
-            return
-        }
-        fwd.query(DnsPacket.query(safe, q.type)) { response ->
-            val reply = response?.let { DnsPacket.retarget(query, q, it) } ?: DnsPacket.servfail(query, q)
-            write(out, IpPacket.udpReply(header, ihl, reply))
+            IpPacket.PROTO_ICMP, IpPacket.PROTO_ICMP6 ->
+                IpPacket.icmpEchoReply(buf, n, p)?.let { write(out, it) }
         }
     }
 
@@ -371,6 +403,8 @@ class SaviorVpnService : VpnService() {
             }
         }
         networkCallback = null
+        sweeper?.shutdownNow()
+        sweeper = null
         forwarder?.close()
         forwarder = null
         try {
@@ -446,15 +480,35 @@ class SaviorVpnService : VpnService() {
         var running = false
             private set
 
-        /** Si el sistema la tiene como «VPN siempre activa» (Android 10+); null si no se sabe. */
-        @Volatile
-        var alwaysOn: Boolean? = null
-            private set
+        /**
+         * Si el sistema la tiene como «VPN siempre activa» (Android 10+); null si no se sabe. Se
+         * pregunta al servicio vivo cada vez: activarla en Ajustes no reinicia el servicio, y
+         * guardarla sólo al arrancar la dejaría siempre desactualizada.
+         */
+        val alwaysOn: Boolean?
+            get() = ask { it.isAlwaysOn }
 
-        /** «Bloquear conexiones sin VPN» (Android 10+); null si no se sabe. */
-        @Volatile
-        var lockdown: Boolean? = null
-            private set
+        /** «Bloquear conexiones sin VPN» (Android 10+); null si no se sabe. También en vivo. */
+        val lockdown: Boolean?
+            get() = ask { it.isLockdownEnabled }
+
+        private fun ask(f: (SaviorVpnService) -> Boolean): Boolean? {
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+            val svc = current ?: return null
+            return try {
+                f(svc)
+            } catch (e: Exception) {
+                null // algún fabricante lo rechaza; "no se sabe" no bloquea a nadie
+            }
+        }
+
+        /** Resolutores públicos a capturar: todos menos los aguas arriba de [PRIMARY] y [FALLBACK]. */
+        private val resolverTable: Resolvers.Table by lazy {
+            Resolvers.build((PRIMARY + FALLBACK).mapNotNull { it.address })
+        }
+
+        /** Dirección ULA (RFC 4193) del túnel: sólo existe para poder declarar rutas IPv6. */
+        private const val TUN_ULA = "fd53:5a76:7230::2"
 
         /** Intentos seguidos en que establish() no dio túnel. */
         @Volatile
