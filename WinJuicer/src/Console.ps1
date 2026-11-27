@@ -2044,6 +2044,11 @@ function Start-Juicer {
     if ($Importar) {
         try { $imported = Read-JuicerConfig $Importar } catch { Write-Host "  $_" -ForegroundColor Red; return 2 }
         if ($imported.Unknown.Count -gt 0) { Write-Host "  Se ignora lo que esta versión no conoce: $($imported.Unknown -join ', ')" -ForegroundColor Yellow }
+        # As in the window: an app this PC relies on (Game Bar on a dual-CCD X3D, Feedback Hub on
+        # Insider) is not removed because another PC's file says so.
+        $split = Split-JuicerImportApps $imported.Apps (Get-JuicerHardwareProfile)
+        if ($split.Needed.Count -gt 0) { Write-Host ("  No se quitarán estas apps: tu equipo las usa.`n  " + ($split.Needed -join "`n  ")) -ForegroundColor Yellow }
+        $imported.Apps = @($split.Keep)
     }
     if ($Equipo) { Show-JuicerEquipo; return 0 }
     if ($Instalar.Count -gt 0) {

@@ -67,7 +67,10 @@ function Get-JuicerRamFindings {
         }
     } elseif ($Modules.Count -eq 2) {
         $channels = @($Modules | ForEach-Object { Get-JuicerMemoryChannel ("$($_.DeviceLocator) $($_.BankLabel)") })
-        if ($channels.Count -eq 2 -and $channels[0] -and $channels[0] -eq $channels[1]) {
+        # DDR5 boards say «Controller0-ChannelA» and «Controller1-ChannelA» for a correct pair: one
+        # channel letter per memory controller.
+        $ctrls = @($Modules | ForEach-Object { if ("$($_.DeviceLocator) $($_.BankLabel)" -match '(?i)controller\s*(\d+)') { $Matches[1] } else { '' } })
+        if ($channels.Count -eq 2 -and $channels[0] -and $channels[0] -eq $channels[1] -and $ctrls[0] -eq $ctrls[1]) {
             $out += New-JuicerFinding $area 'Alto' "Los dos módulos parecen estar en el mismo canal ($($channels[0]))" 'Así trabajan como si fueran uno: mitad de ancho de banda. Muévelos a las ranuras que indica el manual de la placa, normalmente A2 y B2.'
         }
     }

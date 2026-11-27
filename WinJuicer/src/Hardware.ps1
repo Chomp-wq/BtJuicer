@@ -142,7 +142,8 @@ function Get-JuicerGpuTraits {
     if ($Name -match 'NVIDIA|GeForce|Quadro|RTX|Tesla') {
         $g.Vendor = 'NVIDIA'; $g.Discrete = $true
         $g.Rtx = $Name -match 'RTX'
-        if ($Name -match '(?:RTX|GTX|GT|MX)\s*(\d{1,2})(\d{2})\b') { $g.Series = [int]$Matches[1] }
+        # MX and workstation cards (Quadro, RTX A4000, RTX 4000 Ada) number models, not GeForce generations.
+        if ($Name -notmatch '\bMX\s*\d|Quadro|\bRTX\s*A\d|Ada Generation|\bRTX\s*PRO\b' -and $Name -match '(?:RTX|GTX|GT)\s*(\d{1,2})(\d{2})\b') { $g.Series = [int]$Matches[1] }
         # Hardware scheduling: GTX 10 and later. Frame generation: RTX 40 and later.
         if ($null -ne $g.Series) { $g.Hags = $g.Series -ge 10 -and $Name -notmatch '\bMX\s*\d'; $g.FrameGen = $g.Rtx -and $g.Series -ge 40 }
         # Maxwell, Pascal and older (GTX 10 and below) are on NVIDIA's legacy branch: no regular drivers.
@@ -150,7 +151,8 @@ function Get-JuicerGpuTraits {
     } elseif ($Name -match 'AMD|Radeon|ATI') {
         $g.Vendor = 'AMD'
         # «Radeon(TM) RX Vega 11 Graphics» is an APU's integrated GPU despite the RX.
-        if ($Name -match 'Radeon(?:\(TM\))?\s*(?:RX|Pro|VII)' -and $Name -notmatch '\bVega\s*\d+\s*Graphics') { $g.Discrete = $true }
+        # Also «Radeon (TM) RX 480» (a space before the TM) and the R9/R7 cards; an APU's «HD 8610G» is not.
+        if ($Name -match 'Radeon\s*(?:\(TM\)\s*)?(?:RX|Pro|VII|R[579]\s*\d{3}|R9\s*Fury|HD\s*\d{4}(?![DG]))' -and $Name -notmatch '\bVega\s*\d+\s*Graphics') { $g.Discrete = $true }
         if ($Name -match '\bRX\s*(\d)(\d{2,3})\b') {
             # RX 5700 is gen 5; RX 580, three digits, is older than all of them.
             $g.Series = if ($Matches[2].Length -eq 3) { [int]$Matches[1] } else { 0 }
@@ -202,6 +204,8 @@ function Get-JuicerRamRating {
     foreach ($r in $rules) {
         if ($p -match $r.P) {
             $speed = [int]$Matches[1] * $r.M
+            # Two digits stand for the JEDEC speeds that are not round hundreds: 26 is 2666, 29 is 2933.
+            if ($r.M -eq 100) { $speed = switch ($speed) { 2100 { 2133 } 2600 { 2666 } 2900 { 2933 } 3700 { 3733 } 5300 { 5333 } default { $speed } } }
             if ($speed -ge 1066 -and $speed -le 12000) { return @{ Speed = $speed; Xmp = $r.X; Brand = $r.B; PartNumber = $p } }
         }
     }

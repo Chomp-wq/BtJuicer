@@ -103,7 +103,8 @@ function Invoke-JuicerUpkeep {
     # A new game with an anti-cheat is not paced by RivaTuner (Invoke-JuicerGameSetup says NoAplica): it was left alone, not optimized.
     $left = @($results | Where-Object { $_.Outcome -eq 'NoAplica' } | ForEach-Object { $_.Id })
     $anti = @($plan.New | Where-Object { $left -contains "juego:$($_.ExeName)" -and -not (Get-JuicerGameSafe $_.ExeName) })
-    $done = @($plan.New | Where-Object { -not (Get-JuicerGameSafe $_.ExeName) -and $left -notcontains "juego:$($_.ExeName)" })
+    # Only what was set up: not a game left for the next run (no FPS engine yet, or its setup failed).
+    $done = @($plan.New | Where-Object { $failed -notcontains $_.Id -and -not (Get-JuicerGameSafe $_.ExeName) -and $left -notcontains "juego:$($_.ExeName)" })
     if ($done.Count -gt 0) { $msg += 'Juegos nuevos optimizados: ' + (($done | ForEach-Object { $_.Name }) -join ', ') + '.' }
     if ($anti.Count -gt 0) { $msg += 'Sin frame pacer por su antitrampas (RivaTuner se inyecta): ' + (($anti | ForEach-Object { $_.Name }) -join ', ') + '. Usa el límite de FPS del propio juego.' }
     if ($plan.Recalc) { $msg += 'Ha cambiado tu monitor o cómo lo usas: frame pacer recalculado.' }
