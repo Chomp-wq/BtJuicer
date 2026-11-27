@@ -836,8 +836,8 @@ Describe 'Hardware: correcciones de la revisión' {
 
     It 'dos módulos DDR5 en canales A de controladores distintos están en doble canal' {
         $mods = @(
-            @{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 4800; SMBIOSMemoryType = 34; DeviceLocator = 'Controller0-ChannelA-DIMM1'; BankLabel = 'BANK 0'; PartNumber = '' }
-            @{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 4800; SMBIOSMemoryType = 34; DeviceLocator = 'Controller1-ChannelA-DIMM1'; BankLabel = 'BANK 0'; PartNumber = '' }
+            [pscustomobject]@{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 4800; SMBIOSMemoryType = 34; DeviceLocator = 'Controller0-ChannelA-DIMM1'; BankLabel = 'BANK 0'; PartNumber = '' }
+            [pscustomobject]@{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 4800; SMBIOSMemoryType = 34; DeviceLocator = 'Controller1-ChannelA-DIMM1'; BankLabel = 'BANK 0'; PartNumber = '' }
         )
         @(Get-JuicerRamFindings $mods $false | Where-Object { $_.Title -like '*mismo canal*' }).Count | Should -Be 0
         $mods[1].DeviceLocator = 'Controller0-ChannelA-DIMM2'
