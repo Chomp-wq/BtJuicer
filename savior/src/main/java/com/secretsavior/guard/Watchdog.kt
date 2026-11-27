@@ -22,10 +22,14 @@ object Watchdog {
      * Levanta todo lo que se haya caído. Devuelve false si hace falta el usuario.
      * Cada parte va aparte: que una falle no impide las demás.
      */
-    fun ensure(c: Context): Boolean {
+    fun ensure(c: Context): Boolean =
+        // Sin poder saber el estado no se da por roto nada: así tampoco se molesta al usuario.
+        safelyOr("watchdog", true) { ensureInner(c) }
+
+    private fun ensureInner(c: Context): Boolean {
         if (!Store.isLocked(c)) return true
         val app = c.applicationContext
-        schedule(app)
+        guarded("alarma") { schedule(app) }
         val ok = ensureVpn(app)
         guarded("autocuración") {
             SelfHeal.watch(app)
@@ -46,12 +50,13 @@ object Watchdog {
 
     private fun ensureVpn(c: Context): Boolean {
         if (SaviorVpnService.running) return true
-        if (VpnService.prepare(c) != null) return false // otra VPN le quitó el permiso
+        // prepare() habla con el sistema y puede lanzar: sin saberlo se avisa como si faltara.
+        if (safelyOr("permiso de VPN", Any()) { VpnService.prepare(c) } != null) return false // otra VPN le quitó el permiso
         return try {
             val i = Intent(c, SaviorVpnService::class.java)
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) c.startForegroundService(i) else c.startService(i)
             true
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // Android 12+ lanza ForegroundServiceStartNotAllowedException desde segundo plano si
             // la app no está exenta de batería: no se puede arrancar solo, se avisa.
             Log.w(TAG, "no se pudo arrancar el filtro", e)
@@ -109,7 +114,7 @@ object Watchdog {
                 // Volver tras cerrar la app sí corre prisa.
                 am.setAndAllowWhileIdle(AlarmManager.ELAPSED_REALTIME_WAKEUP, at, pi)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "no se pudo programar la alarma", e)
         }
     }
@@ -118,14 +123,16 @@ object Watchdog {
      * Trae la app al frente para que el usuario repare lo que falta. Desde Android 10 el sistema
      * no deja abrir actividades desde segundo plano (y no lo dice), así que además va un aviso.
      */
-    fun nag(c: Context) {
+    fun nag(c: Context) = safely("aviso al usuario") { nagInner(c) }
+
+    private fun nagInner(c: Context) {
         var failed = false
         try {
             c.startActivity(
                 Intent(c, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT),
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             failed = true
             Log.w(TAG, "no se pudo abrir la app", e)
         }

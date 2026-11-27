@@ -59,7 +59,29 @@ class GuardService : AccessibilityService() {
     private var deferredQueued = false
     private val deferred = Runnable {
         deferredQueued = false
-        deferredPkg?.let(::check)
+        guarded("comprobación diferida") { deferredPkg?.let(::check) }
+    }
+
+    /**
+     * Todo lo que entra al guardián (eventos, Runnables, receptores, toques) pasa por aquí: una
+     * excepción no puede llegar al sistema porque mataría el proceso, y con él el túnel VPN. Si hay
+     * una capa grande puesta se vuelve a armar su tope, que es lo único que no puede quedar sin
+     * programar: atascada, dejaría el teléfono sin poder tocarse.
+     */
+    private inline fun guarded(where: String, block: () -> Unit) {
+        try {
+            block()
+        } catch (t: Throwable) {
+            if (t is java.util.concurrent.CancellationException) throw t
+            Safe.failed(where, t)
+            safely("rearmar tope") { rearmCoverTimeout() }
+        }
+    }
+
+    private fun rearmCoverTimeout() {
+        if (cover == null) return
+        handler.removeCallbacks(coverTimeout)
+        handler.postDelayed(coverTimeout, maxOf(0L, coverDeadline - SystemClock.elapsedRealtime()))
     }
 
     /**
@@ -80,7 +102,7 @@ class GuardService : AccessibilityService() {
     private val power by lazy { getSystemService(PowerManager::class.java) }
 
     /** Hilo para lo que no debe ir en el principal: preguntar por navegadores, leer recursos. */
-    private val bg: ExecutorService by lazy { Executors.newSingleThreadExecutor() }
+    private val bg: ExecutorService by lazy { Executors.newSingleThreadExecutor(NamedThreads("savior-guard-bg")) }
 
     /**
      * En vez de suscribirse a los cambios de contenido del navegador (la web los emite sin
@@ -89,76 +111,78 @@ class GuardService : AccessibilityService() {
      */
     private val browserPoll = object : Runnable {
         override fun run() {
-            val pkg = foreground
-            if (mode != MODE_BROWSER || pkg == null || !isBrowser(pkg)) return
-            // Con la pantalla apagada no llega ningún cambio de ventana y el navegador sigue
-            // "delante": no vale la pena una consulta cada 1,5 s mientras la CPU esté despierta.
-            val interactive = power?.isInteractive != false
-            if (interactive && Store.isLocked(this@GuardService)) check(pkg)
-            handler.postDelayed(this, if (interactive) BROWSER_POLL_MS else BROWSER_IDLE_POLL_MS)
+            // Se vuelve a programar pase lo que pase: si un fallo cortara el sondeo, el navegador
+            // dejaría de vigilarse hasta el siguiente cambio de modo.
+            var again = false
+            var interactive = true
+            guarded("sondeo del navegador") {
+                val pkg = foreground
+                if (mode != MODE_BROWSER || pkg == null || !isBrowser(pkg)) return@guarded
+                again = true
+                // Con la pantalla apagada no llega ningún cambio de ventana y el navegador sigue
+                // "delante": no vale la pena una consulta cada 1,5 s mientras la CPU esté despierta.
+                interactive = power?.isInteractive != false
+                if (interactive && Store.isLocked(this@GuardService)) check(pkg)
+            }
+            if (again) handler.postDelayed(this, if (interactive) BROWSER_POLL_MS else BROWSER_IDLE_POLL_MS)
         }
     }
 
     private val tick = object : Runnable {
         override fun run() {
-            patrol()
+            guarded("patrulla") { patrol() }
             handler.postDelayed(this, PATROL_MS)
         }
     }
 
     override fun onServiceConnected() {
-        // No se sabe qué hay delante: se empieza mirando todo y el primer cambio de ventana afina.
-        mode = -1
-        foreground = null
-        refreshLabels()
-        refreshBrowsers()
-        registerPackageReceiver()
-        registerScreenReceiver()
-        setMode(MODE_WATCH)
-        handler.removeCallbacks(tick)
-        handler.post(tick)
+        // Cada paso va aparte: que uno falle no impide arrancar la patrulla.
+        safely("conexión") {
+            // No se sabe qué hay delante: se empieza mirando todo y el primer cambio de ventana afina.
+            mode = -1
+            foreground = null
+        }
+        safely("etiquetas") { refreshLabels() }
+        safely("navegadores") { refreshBrowsers() }
+        safely("receptor de paquetes") { registerPackageReceiver() }
+        safely("receptor de pantalla") { registerScreenReceiver() }
+        safely("modo inicial") { setMode(MODE_WATCH) }
+        safely("patrulla") {
+            handler.removeCallbacks(tick)
+            handler.post(tick)
+        }
     }
 
     override fun onDestroy() {
-        handler.removeCallbacks(tick)
-        handler.removeCallbacks(deferred)
-        handler.removeCallbacks(browserPoll)
-        handler.removeCallbacks(vendorRecheck)
-        handler.removeCallbacks(settingsPass)
-        handler.removeCallbacks(hideCoverSoon)
-        handler.removeCallbacks(suiCheck)
-        handler.removeCallbacks(suiPoll)
-        hideShields()
-        screenReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (e: Exception) {
-                // ya no estaba
-            }
+        safely("callbacks") {
+            handler.removeCallbacks(tick)
+            handler.removeCallbacks(deferred)
+            handler.removeCallbacks(browserPoll)
+            handler.removeCallbacks(vendorRecheck)
+            handler.removeCallbacks(settingsPass)
+            handler.removeCallbacks(hideCoverSoon)
+            handler.removeCallbacks(suiCheck)
+            handler.removeCallbacks(suiPoll)
+        }
+        safely("capas") { hideShields() }
+        safely("receptor de pantalla") {
+            screenReceiver?.let { unregisterReceiver(it) } // IllegalArgumentException si ya no estaba
         }
         screenReceiver = null
-        pkgReceiver?.let {
-            try {
-                unregisterReceiver(it)
-            } catch (e: Exception) {
-                // ya no estaba
-            }
+        safely("receptor de paquetes") {
+            pkgReceiver?.let { unregisterReceiver(it) }
         }
         pkgReceiver = null
-        try {
-            bg.shutdown()
-        } catch (e: Exception) {
-            // sin hilo auxiliar
-        }
-        super.onDestroy()
+        safely("hilo auxiliar") { bg.shutdown() }
+        safely("super.onDestroy") { super.onDestroy() }
     }
 
     override fun onInterrupt() = Unit
 
     /** Cambió el idioma (u otra configuración): las palabras de pantalla son otras. */
     override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        refreshLabels()
+        safely("configuración") { super.onConfigurationChanged(newConfig) }
+        guarded("idioma") { refreshLabels() }
     }
 
     // --- Idioma y navegadores -----------------------------------------------------------
@@ -184,7 +208,7 @@ class GuardService : AccessibilityService() {
         labelsLocale = loc
         ownLabel = try {
             applicationInfo.loadLabel(packageManager).toString()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             "Secret Savior"
         }
         val lang = loc.language
@@ -193,14 +217,13 @@ class GuardService : AccessibilityService() {
         labels = Labels.build(lang, script, country, null, ownLabel)
         try {
             bg.execute {
-                try {
+                // Con la tabla incorporada basta si esto falla.
+                safely("etiquetas del sistema") {
                     val l = Labels.build(lang, script, country, systemStrings(), ownLabel)
                     if (labelsLocale == loc) labels = l
-                } catch (e: Exception) {
-                    // se queda con la tabla incorporada
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // servicio ya parado
         }
     }
@@ -215,7 +238,7 @@ class GuardService : AccessibilityService() {
             val res = cache.getOrPut(pkg) {
                 try {
                     packageManager.getResourcesForApplication(pkg)
-                } catch (e: Exception) {
+                } catch (e: Throwable) {
                     null
                 }
             }
@@ -228,8 +251,8 @@ class GuardService : AccessibilityService() {
 
     private fun refreshBrowsers() {
         try {
-            bg.execute { Browsers.refresh(applicationContext) }
-        } catch (e: Exception) {
+            bg.execute { safely("lista de navegadores") { Browsers.refresh(applicationContext) } }
+        } catch (e: Throwable) {
             // servicio ya parado
         }
     }
@@ -241,7 +264,7 @@ class GuardService : AccessibilityService() {
         if (pkgReceiver != null) return
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                refreshBrowsers()
+                safely("receptor de paquetes") { refreshBrowsers() }
             }
         }
         val filter = IntentFilter(Intent.ACTION_PACKAGE_ADDED).apply {
@@ -251,7 +274,7 @@ class GuardService : AccessibilityService() {
         try {
             ContextCompat.registerReceiver(this, r, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
             pkgReceiver = r
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // sin receptor: la lista se refresca al reconectar el servicio
         }
     }
@@ -268,19 +291,21 @@ class GuardService : AccessibilityService() {
         if (screenReceiver != null) return
         val r = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
-                when (intent?.action) {
-                    Intent.ACTION_SCREEN_OFF -> {
-                        suiAbove = false
-                        handler.removeCallbacks(suiCheck)
-                        handler.removeCallbacks(suiPoll)
-                        hideShields()
-                    }
-                    Intent.ACTION_USER_PRESENT -> {
-                        suiAbove = false
-                        val fg = foreground
-                        if (fg != null && isSettings(fg) && Store.isLocked(this@GuardService)) {
-                            showCover(COVER_MAX_MS, fresh = true)
-                            queuePass()
+                guarded("receptor de pantalla") {
+                    when (intent?.action) {
+                        Intent.ACTION_SCREEN_OFF -> {
+                            suiAbove = false
+                            handler.removeCallbacks(suiCheck)
+                            handler.removeCallbacks(suiPoll)
+                            hideShields()
+                        }
+                        Intent.ACTION_USER_PRESENT -> {
+                            suiAbove = false
+                            val fg = foreground
+                            if (fg != null && isSettings(fg) && Store.isLocked(this@GuardService)) {
+                                showCover(COVER_MAX_MS, fresh = true)
+                                queuePass()
+                            }
                         }
                     }
                 }
@@ -290,7 +315,7 @@ class GuardService : AccessibilityService() {
         try {
             ContextCompat.registerReceiver(this, r, filter, ContextCompat.RECEIVER_NOT_EXPORTED)
             screenReceiver = r
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // sin receptor: quedan la comprobación de pantalla de bloqueo y la de SystemUI
         }
     }
@@ -300,7 +325,7 @@ class GuardService : AccessibilityService() {
     /** Pantalla de bloqueo (o PIN) delante: ahí no se pone ninguna capa. */
     private fun keyguardLocked(): Boolean = try {
         keyguard?.isKeyguardLocked == true
-    } catch (e: Exception) {
+    } catch (e: Throwable) {
         false
     }
 
@@ -362,6 +387,10 @@ class GuardService : AccessibilityService() {
      */
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
+        guarded("evento") { onEvent(event) }
+    }
+
+    private fun onEvent(event: AccessibilityEvent) {
         if (event.eventType == AccessibilityEvent.TYPE_WINDOWS_CHANGED) {
             // Sin paquete: no sirve a lo de abajo. Sólo importa si SystemUI sube o baja sobre Ajustes.
             if (Store.isLocked(this) && !suiCheckQueued) {
@@ -554,7 +583,7 @@ class GuardService : AccessibilityService() {
                 if (p == packageName || isNeutral(p)) continue
                 return r
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // sin lista de ventanas: lo de siempre
         }
         val r = activeRoot(prefetch) ?: return null
@@ -648,12 +677,14 @@ class GuardService : AccessibilityService() {
 
     /** La capa grande nunca se queda puesta: atascada, dejaría el teléfono sin poder tocarse. */
     private val coverTimeout = Runnable {
-        coverCooldownUntil = SystemClock.elapsedRealtime() + COVER_COOLDOWN_MS
-        hideCover()
+        safely("tope de la capa") {
+            coverCooldownUntil = SystemClock.elapsedRealtime() + COVER_COOLDOWN_MS
+            hideCover()
+        }
     }
 
     /** Tras cerrar la pantalla, la capa se queda un instante para tapar el cierre y luego se va. */
-    private val hideCoverSoon = Runnable { hideCover() }
+    private val hideCoverSoon = Runnable { safely("quitar capa") { hideCover() } }
 
     /**
      * Barra de notificaciones, ajustes rápidos o pantalla de bloqueo (SystemUI) por encima de
@@ -667,13 +698,13 @@ class GuardService : AccessibilityService() {
 
     private val suiCheck = Runnable {
         suiCheckQueued = false
-        recheckSystemUi()
+        guarded("SystemUI") { recheckSystemUi() }
     }
 
     /** Sondeo de respaldo mientras SystemUI está encima; con tope, por si se pierde algún aviso. */
     private val suiPoll = object : Runnable {
         override fun run() {
-            recheckSystemUi()
+            guarded("sondeo de SystemUI") { recheckSystemUi() }
             if (suiAbove && SystemClock.elapsedRealtime() - suiSince < SUI_POLL_MAX_MS) {
                 handler.postDelayed(this, SUI_POLL_MS)
             }
@@ -727,7 +758,7 @@ class GuardService : AccessibilityService() {
                     else -> Unit
                 }
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // sin lista de ventanas: se queda como estaba
         }
         return false
@@ -747,16 +778,26 @@ class GuardService : AccessibilityService() {
 
     private val settingsPass: Runnable = Runnable {
         passQueued = false
+        try {
+            settingsPassBody()
+        } catch (t: Throwable) {
+            // Estado seguro: sin capas puestas, ni de filas ni la grande (y sin su tope pendiente).
+            Safe.failed("recorrido de Ajustes", t)
+            safely("quitar capas") { hideShields() }
+        }
+    }
+
+    private fun settingsPassBody() {
         val root = appRoot(prefetch = true)
         val pkg = root?.packageName?.toString()
         if (root == null || pkg == null || !isSettings(pkg) || !Store.isLocked(this)) {
             hideShields()
-            return@Runnable
+            return
         }
         // Con la pantalla de bloqueo o SystemUI delante no se pone nada: ahí se teclea el PIN.
         if (suiAbove || keyguardLocked()) {
             hideShields()
-            return@Runnable
+            return
         }
         // Un solo recorrido de la pantalla lo mira todo: qué conceptos hay (para decidir) y qué
         // nodos son candidatos a taparse (para colocar las capas). Primero se tapan las filas
@@ -766,17 +807,24 @@ class GuardService : AccessibilityService() {
         val now = SystemClock.elapsedRealtime()
         if (p.mask and Concept.OURS != 0) oursSeenAt = now
         val v = Policy.decide(policyInput(pkg, p))
-        placeShields(shieldRects(root, p, v))
+        // Si colocar las capas falla se quitan las de las filas, pero el cierre sigue su curso.
+        try {
+            placeShields(shieldRects(root, p, v))
+        } catch (t: Throwable) {
+            Safe.failed("capas de filas", t)
+            safely("quitar capas de filas") { removeRowShields() }
+        }
         if (v.close) {
-            closeSystemScreen()
+            // Pase lo que pase con el cierre, la capa grande se programa para irse.
+            safely("cierre") { closeSystemScreen() }
             handler.removeCallbacks(hideCoverSoon)
             handler.postDelayed(hideCoverSoon, COVER_AFTER_CLOSE_MS)
-            return@Runnable
+            return
         }
         if (v.keepCover && cover != null && now < coverDeadline) {
             passQueued = true
             handler.postDelayed(settingsPass, PASS_MS)
-            return@Runnable
+            return
         }
         hideCover()
     }
@@ -907,8 +955,12 @@ class GuardService : AccessibilityService() {
         gravity = Gravity.TOP or Gravity.START
         x = r?.left ?: 0
         y = r?.top ?: 0
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+        // ALWAYS es de Android 11; en 9 y 10 ese valor no existe y puede rechazarse (la capa no se
+        // pondría): ahí SHORT_EDGES, que también cubre la muesca en vertical.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
         }
     }
 
@@ -916,14 +968,17 @@ class GuardService : AccessibilityService() {
     private fun newShield(tellUser: Boolean) = View(this).apply {
         setOnTouchListener { _, e ->
             if (tellUser && e.actionMasked == MotionEvent.ACTION_DOWN) {
-                val now = SystemClock.elapsedRealtime()
-                if (now - lastShieldToast > TOAST_MS) {
-                    lastShieldToast = now
-                    Toast.makeText(this@GuardService, "Secret Savior: esto no se puede abrir.", Toast.LENGTH_SHORT).show()
+                // Sin el aviso también se cierra, y sin el cierre la capa sigue tragándose el toque.
+                safely("aviso de capa") {
+                    val now = SystemClock.elapsedRealtime()
+                    if (now - lastShieldToast > TOAST_MS) {
+                        lastShieldToast = now
+                        Toast.makeText(this@GuardService, "Secret Savior: esto no se puede abrir.", Toast.LENGTH_SHORT).show()
+                    }
                 }
                 // Tocar lo que está tapado ya es la intención: se cierra la pantalla entera, sin
                 // esperar a ver qué abre el siguiente toque.
-                handler.post { closeSystemScreen() }
+                safely("cierre por toque") { handler.post { guarded("cierre por toque") { closeSystemScreen() } } }
             }
             true
         }
@@ -931,7 +986,7 @@ class GuardService : AccessibilityService() {
 
     private fun placeShields(rects: List<Rect>) {
         try {
-            while (shields.size > rects.size) wm.removeView(shields.removeAt(shields.size - 1))
+            while (shields.size > rects.size) removeOverlay(shields.removeAt(shields.size - 1))
             rects.forEachIndexed { i, r ->
                 if (i < shields.size) {
                     wm.updateViewLayout(shields[i], shieldParams(r))
@@ -941,9 +996,22 @@ class GuardService : AccessibilityService() {
                     shields += v
                 }
             }
-        } catch (e: Exception) {
-            // Si no se pudo colocar alguna, se reintenta en el próximo cambio de pantalla.
+        } catch (t: Throwable) {
+            // Estado seguro: ninguna capa a medias. Se reintenta en el próximo cambio de pantalla.
+            Safe.failed("colocar capas", t)
+            safely("quitar capas de filas") { removeRowShields() }
         }
+    }
+
+    /** Quitar una vista que ya no esté (o que la ROM no deje quitar) no puede lanzar. */
+    private fun removeOverlay(v: View) {
+        safely("quitar capa") { wm.removeView(v) }
+    }
+
+    private fun removeRowShields() {
+        val all = ArrayList(shields)
+        shields.clear()
+        for (v in all) removeOverlay(v)
     }
 
     /**
@@ -964,16 +1032,21 @@ class GuardService : AccessibilityService() {
             return
         }
         if (!fresh && now < coverCooldownUntil) return
+        var v: View? = null
         try {
-            val v = newShield(tellUser = false)
+            v = newShield(tellUser = false)
             wm.addView(v, shieldParams(null))
+            // El tope se programa antes que nada más: lo que venga después no puede dejarla sin él.
             cover = v
             coverStartAt = now
             coverDeadline = now + maxMs
             handler.removeCallbacks(coverTimeout)
             handler.postDelayed(coverTimeout, maxMs)
-        } catch (e: Exception) {
+        } catch (t: Throwable) {
             // sin capa grande: quedan las de las filas y el cierre de siempre
+            Safe.failed("capa grande", t)
+            safely("quitar capa grande") { hideCover() }
+            v?.let { if (it !== cover) removeOverlay(it) }
         }
     }
 
@@ -981,25 +1054,14 @@ class GuardService : AccessibilityService() {
         handler.removeCallbacks(coverTimeout)
         val v = cover ?: return
         cover = null
-        try {
-            wm.removeView(v)
-        } catch (e: Exception) {
-            // ya no estaba
-        }
+        removeOverlay(v) // si ya no estaba, no importa
     }
 
     private fun hideShields() {
         handler.removeCallbacks(settingsPass)
         passQueued = false
-        hideCover()
-        for (v in shields) {
-            try {
-                wm.removeView(v)
-            } catch (e: Exception) {
-                // ya no estaba
-            }
-        }
-        shields.clear()
+        safely("quitar capa grande") { hideCover() }
+        removeRowShields()
     }
 
     private fun dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -1029,10 +1091,12 @@ class GuardService : AccessibilityService() {
     private var vendorQueued = false
     private val vendorRecheck: Runnable = Runnable {
         vendorQueued = false
-        if (!vendorCheck() && vendorAttempts > 0) {
-            vendorAttempts--
-            vendorQueued = true
-            handler.postDelayed(vendorRecheck, VENDOR_RETRY_MS)
+        guarded("autoencendido") {
+            if (!vendorCheck() && vendorAttempts > 0) {
+                vendorAttempts--
+                vendorQueued = true
+                handler.postDelayed(vendorRecheck, VENDOR_RETRY_MS)
+            }
         }
     }
 
@@ -1235,12 +1299,15 @@ class GuardService : AccessibilityService() {
 
     private fun block(countIt: Boolean) {
         // Atrás primero: cierra un diálogo de confirmación que esté abierto; luego al inicio.
-        performGlobalAction(GLOBAL_ACTION_BACK)
-        performGlobalAction(GLOBAL_ACTION_HOME)
+        // Cada paso va aparte: que falle el aviso no impide mandar al inicio, que es lo que importa.
+        safely("atrás") { performGlobalAction(GLOBAL_ACTION_BACK) }
+        safely("inicio") { performGlobalAction(GLOBAL_ACTION_HOME) }
         val now = SystemClock.elapsedRealtime()
         if (now - lastBlock > TOAST_MS) {
-            Toast.makeText(this, "Secret Savior: bloqueado. Respira, esto pasa.", Toast.LENGTH_SHORT).show()
-            if (countIt) Store.countBlock(this)
+            safely("aviso de bloqueo") {
+                Toast.makeText(this, "Secret Savior: bloqueado. Respira, esto pasa.", Toast.LENGTH_SHORT).show()
+            }
+            if (countIt) safely("contador") { Store.countBlock(this) }
         }
         lastBlock = now
     }

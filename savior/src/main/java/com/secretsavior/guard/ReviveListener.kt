@@ -14,12 +14,12 @@ class ReviveListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         connected = true
-        Watchdog.ensure(applicationContext)
+        safely("oyente conectado") { Watchdog.ensure(applicationContext) }
     }
 
     override fun onListenerDisconnected() {
         connected = false
-        rebind(applicationContext)
+        safely("oyente desconectado") { rebind(applicationContext) }
     }
 
     companion object {
@@ -32,7 +32,7 @@ class ReviveListener : NotificationListenerService() {
         fun rebind(c: android.content.Context) {
             try {
                 requestRebind(ComponentName(c, ReviveListener::class.java))
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w("SecretSavior", "no se pudo reenlazar el oyente", e)
             }
         }

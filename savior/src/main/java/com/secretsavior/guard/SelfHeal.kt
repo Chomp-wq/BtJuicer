@@ -30,7 +30,7 @@ object SelfHeal {
             healAccessibility(app)
             healPrivateDns(app)
             if (Store.devOptionsBlocked(app)) healDevOptions(app)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "autocuración", e)
         }
     }
@@ -73,7 +73,7 @@ object SelfHeal {
     private inline fun step(name: String, block: () -> Unit) {
         try {
             block()
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "autocuración: $name", e)
         }
     }
@@ -83,12 +83,12 @@ object SelfHeal {
      * cambio se deshace al instante, sin esperar a la ronda del watchdog.
      */
     fun watch(c: Context) {
-        if (watching.get() || !Status.hasSecureSettings(c)) return
+        if (watching.get() || !safelyOr("permiso de ajustes", false) { Status.hasSecureSettings(c) }) return
         if (!watching.compareAndSet(false, true)) return
         val app = c.applicationContext
         try {
             val obs = object : ContentObserver(Handler(Looper.getMainLooper())) {
-                override fun onChange(selfChange: Boolean) = heal(app)
+                override fun onChange(selfChange: Boolean) = safely("observador de ajustes") { heal(app) }
             }
             val uris: List<Uri> = listOf(
                 Settings.Secure.getUriFor(Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES),
@@ -99,7 +99,7 @@ object SelfHeal {
                 Settings.Global.getUriFor(ADB_WIFI),
             )
             for (u in uris) app.contentResolver.registerContentObserver(u, false, obs)
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             watching.set(false)
             Log.w(TAG, "no se pudo vigilar los ajustes", e)
         }

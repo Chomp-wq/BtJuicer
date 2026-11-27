@@ -1,5 +1,6 @@
 package com.secretsavior.provision
 
+import android.os.Build
 import android.util.Log
 import org.lsposed.hiddenapibypass.HiddenApiBypass
 import javax.net.ssl.SSLSocket
@@ -57,6 +58,11 @@ internal object HiddenApi {
     fun allow() {
         if (done) return
         done = true
+
+        // Las listas de APIs ocultas existen desde Android 9; antes no hay nada que levantar, y
+        // addHiddenApiExemptions no existe en la biblioteca para esas versiones (NoSuchMethodError,
+        // que `runCatching` sí atraparía, pero no hace falta llamarla).
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return
 
         if (exportVisible()) {
             Log.i(TAG, "hidden API: keying-material export already visible")

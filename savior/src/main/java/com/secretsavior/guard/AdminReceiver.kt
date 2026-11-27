@@ -18,16 +18,18 @@ class AdminReceiver : DeviceAdminReceiver() {
      * bloquea. También ocurre al volverse propietaria del dispositivo (que lo activa sola).
      */
     override fun onEnabled(context: Context, intent: Intent) {
-        Store.lock(context)
-        Store.setPendingCommit(context, false)
-        Watchdog.ensure(context)
+        safely("administrador activado") {
+            Store.lock(context)
+            Store.setPendingCommit(context, false)
+            Watchdog.ensure(context)
+        }
     }
 
     override fun onDisableRequested(context: Context, intent: Intent): CharSequence =
-        context.getString(R.string.admin_warning)
+        safelyOr("aviso de administrador", "") { context.getString(R.string.admin_warning) }
 
     /** Si pese a todo se desactiva, la app lo nota y pide volver a activarlo. */
     override fun onDisabled(context: Context, intent: Intent) {
-        if (Store.isLocked(context)) Watchdog.nag(context)
+        safely("administrador desactivado") { if (Store.isLocked(context)) Watchdog.nag(context) }
     }
 }

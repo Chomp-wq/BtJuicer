@@ -72,7 +72,7 @@ object Notice {
                     .setContentIntent(open)
                     .build(),
             )
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w("SecretSavior", "no se pudo avisar", e)
         }
     }
