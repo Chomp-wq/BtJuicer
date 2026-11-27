@@ -221,3 +221,79 @@ Describe 'Parámetros: WinJuicer.ps1, Start-Juicer y el README no se separan' {
         $script:Cli | Should -BeLike '*desde una consola de administrador*'
     }
 }
+
+Describe 'Línea de órdenes: correcciones de la revisión' {
+    BeforeEach {
+        $script:M = New-FakeMachine
+        Clear-CliJournal
+    }
+
+    It 'los colores de nivel de la consola siguen siendo de consola (la ventana tiene los suyos)' {
+        & (Get-Module WinJuicer) { $script:LevelColors[1] } | Should -Be 'Green'
+        & (Get-Module WinJuicer) { $script:GuiLevelColors[1] } | Should -Be '#4CC38A'
+        $t = Find-JuicerTweak 'juegos.modo'
+        $Error.Clear()
+        Write-JuicerTweakLine 1 $t (Get-JuicerTweakState $t) $null 6>$null
+        @($Error | Where-Object { "$_" -like '*ForegroundColor*' }).Count | Should -Be 0
+    }
+
+    It 'una ruta relativa de -Exportar es la de la carpeta de PowerShell, no la del proceso' {
+        $dir = Join-Path ([IO.Path]::GetTempPath()) ('wjcli-' + [guid]::NewGuid().ToString('N'))
+        New-Item -ItemType Directory -Path $dir | Out-Null
+        Push-Location $dir
+        try {
+            @(Start-Juicer -Exportar 'config.json' 6>$null)[-1] | Should -Be 0
+            Test-Path -LiteralPath (Join-Path $dir 'config.json') | Should -BeTrue
+            @(Start-Juicer -Importar 'config.json' -Simular -Si 6>$null)[-1] | Should -Be 0
+        } finally {
+            Pop-Location
+            Remove-Item -LiteralPath $dir -Recurse -Force -ErrorAction SilentlyContinue
+        }
+    }
+
+    It 'un modificador solo no abre la ventana como si nada: dice con qué va' {
+        Mock -ModuleName WinJuicer Show-JuicerGui { throw 'no debería abrirse' }
+        $out = @(Start-Juicer -Prioridad Latencia -Juego 'cs2.exe' 6>&1)
+        $out[-1] | Should -Be 2
+        ($out -join ' ') | Should -BeLike '*no hace nada por sí solo*'
+        @(Start-Juicer -Simular 6>$null)[-1] | Should -Be 2
+    }
+
+    It 'cambios junto a una acción que vuelve antes no se pierden en silencio' {
+        @(Start-Juicer -Perfil Seguro -OptimizarJuegos -Si 6>$null)[-1] | Should -Be 2
+        @(Start-Juicer -Equipo -Aplicar 'juegos.modo' -Si 6>$null)[-1] | Should -Be 2
+        (Read-JuicerJournal).Count | Should -Be 0
+    }
+
+    It '-Fps y -MedirJuego se comprueban antes de cualquier acción' {
+        @(Start-Juicer -OptimizarJuegos -Fps 14 -Si 6>$null)[-1] | Should -Be 2
+        @(Start-Juicer -CalibrarJuego 'cs2.exe' -MedirJuego 3 -Si 6>$null)[-1] | Should -Be 2
+    }
+
+    It 'deshacer el ritmo de un juego quita también lo que esperaba a que se cerrara' {
+        $M.Backend.State.FpsBackend = 'nvidia'
+        [void](Add-JuicerFpsLimit 'cs2.exe' 141)
+        [void](Add-JuicerPacerPending 'cs2.exe' 'Set' 144)
+        (Undo-JuicerTweak 'fps:cs2.exe').Outcome | Should -Be 'Deshecho'
+        @(Get-JuicerPacerPending) | Should -Not -Contain 'cs2.exe'
+    }
+}
+
+Describe 'Ventana: la cola de tareas' {
+    It 'lo de fondo que arranca al acabar otra tarea va detrás de lo que espera' {
+        & (Get-Module WinJuicer) {
+            $saved = $script:Gui
+            try {
+                $script:Gui = @{ Queue = (New-Object System.Collections.ArrayList); Task = $null }
+                [void]$script:Gui.Queue.Add(@{ Status = 'Juego'; Work = 'GamePage'; Arguments = @{ Exe = 'cs2.exe' }; Quiet = $false })
+                Start-JuicerGuiTask 'Portadas' 'Covers' @{ Batch = 2 } { } -Quiet
+                $script:Gui.Queue.Count | Should -Be 2
+                $script:Gui.Queue[0].Work | Should -Be 'GamePage'
+                $script:Gui.Queue[1].Work | Should -Be 'Covers'
+                $script:Gui.Task | Should -BeNullOrEmpty
+            } finally {
+                $script:Gui = $saved
+            }
+        }
+    }
+}

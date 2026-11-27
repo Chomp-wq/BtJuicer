@@ -291,7 +291,8 @@ function Get-JuicerMonitorFindings {
         $i = $m.Info; $d = $m.Display
         $title = Format-JuicerMonitor $m
         $oled = Test-JuicerMonitorOled $m
-        $hz = [int]$d.MaxHz
+        # The rate it runs at, as the frame pacer reads it: strobing often only works under the top one.
+        $hz = if ([int]$d.Hz -gt 0) { [int]$d.Hz } else { [int]$d.MaxHz }
         $use = Resolve-JuicerMonitorUse $m
         $rates = @($d.RefreshRates | Where-Object { $_ })
         $cap = Get-JuicerFpsCap $hz $use $null $(if ($m.Vrr) { [int]$m.Vrr.Min } else { 0 }) $rates 0 (Get-JuicerVrrTop $m)

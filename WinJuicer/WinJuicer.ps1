@@ -299,6 +299,14 @@ if ([Environment]::OSVersion.Platform -ne 'Win32NT') {
     exit 1
 }
 
+# Paths as the folder this window is in sees them: the elevated copy starts in System32,
+# and .NET file calls never follow Set-Location.
+foreach ($k in 'Informe', 'Exportar', 'Importar') {
+    if ($PSBoundParameters.ContainsKey($k) -and $PSBoundParameters[$k]) {
+        $PSBoundParameters[$k] = $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath([string]$PSBoundParameters[$k])
+    }
+}
+
 # The window is WPF, which only runs on a single-threaded apartment.
 $window = -not $Consola -and @($PSBoundParameters.Keys | Where-Object { $_ -notin 'Consola', 'Verbose', 'Debug' }).Count -eq 0
 $sta = [Threading.Thread]::CurrentThread.GetApartmentState() -eq [Threading.ApartmentState]::STA

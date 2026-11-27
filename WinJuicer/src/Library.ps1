@@ -158,6 +158,8 @@ function Get-JuicerEpicGames {
         if ($m.bIsIncompleteInstall -eq $true) { continue }
         if (-not $m.InstallLocation -or (Test-JuicerNotAGame ([string]$m.DisplayName))) { continue }
         $exe = if ($m.LaunchExecutable) { Join-Path $m.InstallLocation $m.LaunchExecutable } else { '' }
+        # A declared launcher (FortniteLauncher.exe) is not what runs the game: let the search pick.
+        if ($exe -and [IO.Path]::GetFileNameWithoutExtension($exe) -match '(?i)launcher$|^launcher|' + $script:NotGameExe) { $exe = '' }
         New-JuicerGame 'Epic Games' ([string]$m.AppName) ([string]$m.DisplayName) ([string]$m.InstallLocation) $exe
     }
 }

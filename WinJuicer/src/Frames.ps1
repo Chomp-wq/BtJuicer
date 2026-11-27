@@ -159,7 +159,13 @@ function Measure-JuicerFrames {
         # NA on frames without input, which are most.
         if ($inputCol) { $il = ConvertTo-JuicerNumber $r.$inputCol; if ($null -ne $il -and $il -gt 0) { $inputLat.Add($il) } }
         if ($animCol) { $a = ConvertTo-JuicerNumber $r.$animCol; if ($null -ne $a) { $anim.Add([Math]::Abs($a)) } }
-        if ($latCol) { $l = ConvertTo-JuicerNumber $r.$latCol; if ($null -ne $l -and $l -gt 0) { $latency.Add($l) } }
+        if ($latCol) {
+            $l = ConvertTo-JuicerNumber $r.$latCol
+            # PresentMon's default columns only time from Present() to the screen; the start of
+            # the frame is CPUBusy earlier (what --v2_metrics calls DisplayLatency).
+            if ($null -ne $l -and $l -gt 0 -and $latCol -eq 'MsUntilDisplayed' -and $null -ne $c) { $l += $c }
+            if ($null -ne $l -and $l -gt 0) { $latency.Add($l) }
+        }
 
         if ([string]$r.AllowsTearing -eq '1') { $tearing++ }
         if ((ConvertTo-JuicerNumber $r.SyncInterval) -ge 1) { $vsync++ }
@@ -575,7 +581,7 @@ function Save-JuicerFrameChart {
     $c = @{ Series = @($Chart.Series); TargetMs = $Chart.TargetMs; MaxMs = $Chart.MaxMs; Date = (Get-Date).ToString('s') }
     $all[$Application.ToLowerInvariant()] = $c
     if ($all.Count -gt 40) {
-        foreach ($k in @($all.Keys | Sort-Object { [string]$all[$_].Date } | Select-Object -First ($all.Count - 40))) { $all.Remove($k) }
+        foreach ($k in @($all.Keys | Sort-Object { ConvertTo-JuicerSortDate $all[$_].Date } | Select-Object -First ($all.Count - 40))) { $all.Remove($k) }
     }
     Write-JuicerTextAtomic (Get-JuicerFrameChartPath) (ConvertTo-JuicerJson $all)
 }
@@ -647,7 +653,7 @@ function Invoke-JuicerFrameCapture {
     $pm = Get-JuicerPresentMon
     $csv = Join-Path ([IO.Path]::GetTempPath()) ('wj-fps-' + [guid]::NewGuid().ToString('N') + '.csv')
     $argList = @('--output_file', "`"$csv`"", '--timed', $Seconds, '--terminate_after_timed', '--stop_existing_session',
-        '--session_name', 'WinJuicer', '--no_console_stats', '--exclude', 'dwm.exe')
+        '--session_name', 'WinJuicer', '--no_console_stats', '--exclude', 'dwm.exe', '--track_frame_type')
     if ($Delay -gt 0) { $argList += @('--delay', $Delay) }
     if ($Process) { $argList += @('--process_name', "`"$Process`"") }
     $p = $null

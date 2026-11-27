@@ -544,3 +544,64 @@ Describe 'Consola' {
         $m.Fake.Bcd.ContainsKey('hypervisorlaunchtype') | Should -BeFalse
     }
 }
+
+Describe 'Motor: correcciones de la revisión' {
+    It 'si deshacer a medias falla, lo que sigue cambiado se queda en el diario' {
+        $m = New-FakeMachine
+        Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+        $script:Applied = $false
+        # Not in the catalog: undoing its first setting throws, as a driver that stopped answering would.
+        $t = @{
+            Id = 'prueba.medias'; Title = 'Prueba'; Category = 'Juegos'; Level = 0; Impact = 'Bajo'; Reboot = 'No'; What = 'x'; Gain = 'x'; Cost = 'x'
+            Actions = @(
+                @{ Type = 'Custom'; Key = 'uno'; Label = 'Uno'; Test = { $script:Applied }; Capture = { @{ On = $script:Applied } }; Apply = { $script:Applied = $true }; Restore = { param($s) $script:Applied = $s.On } }
+                @{ Type = 'Custom'; Key = 'dos'; Label = 'Dos'; Test = { $false }; Capture = { @{} }; Apply = { throw 'el segundo falla' }; Restore = { param($s) } }
+            )
+        }
+        $r = Invoke-JuicerTweak $t
+        $r.Outcome | Should -Be 'Error'
+        $r.Message | Should -BeLike '*no se pudo deshacer del todo*'
+        $script:Applied | Should -BeTrue
+        $e = @(Read-JuicerJournal | Where-Object { $_.Id -eq 'prueba.medias' })
+        $e.Count | Should -Be 1
+        @($e[0].Actions | ForEach-Object { $_.CustomKey }) | Should -Contain 'uno'
+    }
+
+    It 'un ritmo puesto con un motor no se vuelve a poner con otro encima' {
+        $m = New-FakeMachine
+        Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+        $m.Backend.State.FpsEngines = @('nvidia', 'rtss')
+        $m.Backend.State.FpsBackend = 'nvidia'
+        (Add-JuicerFpsLimit 'cs2.exe' 141).Outcome | Should -Be 'Aplicado'
+        # The driver does not answer for a moment; RivaTuner does.
+        $m.Backend.State.FpsEngines = @('rtss')
+        $m.Backend.State.FpsBackend = 'rtss'
+        $r = Set-JuicerPacerFps 'cs2.exe' 120
+        $r.Outcome | Should -Be 'Error'
+        $r.Message | Should -BeLike '*driver de NVIDIA*RivaTuner*quedarían dos*'
+        $m.Backend.State.FpsLimits['cs2.exe'] | Should -Be 141
+        $c = @((Read-JuicerJournal | Where-Object { $_.Id -eq 'fps:cs2.exe' }).Actions | Where-Object { $_.Type -eq 'FpsLimit' })
+        $c.Count | Should -Be 1
+        $c[0].Backend | Should -Be 'nvidia'
+    }
+
+    It 'deshacer una tarea programada o el DNS de un adaptador que ya no existen no falla para siempre' {
+        $m = New-FakeMachine
+        Remove-Item -LiteralPath (Get-JuicerJournalPath) -ErrorAction SilentlyContinue
+        $m.Backend.State.Tasks['\Microsoft\Windows\Defrag\|ScheduledDefrag'] = @{ Enabled = $false }
+        (Invoke-JuicerTweak (Find-JuicerTweak 'reparar.optimizar')).Outcome | Should -Be 'Aplicado'
+        $m.Backend.State.Tasks.Remove('\Microsoft\Windows\Defrag\|ScheduledDefrag')
+        (Undo-JuicerTweak 'reparar.optimizar').Outcome | Should -Be 'Deshecho'
+        @(Read-JuicerJournal | Where-Object { $_.Id -eq 'reparar.optimizar' }).Count | Should -Be 0
+
+        $guid = '{11111111-AAAA-BBBB-CCCC-000000000009}'
+        [void]$m.Backend.State.Adapters.Add(@{ Guid = $guid; Name = 'Wi-Fi USB'; Description = 'USB'; Wireless = $true; LinkSpeed = 300000000 })
+        Write-JuicerReg "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\$guid" 'NameServer' 'String' ''
+        Write-JuicerReg "HKLM\SYSTEM\CurrentControlSet\Services\Tcpip6\Parameters\Interfaces\$guid" 'NameServer' 'String' ''
+        $t = New-JuicerDnsTweak 'Cloudflare'
+        (Invoke-JuicerTweak $t).Outcome | Should -Be 'Aplicado'
+        [void]$m.Backend.State.RemovedAdapters.Add($guid)
+        (Undo-JuicerTweak $t.Id).Outcome | Should -Be 'Deshecho'
+        @(Read-JuicerJournal | Where-Object { $_.Id -eq $t.Id }).Count | Should -Be 0
+    }
+}

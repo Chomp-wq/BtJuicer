@@ -58,6 +58,26 @@ function Get-JuicerVrrCap {
     [int][Math]::Floor($Hz - $Hz * $Hz / 3600)
 }
 
+# The cap the frame pacer sets under variable refresh: the Reflex rate, or 3 under the
+# refresh where that is lower (60 and 75 Hz), so that forced VSync never makes a frame wait
+# (see Get-JuicerVsyncEdgeNote).
+function Get-JuicerVrrPacerCap {
+    param([int]$Hz)
+    if ($Hz -le 3) { return 0 }
+    [Math]::Min((Get-JuicerVrrCap $Hz), $Hz - 3)
+}
+
+# A saved date to sort by. Windows PowerShell 5.1 reads JSON dates back as text and
+# PowerShell 7 as DateTime, whose text is month first («12/20/2025»): sorting either as
+# text puts them out of order. MinValue for what is not a date.
+function ConvertTo-JuicerSortDate {
+    param($Value)
+    if ($Value -is [datetime]) { return $Value }
+    $d = [datetime]::MinValue
+    if ([datetime]::TryParse([string]$Value, [Globalization.CultureInfo]::InvariantCulture, [Globalization.DateTimeStyles]::RoundtripKind, [ref]$d)) { return $d }
+    [datetime]::MinValue
+}
+
 # --- What the frame pacer remembers ------------------------------------------
 # Engine: Auto, nvidia or rtss. Calibrated: exe -> signature -> @{ Fps; Why;
 # Signature; Date; Fingerprint }: one calibration per monitor setup (refresh
@@ -117,7 +137,7 @@ function Set-JuicerCalibrationEntry {
     $per = if ($Pacer.Calibrated[$key] -is [hashtable]) { $Pacer.Calibrated[$key] } else { @{} }
     if ($Entry -is [hashtable]) { $per[$Signature] = $Entry } else { $per.Remove($Signature) }
     if ($per.Count -gt 4) {
-        foreach ($k in @($per.Keys | Sort-Object { [string]$per[$_].Date } | Select-Object -First ($per.Count - 4))) { $per.Remove($k) }
+        foreach ($k in @($per.Keys | Sort-Object { ConvertTo-JuicerSortDate $per[$_].Date } | Select-Object -First ($per.Count - 4))) { $per.Remove($k) }
     }
     if ($per.Count -gt 0) { $Pacer.Calibrated[$key] = $per } else { $Pacer.Calibrated.Remove($key) }
 }
@@ -128,7 +148,7 @@ function Select-JuicerCalibration {
     param($PerSignature, [hashtable]$Monitor)
     if ($PerSignature -isnot [hashtable] -or $PerSignature.Count -eq 0) { return $null }
     if ($Monitor) { $e = $PerSignature[(Get-JuicerLimitSignature $Monitor)]; if ($e -is [hashtable]) { return $e } }
-    @($PerSignature.Values | Where-Object { $_ -is [hashtable] } | Sort-Object { [string]$_.Date } -Descending)[0]
+    @($PerSignature.Values | Where-Object { $_ -is [hashtable] } | Sort-Object { ConvertTo-JuicerSortDate $_.Date } -Descending)[0]
 }
 
 function Read-JuicerPacer {
@@ -354,12 +374,13 @@ function Get-JuicerFpsCap {
     $lowered = $true
     switch ($Use) {
         'VRR' {
-            $fps = Get-JuicerVrrCap $vrrTop
+            $fps = Get-JuicerVrrPacerCap $vrrTop
             $vsync = $true
-            $why = "Pantalla de $Hz Hz con frecuencia variable: $fps FPS ({0:N2} ms por fotograma) la mantiene siempre dentro del rango VRR, la misma cifra que usa NVIDIA Reflex. Con la sincronización vertical forzada en el driver y el límite por debajo de los Hz, VSync no llega a esperar nunca: sólo tapa un corte si un fotograma llega antes de tiempo, sin sumar latencia.$vrrNote" -f (1000 / $fps)
+            $same = if ($fps -eq (Get-JuicerVrrCap $vrrTop)) { 'la misma cifra que usa NVIDIA Reflex' } else { "3 por debajo de los Hz, algo menos de lo que pondría NVIDIA Reflex ($(Get-JuicerVrrCap $vrrTop)), para que la sincronización vertical no llegue a hacer esperar" }
+            $why = "Pantalla de $Hz Hz con frecuencia variable: $fps FPS ({0:N2} ms por fotograma) la mantiene siempre dentro del rango VRR, $same. Con la sincronización vertical forzada en el driver y el límite por debajo de los Hz, VSync no llega a esperar nunca: sólo tapa un corte si un fotograma llega antes de tiempo, sin sumar latencia.$vrrNote" -f (1000 / $fps)
         }
         'EstroboSync' {
-            $fps = Get-JuicerVrrCap $vrrTop
+            $fps = Get-JuicerVrrPacerCap $vrrTop
             $vsync = $true
             $why = "Pantalla de $Hz Hz con estroboscopio y frecuencia variable: el mismo objetivo que con VRR, $fps FPS ({0:N2} ms por fotograma), para no salir nunca del rango. El destello sigue a cada fotograma: cuanto más estable el frametime, más uniforme el parpadeo.$vrrNote" -f (1000 / $fps)
         }
@@ -721,6 +742,10 @@ function Get-JuicerFpsLimits {
         # Read where it was set, even if the engine changed since.
         $by = @($e.Actions | Where-Object { $_.Type -eq 'FpsLimit' } | ForEach-Object { [string]$_.Backend }) | Select-Object -First 1
         try { $cur = & $b.FpsRead $exe $by } catch { $unreadable = $true; Write-JuicerLog "No se pudo leer el ritmo de ${exe}: $_" }
+        # Nothing at all back means the engine it was set with cannot be asked now (NVAPI down
+        # for a moment after a driver restart or a resume): not a wiped cap. Putting it back
+        # through another engine would leave the game with two limiters, one undo never sees.
+        if ($null -eq $cur -and $by) { $unreadable = $true }
         @{ Id = [string]$e.Id; Exe = $exe; Fps = $(if ($cur) { $cur.Fps } else { $null }); Exact = $(if ($cur) { [double]$cur.Exact } else { 0 }); Backend = $(if ($cur) { $cur.Backend } else { '' }); Unreadable = $unreadable }
     }
 }
@@ -994,7 +1019,9 @@ function Get-JuicerPacerFindings {
     if ($Result.AvgFps -gt $target * 1.04) {
         return (New-JuicerFinding $area 'Medio' ('No está actuando: {0:N0} FPS con un ritmo de {1} FPS' -f $Result.AvgFps, $target) 'El juego va por encima del objetivo. Con RivaTuner, tiene que estar abierto (en la bandeja); si el juego se lanza con otro .exe que el que tiene el ritmo, cámbialo en «Tus juegos» > «Cambiar .exe…». Si el juego tiene un limitador propio más alto, no importa: el más bajo manda.')
     }
-    $detail = '{0} % de los fotogramas a {1:N2} ms ±{2:N1}; de un fotograma al siguiente cambian {3:N2} ms de media.' -f $Result.Steady, $ms, [Math]::Max(0.3, 0.04 * $ms), $Result.JitterMs
+    # Steady counts the frames near the median frame time, which is where they are, not the cap's.
+    $mid = if ($Result.MedianMs -gt 0) { [double]$Result.MedianMs } else { $ms }
+    $detail = '{0} % de los fotogramas a {1:N2} ms ±{2:N1}; de un fotograma al siguiente cambian {3:N2} ms de media.' -f $Result.Steady, $mid, [Math]::Max(0.3, 0.04 * $mid), $Result.JitterMs
     if ($null -ne $Result.AnimErrorMs) { $detail += ' Error de animación: {0:N2} ms de media (lo que el movimiento se desvía del tiempo real; cuanto más cerca de 0, más fluido).' -f $Result.AnimErrorMs }
     $holds = $Result.P95Ms -le $ms * 1.03
     $reflexCap = Test-JuicerReflexCapMatch $Result $Cap $Hz $Use $GpuVendor

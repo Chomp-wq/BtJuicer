@@ -802,3 +802,45 @@ Describe 'Ajuste fino' {
         Read-JuicerTuneRecord | Should -BeNullOrEmpty
     }
 }
+
+Describe 'Hardware: correcciones de la revisión' {
+    It 'las Radeon dedicadas con «(TM)» separado, y las R9/R7, no pasan por integradas' {
+        foreach ($n in 'Radeon (TM) RX 480 Graphics', 'AMD Radeon (TM) R9 390 Series', 'AMD Radeon R9 200 Series', 'AMD Radeon R9 Fury Series', 'AMD Radeon HD 7970') {
+            (Get-JuicerGpuTraits $n).Discrete | Should -BeTrue -Because $n
+        }
+        (Get-JuicerGpuTraits 'AMD Radeon (TM) R9 390 Series').Legacy | Should -BeTrue
+        foreach ($n in 'AMD Radeon(TM) Vega 8 Graphics', 'AMD Radeon R7 Graphics', 'AMD Radeon HD 8610G', 'AMD Radeon(TM) Graphics') {
+            (Get-JuicerGpuTraits $n).Discrete | Should -BeFalse -Because $n
+        }
+    }
+
+    It 'las MX y las de estación de trabajo no se leen como generaciones de GeForce' {
+        foreach ($n in 'NVIDIA GeForce MX450', 'NVIDIA GeForce MX570', 'Quadro RTX 4000', 'NVIDIA RTX A4000', 'NVIDIA RTX 4000 Ada Generation') {
+            $g = Get-JuicerGpuTraits $n
+            $g.Series | Should -BeNullOrEmpty -Because $n
+            $g.Legacy | Should -BeFalse -Because $n
+            $g.FrameGen | Should -BeFalse -Because $n
+        }
+        (Get-JuicerGpuTraits 'NVIDIA GeForce RTX 4070').Series | Should -Be 40
+        (Get-JuicerGpuTraits 'NVIDIA GeForce GTX 1060 6GB').Legacy | Should -BeTrue
+    }
+
+    It 'las velocidades de dos cifras que no son centenas redondas' {
+        (Get-JuicerRamRating 'KF426C16BB/8').Speed | Should -Be 2666
+        (Get-JuicerRamRating 'HX429C17FB/16').Speed | Should -Be 2933
+        (Get-JuicerRamRating 'KVR26N19S8/8').Speed | Should -Be 2666
+        (Get-JuicerRamRating 'BL2K8G26C16U4B').Speed | Should -Be 2666
+        (Get-JuicerRamRating 'KF437C19RB/8').Speed | Should -Be 3733
+        (Get-JuicerRamRating 'KF432C16BB/8').Speed | Should -Be 3200
+    }
+
+    It 'dos módulos DDR5 en canales A de controladores distintos están en doble canal' {
+        $mods = @(
+            [pscustomobject]@{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 4800; SMBIOSMemoryType = 34; DeviceLocator = 'Controller0-ChannelA-DIMM1'; BankLabel = 'BANK 0'; PartNumber = '' }
+            [pscustomobject]@{ Capacity = 16GB; Speed = 4800; ConfiguredClockSpeed = 4800; SMBIOSMemoryType = 34; DeviceLocator = 'Controller1-ChannelA-DIMM1'; BankLabel = 'BANK 0'; PartNumber = '' }
+        )
+        @(Get-JuicerRamFindings $mods $false | Where-Object { $_.Title -like '*mismo canal*' }).Count | Should -Be 0
+        $mods[1].DeviceLocator = 'Controller0-ChannelA-DIMM2'
+        @(Get-JuicerRamFindings $mods $false | Where-Object { $_.Title -like '*mismo canal*' }).Count | Should -Be 1
+    }
+}

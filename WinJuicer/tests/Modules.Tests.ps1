@@ -1010,6 +1010,17 @@ Describe 'Monitor' {
         $m.Mode = 'Fijo'
         @(Get-JuicerMonitorFindings @($m) 'NVIDIA')[0].Detail | Should -BeLike '*lo usas a frecuencia fija*'
     }
+
+    It 'con el estrobo a menos Hz que el máximo, los consejos usan los Hz a los que va, como el frame pacer' {
+        # A 180 Hz monitor run at 120 Hz with ELMB (strobing often only works under the top rate).
+        $m = New-TestMonitor (New-TestEdid -Name 'VG27AQ3A' -RangeMax 180 -AmdVsdb @(48, 180)) 120 @(60, 100, 120, 144, 165, 180)
+        $m.Display.MaxHz = 180
+        $m.Mode = 'Estrobo'
+        $games = @(@{ Application = 'cyberpunk2077.exe'; Low1 = 151; AvgFps = 170; Fps90 = 160 })
+        $f = @(Get-JuicerMonitorFindings @($m) 'NVIDIA' $games)
+        $f[0].Detail | Should -BeLike '*exacto a los Hz (120 FPS)*'
+        @($f | Where-Object { $_.Title -like '*no sostiene*' }).Count | Should -Be 0
+    }
 }
 
 Describe 'Frame pacer' {
@@ -2827,5 +2838,55 @@ Describe 'Cierres de juegos en el registro de aplicaciones' {
         }
         & (Get-Module WinJuicer) { Read-WinAppIncidents ([datetime]'2026-10-01') } | Should -BeNullOrEmpty
         Should -Invoke -ModuleName WinJuicer Get-JuicerEvents -ParameterFilter { $Max -eq 5000 }
+    }
+}
+
+Describe 'Revisión: mantenimiento, importar y Epic' {
+    BeforeEach {
+        $script:M = New-NetMachine
+        Remove-Item -LiteralPath (Get-JuicerUpkeepPath) -ErrorAction SilentlyContinue
+    }
+
+    It 'sin motor de FPS, el aviso no dice que se optimizaron juegos que esperan a la siguiente vez' {
+        $M.Backend.State.FpsBackend = ''
+        Mock -ModuleName WinJuicer Get-JuicerPrimaryMonitor { $null }
+        Mock -ModuleName WinJuicer Get-JuicerGames { @((New-JuicerGame 'Steam' '1' 'Nuevo' 'C:\J\Nuevo' 'C:\J\Nuevo\nuevo.exe')) | ForEach-Object { $_.ExeName = 'nuevo.exe'; $_ } }
+        $script:Toasts = New-Object System.Collections.ArrayList
+        Mock -ModuleName WinJuicer Show-JuicerToast { param($Text) [void]$script:Toasts.Add($Text) }
+        Save-JuicerUpkeepState @{ Seen = @(); Signature = '' }
+        [void](Invoke-JuicerUpkeep)
+        @($script:Toasts | Where-Object { $_ -like '*Juegos nuevos optimizados*' }).Count | Should -Be 0
+        (Read-JuicerUpkeepState).Seen | Should -Not -Contain 'steam:1'
+    }
+
+    It '-Importar por línea de órdenes no quita una app que este equipo necesita' {
+        Write-JuicerReg 'HKLM\SOFTWARE\Microsoft\WindowsSelfHost\Applicability' 'BranchName' 'String' 'Canary'
+        # The hardware profile is cached across tests: this PC is an Insider one.
+        Mock -ModuleName WinJuicer Get-JuicerHardwareProfile { @{ Cpu = @{}; GamePass = $false; Insider = $true; Gpus = @(); Modules = @() } }
+        $M.Backend.State.Appx['Microsoft.WindowsFeedbackHub'] = @{ Installed = $true; Provisioned = $false }
+        $file = Join-Path (Get-JuicerHome) 'otro-pc.json'
+        Set-Content -LiteralPath $file -Value (ConvertTo-JuicerJson @{ Version = 1; Creado = '2026-11-01T10:00:00'; Tweaks = @(); Toggles = @{}; Dns = $null; Apps = @('Microsoft.WindowsFeedbackHub') }) -Encoding UTF8
+        @(Start-Juicer -Importar $file -Si -SinPuntoDeRestauracion 6>$null)[-1] | Should -Be 0
+        $M.Backend.State.Appx.ContainsKey('Microsoft.WindowsFeedbackHub') | Should -BeTrue
+    }
+
+    It 'si Epic declara un lanzador, se busca el .exe del juego' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ('wjepic-' + [guid]::NewGuid().ToString('N'))
+        $game = Join-Path $root 'Fortnite'
+        New-Item -ItemType Directory -Path (Join-Path $game 'FortniteGame\Binaries\Win64') -Force | Out-Null
+        foreach ($f in 'FortniteLauncher.exe', 'FortniteClient-Win64-Shipping.exe') { [IO.File]::WriteAllBytes((Join-Path $game "FortniteGame\Binaries\Win64\$f"), (New-Object byte[] 4096)) }
+        $manifests = Join-Path $root 'Epic\EpicGamesLauncher\Data\Manifests'
+        New-Item -ItemType Directory -Path $manifests -Force | Out-Null
+        $savedPd = $env:ProgramData
+        $env:ProgramData = $root
+        Set-Content -LiteralPath (Join-Path $manifests 'f.item') -Value (@{ AppName = 'Fortnite'; DisplayName = 'Fortnite'; InstallLocation = $game; LaunchExecutable = 'FortniteGame/Binaries/Win64/FortniteLauncher.exe'; AppCategories = @('games') } | ConvertTo-Json) -Encoding UTF8
+        try {
+            $g = @(Get-JuicerEpicGames)
+            $g.Count | Should -Be 1
+            $g[0].Exe | Should -Be ''
+        } finally {
+            $env:ProgramData = $savedPd
+            Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue
+        }
     }
 }

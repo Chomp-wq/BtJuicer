@@ -690,13 +690,19 @@ function Restore-JuicerActionState {
             }
         }
         'Spi' { & $b.SpiSet $c.Set ([bool]$c.Old) }
-        'Task' { if ($c.Exists) { & $b.TaskWrite $c.Path $c.Name ([bool]$c.Enabled) } }
+        # Gone since (the program that made it was uninstalled): nothing to put back.
+        'Task' { if ($c.Exists -and $null -ne (& $b.TaskRead $c.Path $c.Name)) { & $b.TaskWrite $c.Path $c.Name ([bool]$c.Enabled) } }
         'DefenderExclusion' { if (-not $c.Existed) { & $b.DefRemove $c.Path } }
         'Appx' { if ($c.Exists -and $null -eq (& $b.AppxRead $c.Name)) { & $b.AppxAdd $c.Name $c.StoreId } }
         'Dns' {
             # Undoing an old DNS change does not undo the content protection's.
             if (Test-JuicerShield) { Write-JuicerLog "DNS de $($c.Adapter) sin tocar: lo fija la protección contra contenido adulto"; return }
-            & $b.DnsSet $c.Interface ([string[]]@($c.V4 | Where-Object { $_ })) ([string[]]@($c.V6 | Where-Object { $_ }))
+            # An adapter taken out since (a USB Wi-Fi, a replaced card) has no DNS left to put back.
+            try {
+                & $b.DnsSet $c.Interface ([string[]]@($c.V4 | Where-Object { $_ })) ([string[]]@($c.V6 | Where-Object { $_ }))
+            } catch [System.Management.Automation.ItemNotFoundException] {
+                Write-JuicerLog "DNS de $($c.Adapter) sin tocar: el adaptador ya no está en el equipo"
+            }
         }
         'Feature' {
             if (-not $c.Exists) { return }
@@ -871,6 +877,19 @@ function Invoke-JuicerTweak {
         # the latest, the captures keep the original.
         $entry.Title = $Tweak.Title
     }
+    # A game's cap set with one engine is never set again through another on top: the journal keeps
+    # the first capture only, so undo would take one limiter away and leave the other for good. It
+    # happens when the engine it was set with does not answer for a moment (NVAPI after a driver
+    # restart) and the other one is there.
+    foreach ($c in @($captures | Where-Object { $_.Type -eq 'FpsLimit' })) {
+        $old = @($entry.Actions | Where-Object { $_.Id -eq $c.Id }) | Select-Object -First 1
+        if ($old -and $old.Backend -and $c.Backend -and $old.Backend -ne $c.Backend) {
+            $names = @{ nvidia = 'el driver de NVIDIA'; rtss = 'RivaTuner' }
+            $was = if ($names[[string]$old.Backend]) { $names[[string]$old.Backend] } else { [string]$old.Backend }
+            $now = if ($names[[string]$c.Backend]) { $names[[string]$c.Backend] } else { [string]$c.Backend }
+            return (New-JuicerResult $Tweak 'Error' "El ritmo de $($c.Exe) está puesto con $was, y ahora sólo responde ${now}: no se pone otro encima, que quedarían dos. Cuando $was vuelva a responder (al reiniciar, o tras actualizar el driver), se puede poner de nuevo; si cambiaste de motor a propósito, quita el ritmo de este juego y vuelve a ponerlo.")
+        }
+    }
     $added = @()
     foreach ($c in $captures) {
         if (-not (@($entry.Actions) | Where-Object { $_.Id -eq $c.Id })) { [void]$entry.Actions.Add($c); $added += $c.Id }
@@ -883,14 +902,18 @@ function Invoke-JuicerTweak {
     } catch {
         $err = "$_"
         $rollback = @()
+        # A setting whose rollback failed is still changed: its capture stays in the journal,
+        # or nothing could ever put it back. Not the one that failed: its change most likely
+        # never happened.
+        $unrestored = @()
         for ($j = [Math]::Min($i, $pending.Count - 1); $j -ge 0; $j--) {
-            try { Restore-JuicerActionState $captures[$j] } catch { $rollback += "$_" }
+            try { Restore-JuicerActionState $captures[$j] } catch { $rollback += "$_"; if ($j -lt $i) { $unrestored += $captures[$j].Id } }
         }
         $journal = Read-JuicerJournal
         $entry = Get-JuicerJournalEntry $journal $Tweak.Id
         if ($entry) {
             $keep = New-Object System.Collections.ArrayList
-            foreach ($a in $entry.Actions) { if ($added -notcontains $a.Id) { [void]$keep.Add($a) } }
+            foreach ($a in $entry.Actions) { if ($added -notcontains $a.Id -or $unrestored -contains $a.Id) { [void]$keep.Add($a) } }
             $entry.Actions = $keep
             if ($keep.Count -eq 0) { $journal.Remove($entry) }
             Save-JuicerJournal $journal
@@ -940,6 +963,9 @@ function Undo-JuicerTweak {
         Write-JuicerLog "ERROR deshacer ${Id}: $($errors -join '; ')"
         return (New-JuicerResult $info 'Error' ($errors -join '; '))
     }
+    # A game's frame pacer may also wait in the queue for the game to close: undone here,
+    # that queued change must not put it back later.
+    if ($Id -like 'fps:*') { Clear-JuicerPacerPending $Id.Substring(4) }
     Write-JuicerLog "Deshecho $Id"
     New-JuicerResult $info 'Deshecho'
 }

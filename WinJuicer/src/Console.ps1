@@ -1804,6 +1804,12 @@ function Start-Juicer {
         [switch]$Consola
     )
     # -File hands "a,b" over as a single string.
+    # A relative path is the PowerShell folder's, not the process's: .NET file calls read the
+    # process one, which Set-Location never changes (in an administrator window, System32).
+    foreach ($n in 'Informe', 'Exportar', 'Importar') {
+        $v = Get-Variable -Name $n -ValueOnly
+        if ($v) { Set-Variable -Name $n -Value ($ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath([string]$v)) }
+    }
     $split = { param($v) @($v | ForEach-Object { $_ -split ',' } | ForEach-Object { $_.Trim() } | Where-Object { $_ }) }
     $Aplicar = & $split $Aplicar
     $Deshacer = & $split $Deshacer
@@ -1835,6 +1841,38 @@ function Start-Juicer {
             return 2
         }
     }
+    # Modifiers on their own (-Prioridad, -Juego, -Fps, -Simular, -Si…) do nothing: say what they go
+    # with, instead of opening the window as if nothing had been asked.
+    if (-not $cli) {
+        $alone = @($PSBoundParameters.Keys | Where-Object { $_ -notin 'Consola', 'Verbose', 'Debug', 'ErrorAction', 'WarningAction', 'InformationAction' })
+        if ($alone.Count -gt 0) {
+            Write-Host ('  ' + (($alone | ForEach-Object { "-$_" }) -join ', ') + ' no hace nada por sí solo: va con una acción, como -Perfil, -Aplicar, -LimitarFps o -CalibrarJuego. Sin parámetros se abre la ventana.') -ForegroundColor Yellow
+            return 2
+        }
+    }
+    # The changes (-Perfil, -Aplicar, -QuitarApps, -Dns, -Importar, -Deshacer…) run after every other
+    # action, and those return first: together, the changes would be dropped without a word.
+    $sets = [ordered]@{
+        Perfil = [bool]$Perfil; Recomendado = [bool]$Recomendado; Aplicar = ($Aplicar.Count -gt 0); Deshacer = ($Deshacer.Count -gt 0)
+        DeshacerTodo = [bool]$DeshacerTodo; QuitarApps = ($QuitarApps.Count -gt 0); Dns = [bool]$Dns; Importar = [bool]$Importar
+    }
+    $actions = [ordered]@{
+        RestaurarDiario = [bool]$RestaurarDiario; RestaurarPerfilesNvidia = [bool]$RestaurarPerfilesNvidia; Lista = [bool]$Lista; Revisar = [bool]$Revisar
+        Estado = [bool]$Estado; Informe = [bool]$Informe; Diagnostico = [bool]$Diagnostico; PantallaOled = [bool]$PantallaOled; ModoMonitor = [bool]$ModoMonitor
+        ProteccionAdultos = [bool]$ProteccionAdultos; Mantener = [bool]$Mantener; MantenerJuegos = [bool]$MantenerJuegos; Juegos = [bool]$Juegos
+        OptimizarJuegos = [bool]$OptimizarJuegos; MotorPacer = [bool]$MotorPacer; ModoPrudente = [bool]$ModoPrudente; CalibrarJuego = [bool]$CalibrarJuego
+        LimitarFps = ($LimitarFps.Count -gt 0); MedirJuego = [bool]$MedirJuego; OlvidarAjuste = [bool]$OlvidarAjuste; ApuntarAjuste = [bool]$ApuntarAjuste
+        Medir = [bool]$Medir; NuevaMedida = [bool]$NuevaMedida; Exportar = [bool]$Exportar; Equipo = [bool]$Equipo; Instalar = ($Instalar.Count -gt 0)
+    }
+    $set = @($sets.Keys | Where-Object { $sets[$_] }) | Select-Object -First 1
+    $action = @($actions.Keys | Where-Object { $actions[$_] }) | Select-Object -First 1
+    if ($set -and $action) {
+        Write-Host "  -$set no va junto a -${action}: ejecútalos por separado, uno detrás de otro." -ForegroundColor Yellow
+        return 2
+    }
+    # Ranges checked once, before any action uses them: -OptimizarJuegos -Fps 14 would cap every game at 14.
+    if ($Fps -and ($Fps -lt 20 -or $Fps -gt 1000)) { Write-Host '  -Fps va de 20 a 1000.' -ForegroundColor Yellow; return 2 }
+    if ($MedirJuego -and ($MedirJuego -lt 10 -or $MedirJuego -gt 600)) { Write-Host '  -MedirJuego va de 10 a 600 segundos.' -ForegroundColor Yellow; return 2 }
     # The protected copy the sign-in task runs follows this version.
     if ((Test-JuicerWindows) -and -not $Mantener -and -not $ProteccionAdultos -and -not $Simular) { Update-JuicerCopy }
     if (-not $cli) {
@@ -1916,6 +1954,12 @@ function Start-Juicer {
         }
         Write-Host "  Motor del frame pacer: $(Format-JuicerFpsBackend (Get-JuicerFpsBackend))."
         if ($results.Count -gt 0) { Show-JuicerResults $results }
+        # A game that could not be moved may be left with no pacer at all: that is a failure,
+        # and nothing else runs on top of it.
+        if (@($results | Where-Object { $_.Outcome -eq 'Error' }).Count -gt 0) {
+            if ($LimitarFps.Count -gt 0 -or $CalibrarJuego) { Write-Host '  No sigo con el resto: arregla primero lo que ha fallado.' -ForegroundColor Yellow }
+            return 1
+        }
         if ($LimitarFps.Count -eq 0 -and -not $CalibrarJuego) { return 0 }
     }
     if ($ModoPrudente) {
@@ -2000,6 +2044,11 @@ function Start-Juicer {
     if ($Importar) {
         try { $imported = Read-JuicerConfig $Importar } catch { Write-Host "  $_" -ForegroundColor Red; return 2 }
         if ($imported.Unknown.Count -gt 0) { Write-Host "  Se ignora lo que esta versión no conoce: $($imported.Unknown -join ', ')" -ForegroundColor Yellow }
+        # As in the window: an app this PC relies on (Game Bar on a dual-CCD X3D, Feedback Hub on
+        # Insider) is not removed because another PC's file says so.
+        $split = Split-JuicerImportApps $imported.Apps (Get-JuicerHardwareProfile)
+        if ($split.Needed.Count -gt 0) { Write-Host ("  No se quitarán estas apps: tu equipo las usa.`n  " + ($split.Needed -join "`n  ")) -ForegroundColor Yellow }
+        $imported.Apps = @($split.Keep)
     }
     if ($Equipo) { Show-JuicerEquipo; return 0 }
     if ($Instalar.Count -gt 0) {
