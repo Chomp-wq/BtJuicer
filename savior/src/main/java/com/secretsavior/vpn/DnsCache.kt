@@ -50,6 +50,10 @@ class DnsCache(
         val ttlOffsets: IntArray,
         /** Fin de la pregunta dentro de [response]. */
         val questionEnd: Int,
+        /** La consulta que la originó, para poder renovarla tras un cambio de red (ver [hottest]). */
+        val query: ByteArray,
+        /** Veces que se sirvió: lo popular se renueva primero. Se conserva al renovar la entrada. */
+        var hits: Int = 0,
     )
 
     private val lock = Any()
@@ -80,6 +84,15 @@ class DnsCache(
         synchronized(lock) { staleCutoff = t }
     }
 
+    /**
+     * Las consultas de las [n] entradas más servidas (con datos, no negativas), de más a menos. Tras
+     * cambiar de red se renuevan: los nombres que se usan sin parar ya estarán resueltos para la red
+     * nueva cuando la primera página los pida. Copias: quien llama puede tocarlas.
+     */
+    fun hottest(n: Int): List<ByteArray> = synchronized(lock) {
+        map.values.filter { it.hits > 0 && !it.negative }.sortedByDescending { it.hits }.take(n).map { it.query.copyOf() }
+    }
+
     /** Entradas guardadas ahora mismo. */
     val size: Int get() = synchronized(lock) { map.size }
 
@@ -108,6 +121,7 @@ class DnsCache(
             val e = map[key] ?: return null
             if (e.questionEnd != q.end) return null // mismo nombre sin importar mayúsculas = mismo largo
             if (e.response.size > DnsPacket.ednsSize(query)) return null // no le cabría por UDP
+            if (e.hits < Int.MAX_VALUE) e.hits++
             val ttlMs = e.ttlSec * 1000L
             val age = now - e.storedAt
             val out = e.response.copyOf()
@@ -136,8 +150,12 @@ class DnsCache(
     fun store(query: ByteArray, response: ByteArray) {
         try {
             val key = standardKey(query) ?: return
-            val entry = parse(key, response) ?: return
-            synchronized(lock) { map[key] = entry }
+            val entry = parse(key, response, query) ?: return
+            synchronized(lock) {
+                // La popularidad sobrevive a la renovación: si no, lo prefetcheado volvería a empezar de cero.
+                map[key]?.let { entry.hits = it.hits }
+                map[key] = entry
+            }
         } catch (e: Exception) {
             // una respuesta que no se entiende simplemente no se guarda
         }
@@ -153,7 +171,7 @@ class DnsCache(
         return DnsPacket.questionKey(query)
     }
 
-    private fun parse(key: String, r: ByteArray): Entry? {
+    private fun parse(key: String, r: ByteArray, query: ByteArray): Entry? {
         val len = r.size
         if (len < 17) return null
         val flags = u16(r, 2)
@@ -203,7 +221,7 @@ class DnsCache(
             minAnswer.coerceAtMost(MAX_TTL_SEC)
         }
         if (ttl <= 0) return null
-        return Entry(r.copyOf(), clock(), ttl.toInt(), negative, offsets.toIntArray(), questionEnd)
+        return Entry(r.copyOf(), clock(), ttl.toInt(), negative, offsets.toIntArray(), questionEnd, query.copyOf())
     }
 
     private companion object {

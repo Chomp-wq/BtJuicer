@@ -11,6 +11,7 @@ import android.net.NetworkRequest
 import android.net.VpnService
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.os.Process
@@ -24,7 +25,6 @@ import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
 import java.net.Inet4Address
-import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.concurrent.ScheduledThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -47,6 +47,18 @@ class SaviorVpnService : VpnService() {
     private var forwarder: DnsForwarder? = null
     private val writeLock = Any()
     private var networkCallback: ConnectivityManager.NetworkCallback? = null
+    private var netThread: HandlerThread? = null
+
+    /**
+     * La red real por defecto (no VPN). Sólo avisa cuando cambia de verdad; sirve también para pedir a
+     * Android que revalide ESA red cuando el DNS se atasca (ver [revalidateUnderlying]).
+     */
+    private val tracker = DefaultNetworkTracker<Network> { net ->
+        if (net != null) forwarder?.onNetworkChanged() // al quedarse sin red no hay nada que reiniciar
+    }
+
+    /** Como mucho una petición de revalidación por minuto: no es para martillear al sistema. */
+    private val revalidateGate = MinGap(REVALIDATE_GAP_MS)
 
     /** Los bytes de la dirección del "servidor DNS" de este túnel (la subred se elige al arrancar). */
     @Volatile
@@ -64,6 +76,8 @@ class SaviorVpnService : VpnService() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         goForeground()
+        // Cada establish() nuevo corta TODAS las conexiones del teléfono: con el túnel en marcha
+        // (vigilante, «siempre activo», el sistema reenviando el arranque) no se toca; ver start().
         start()
         return START_STICKY
     }
@@ -77,7 +91,7 @@ class SaviorVpnService : VpnService() {
             } else {
                 startForeground(Notice.ID, n)
             }
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             // Android puede negarlo desde segundo plano; el filtro funciona igual, con menos blindaje.
             Log.w(TAG, "sin primer plano", e)
         }
@@ -111,14 +125,19 @@ class SaviorVpnService : VpnService() {
             return
         }
         val fwd = try {
+            val prio = { try { Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND) } catch (e: Exception) { } }
             DnsForwarder(
                 PRIMARY, FALLBACK,
                 protect = { protect(it) },
                 protectTcp = { protect(it) },
                 // El receptor es quien entrega cada respuesta: que no pierda la CPU frente a segundo plano.
-                onThreadStart = { try { Process.setThreadPriority(Process.THREAD_PRIORITY_FOREGROUND) } catch (e: Exception) { } },
+                onThreadStart = prio,
+                onStall = { revalidateUnderlying() },
+                // UDP/53 bloqueado o interceptado en esta red: DNS sobre TLS a los mismos resolutores con filtro.
+                dot = { onMessage -> TlsDotTransport(DOT, TlsDotTransport.tls { protect(it) }, onMessage, prio) },
             )
-        } catch (e: IOException) {
+        } catch (e: Throwable) {
+            Log.w(TAG, "reenviador", e)
             null
         }
         if (fwd == null) {
@@ -141,7 +160,14 @@ class SaviorVpnService : VpnService() {
         current = this
         running = true
         watchNetworks()
-        reader = Thread({ loop(pfd) }, "savior-tun").also { it.start() }
+        reader = Thread({
+            try {
+                loop(pfd)
+            } catch (t: Throwable) {
+                // Un lector muerto con running == true dejaría al teléfono sin DNS: se tira el servicio.
+                if (!destroyed) try { stopSelf() } catch (t2: Throwable) { }
+            }
+        }, "savior-tun").also { it.start() }
     }
 
     private fun buildTunnel(subnet: Subnets.Candidate, withV6: Boolean): Builder {
@@ -203,30 +229,88 @@ class SaviorVpnService : VpnService() {
     }
 
     /**
-     * Avisa al reenviador cuando cambia la red real (Wi-Fi a datos y al revés). Las VPN se
-     * excluyen: la nuestra no cuenta. Al registrarse, onAvailable se llama una vez por cada red que
-     * ya existe; es inofensivo (caché sin nada caducado que olvidar y ninguna consulta en vuelo).
+     * Sigue la red real por defecto y avisa al reenviador sólo cuando CAMBIA. Antes se reaccionaba a
+     * cada red que aparecía o desaparecía: con «datos móviles siempre activos», una red móvil de fondo
+     * que parpadea en Wi-Fi vaciaba la caché de caducadas y reenviaba todo en cada parpadeo.
+     * Android 12+ dice él mismo cuál es la mejor (registerBestMatchingNetworkCallback); antes se deduce
+     * de las redes disponibles (validada antes que no, Wi-Fi/Ethernet antes que móvil). Las VPN no
+     * cuentan. Se parte de la red actual, de modo que el primer aviso del registro no es un cambio.
      */
     private fun watchNetworks() {
         try {
             val cm = getSystemService(ConnectivityManager::class.java) ?: return
-            val cb = object : ConnectivityManager.NetworkCallback() {
-                override fun onAvailable(network: Network) {
-                    forwarder?.onNetworkChanged()
-                }
-
-                override fun onLost(network: Network) {
-                    forwarder?.onNetworkChanged()
-                }
-            }
+            val thread = HandlerThread("savior-net").also { it.start() }
+            netThread = thread
+            val handler = Handler(thread.looper)
             val request = NetworkRequest.Builder()
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
                 .addCapability(NetworkCapabilities.NET_CAPABILITY_NOT_VPN)
                 .build()
-            cm.registerNetworkCallback(request, cb)
+            tracker.seed(currentNetworks(cm))
+            val cb: ConnectivityManager.NetworkCallback
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                cb = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) = tracker.onBest(network)
+                    override fun onLost(network: Network) = tracker.onBestLost(network)
+                }
+                cm.registerBestMatchingNetworkCallback(request, cb, handler)
+            } else {
+                cb = object : ConnectivityManager.NetworkCallback() {
+                    override fun onAvailable(network: Network) = tracker.onAvailable(network, capsOf(cm.getNetworkCapabilities(network)))
+                    override fun onCapabilitiesChanged(network: Network, nc: NetworkCapabilities) = tracker.onCaps(network, capsOf(nc)!!)
+                    override fun onLost(network: Network) = tracker.onLost(network)
+                }
+                cm.registerNetworkCallback(request, cb, handler)
+            }
             networkCallback = cb
         } catch (e: Exception) {
             Log.w(TAG, "sin aviso de cambios de red", e)
+        }
+    }
+
+    @Suppress("DEPRECATION")
+    private fun currentNetworks(cm: ConnectivityManager): Map<Network, DefaultNetworkTracker.Caps> {
+        val out = LinkedHashMap<Network, DefaultNetworkTracker.Caps>()
+        try {
+            for (n in cm.allNetworks) {
+                val nc = cm.getNetworkCapabilities(n) ?: continue
+                if (nc.hasTransport(NetworkCapabilities.TRANSPORT_VPN) ||
+                    !nc.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+                ) continue
+                out[n] = capsOf(nc)!!
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "no se pudo mirar las redes", e)
+        }
+        return out
+    }
+
+    private fun capsOf(nc: NetworkCapabilities?): DefaultNetworkTracker.Caps? = nc?.let {
+        DefaultNetworkTracker.Caps(
+            it.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED),
+            when {
+                it.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET) -> DefaultNetworkTracker.Transport.ETHERNET
+                it.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> DefaultNetworkTracker.Transport.WIFI
+                it.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> DefaultNetworkTracker.Transport.CELLULAR
+                else -> DefaultNetworkTracker.Transport.OTHER
+            },
+        )
+    }
+
+    /**
+     * El DNS se atasca aguas arriba. Sin VPN, Android lo notaría por los timeouts de DNS de cada app
+     * (y por las estadísticas TCP) en la red móvil y la recuperaría solo; con la VPN ese DNS se
+     * atribuye a nuestra red y esa señal se pierde. Le decimos que la red real no da conectividad
+     * para que la revalide, y si de verdad está atascada entra su recuperación. Como mucho una vez
+     * por minuto; se llama desde un hilo del reenviador.
+     */
+    private fun revalidateUnderlying() {
+        if (!revalidateGate.tryAcquire()) return
+        try {
+            val net = tracker.current ?: return
+            getSystemService(ConnectivityManager::class.java)?.reportNetworkConnectivity(net, false)
+        } catch (e: Throwable) {
+            Log.w(TAG, "no se pudo pedir la revalidación", e)
         }
     }
 
@@ -272,14 +356,23 @@ class SaviorVpnService : VpnService() {
             schedule = { delay, task -> scheduleSweep(delay, task) },
         )
         val buf = ByteArray(32767)
+        var ioErrors = 0
         try {
             while (!Thread.currentThread().isInterrupted) {
-                val n = input.read(buf)
+                val n = try {
+                    input.read(buf).also { ioErrors = 0 }
+                } catch (e: IOException) {
+                    // Salir de aquí rehace la VPN y corta todas las conexiones del teléfono: un
+                    // error suelto de lectura no lo justifica; sólo si persiste (descriptor muerto).
+                    if (!TunnelRecovery.retryRead(destroyed, ++ioErrors, MAX_IO_ERRORS)) throw e
+                    Thread.sleep(IO_RETRY_MS)
+                    continue
+                }
                 if (n < 0) break
                 if (n > 0) {
                     try {
                         handle(buf, n, output, tcp)
-                    } catch (e: Exception) {
+                    } catch (e: Throwable) {
                         // Un paquete raro no puede tumbar el túnel: se rehace con un parón de
                         // todas las conexiones del teléfono (cada VPN nueva las corta).
                         Log.w(TAG, "paquete descartado", e)
@@ -292,10 +385,17 @@ class SaviorVpnService : VpnService() {
             // onDestroy: salir
         } catch (e: IOException) {
             // el túnel se cerró: salir del bucle es lo correcto
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             Log.w(TAG, "bucle del túnel", e)
         }
-        if (!destroyed) stopSelf()
+        // Sea cual sea la causa de la salida (incluido un Error): un lector muerto con running == true
+        // dejaría al teléfono sin DNS. Se tira el servicio: running pasa a false y el vigilante lo rehace.
+        if (!destroyed) {
+            try {
+                stopSelf()
+            } catch (t: Throwable) {
+            }
+        }
     }
 
     private fun scheduleSweep(delayMs: Long, task: Runnable) {
@@ -308,7 +408,7 @@ class SaviorVpnService : VpnService() {
                 }.also { sweeper = it }
         }
         try {
-            ex.schedule(task, delayMs, TimeUnit.MILLISECONDS)
+            ex.schedule({ try { task.run() } catch (t: Throwable) { } }, delayMs, TimeUnit.MILLISECONDS)
         } catch (e: Exception) {
             // cerrándose el servicio
         }
@@ -403,6 +503,8 @@ class SaviorVpnService : VpnService() {
             }
         }
         networkCallback = null
+        netThread?.quitSafely()
+        netThread = null
         sweeper?.shutdownNow()
         sweeper = null
         forwarder?.close()
@@ -425,6 +527,9 @@ class SaviorVpnService : VpnService() {
     companion object {
         private const val TAG = "SecretSavior"
         private const val IDLE_MS = 20L
+        private const val MAX_IO_ERRORS = 5
+        private const val IO_RETRY_MS = 50L
+        private const val REVALIDATE_GAP_MS = 60_000L
 
         /**
          * CleanBrowsing "Adult Filter": bloquea pornografía y contenido explícito y fuerza
@@ -446,12 +551,24 @@ class SaviorVpnService : VpnService() {
             dns("2606:4700:4700::1113"), dns("2606:4700:4700::1003"),
         )
 
+        /**
+         * DNS sobre TLS de reserva (RFC 7858), sólo a los resolutores con filtro de siempre, con el
+         * nombre del certificado comprobado. Primero CleanBrowsing, que es el filtro principal.
+         */
+        private val DOT = listOf(
+            TlsDotTransport.Target(dns("185.228.168.10", 853), "adult-filter-dns.cleanbrowsing.org"),
+            TlsDotTransport.Target(dns("1.1.1.3", 853), "family.cloudflare-dns.com"),
+        )
+
         /** Cómo va el DNS, o null si el filtro no corre o aún no ha contestado nada. */
         val dnsHealth: DnsHealth?
             get() = current?.forwarder?.let {
                 // Con la caché casi todo se contesta sin salir a la red: hay datos aunque recentTotal sea 0.
                 if (it.recentTotal == 0 && it.cacheLookups == 0) null
-                else DnsHealth(it.averageMs, it.recentTotal, it.recentFailed, it.cacheHits, it.cacheLookups)
+                else DnsHealth(
+                    it.averageMs, it.recentTotal, it.recentFailed, it.cacheHits, it.cacheLookups,
+                    it.stallRecoveries, it.usingDot,
+                )
             }
 
         data class DnsHealth(
@@ -460,6 +577,10 @@ class SaviorVpnService : VpnService() {
             val recentFailed: Int,
             val cacheHits: Int = 0,
             val cacheLookups: Int = 0,
+            /** Veces que el DNS se atascó y se recuperó el camino (socket nuevo, aviso a Android). */
+            val stallRecoveries: Int = 0,
+            /** El UDP/53 no pasa en esta red y el DNS va por TLS. */
+            val usingDot: Boolean = false,
         ) {
             /** Porcentaje de consultas contestadas desde la caché; null con pocas para que no bailen las cifras. */
             val cachePercent: Int? get() = if (cacheLookups < 20) null else cacheHits * 100 / cacheLookups
@@ -471,7 +592,7 @@ class SaviorVpnService : VpnService() {
         @Volatile
         private var current: SaviorVpnService? = null
 
-        private fun dns(ip: String) = InetSocketAddress(ip, 53)
+        private fun dns(ip: String, port: Int = 53) = InetSocketAddress(ip, port)
 
         /** Apps que se niegan a funcionar si ven cualquier VPN activa, sea cual sea su propósito. */
         val EXCLUDED_APPS = listOf("com.netflix.mediaclient")
@@ -486,21 +607,27 @@ class SaviorVpnService : VpnService() {
          * guardarla sólo al arrancar la dejaría siempre desactualizada.
          */
         val alwaysOn: Boolean?
-            get() = ask { it.isAlwaysOn }
+            get() {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+                val svc = current ?: return null
+                return try {
+                    svc.isAlwaysOn
+                } catch (e: Throwable) {
+                    null // algún fabricante lo rechaza; "no se sabe" no bloquea a nadie
+                }
+            }
 
         /** «Bloquear conexiones sin VPN» (Android 10+); null si no se sabe. También en vivo. */
         val lockdown: Boolean?
-            get() = ask { it.isLockdownEnabled }
-
-        private fun ask(f: (SaviorVpnService) -> Boolean): Boolean? {
-            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
-            val svc = current ?: return null
-            return try {
-                f(svc)
-            } catch (e: Exception) {
-                null // algún fabricante lo rechaza; "no se sabe" no bloquea a nadie
+            get() {
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return null
+                val svc = current ?: return null
+                return try {
+                    svc.isLockdownEnabled
+                } catch (e: Throwable) {
+                    null
+                }
             }
-        }
 
         /** Resolutores públicos a capturar: todos menos los aguas arriba de [PRIMARY] y [FALLBACK]. */
         private val resolverTable: Resolvers.Table by lazy {
