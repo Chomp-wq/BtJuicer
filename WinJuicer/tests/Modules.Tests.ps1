@@ -2861,6 +2861,8 @@ Describe 'Revisión: mantenimiento, importar y Epic' {
 
     It '-Importar por línea de órdenes no quita una app que este equipo necesita' {
         Write-JuicerReg 'HKLM\SOFTWARE\Microsoft\WindowsSelfHost\Applicability' 'BranchName' 'String' 'Canary'
+        # The hardware profile is cached across tests: this PC is an Insider one.
+        Mock -ModuleName WinJuicer Get-JuicerHardwareProfile { @{ Cpu = @{}; GamePass = $false; Insider = $true; Gpus = @(); Modules = @() } }
         $M.Backend.State.Appx['Microsoft.WindowsFeedbackHub'] = @{ Installed = $true; Provisioned = $false }
         $file = Join-Path (Get-JuicerHome) 'otro-pc.json'
         Set-Content -LiteralPath $file -Value (ConvertTo-JuicerJson @{ Version = 1; Creado = '2026-11-01T10:00:00'; Tweaks = @(); Toggles = @{}; Dns = $null; Apps = @('Microsoft.WindowsFeedbackHub') }) -Encoding UTF8
